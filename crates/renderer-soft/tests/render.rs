@@ -264,6 +264,13 @@ fn invalid_frames_fail_before_drawing_anything() {
         color: BLACK,
     };
     assert!(matches!(r.render(&[bad_text]), Err(SoftError::InvalidOperations)));
+    let huge_text = DrawOp::Text {
+        origin: Point::default(),
+        text: "x".into(),
+        size: 1.0e5,
+        color: BLACK,
+    };
+    assert!(matches!(r.render(&[huge_text]), Err(SoftError::InvalidOperations)));
     assert_eq!(r.frame_rgba().unwrap().2, before.as_slice());
     for (width, height, scale) in [(0, 10, 1.0), (10, 10, 0.25), (10, 10, f32::NAN), (5000, 5000, 1.0)] {
         assert!(matches!(

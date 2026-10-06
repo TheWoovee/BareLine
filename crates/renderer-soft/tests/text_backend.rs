@@ -218,3 +218,22 @@ fn geometry_is_in_dips_at_every_scale_and_handles_are_checked() {
     let huge = "x".repeat(bareline_renderer::MAX_LAYOUT_BYTES + 1);
     assert_eq!(reference.shape(&huge, 13.0, 10.0), Err(LayoutError::ResourceLimit));
 }
+
+#[test]
+fn text_sizes_past_2048_dips_are_refused_before_shaping() {
+    let mut backend = renderer(1.0);
+    for size in [2048.5, 1.0e5, f32::MAX] {
+        assert_eq!(backend.shape("x", size, 100.0), Err(LayoutError::ResourceLimit));
+        assert_eq!(
+            backend.shape_wrapped("x", size, 100.0, BUNDLED_FONT_FAMILY),
+            Err(LayoutError::ResourceLimit)
+        );
+        assert_eq!(
+            backend.shape_with_font_family("x", size, 100.0, BUNDLED_FONT_FAMILY),
+            Err(LayoutError::ResourceLimit)
+        );
+        assert_eq!(backend.measure_text("x", size), Err(LayoutError::ResourceLimit));
+    }
+    assert_eq!(backend.layout_count(), 0);
+    assert!(backend.measure_text("x", 2048.0).is_ok());
+}

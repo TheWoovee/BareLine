@@ -37,6 +37,16 @@
 //! * [`FrameStatus::Recreate`] means the window surface was lost and has been
 //!   recreated: draw the frame again. Three losses in a row are an error.
 //!
+//! # Caches and limits
+//!
+//! * Layouts are shaped once and kept until released. `Text` and
+//!   `measure_text` strings are shaped once per size and kept least recently
+//!   used first out, 1024 to 2048 of them, plus whatever one frame draws.
+//! * Glyph bitmaps are rasterized once per font, size and subpixel position.
+//!   Past 8192 bitmaps, each frame keeps only those it drew.
+//! * Text sizes above 2048 DIPs are refused; glyphs above 4096 pixels per em
+//!   (2048 DIPs at a window scale above 2) are not drawn.
+//!
 //! Golden images for the offscreen tests live in `tests/golden`; see
 //! `tests/golden.rs` for how to regenerate them.
 use bareline_renderer::{
@@ -60,7 +70,8 @@ const MAX_OFFSCREEN_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_WINDOW_PIXELS: u64 = 64 * 1024 * 1024;
 /// Consecutive lost surfaces after which a frame reports its error.
 const MAX_RECREATE_STREAK: u32 = 3;
-/// Shaped `DrawOp::Text` strings kept between frames.
+/// Shaped `DrawOp::Text` and `measure_text` strings kept: the cache trims
+/// itself back to this many once it holds twice as many.
 const MAX_LABELS: usize = 1024;
 
 /// Why the software renderer could not create a surface or draw a frame.
@@ -69,7 +80,8 @@ pub enum SoftError {
     /// The surface size or scale is zero, non-finite or too large.
     InvalidSize,
     /// The operations have unbalanced clips or layers, invalid layer or image
-    /// geometry, or a text size that is not a positive number.
+    /// geometry, or a text size that is not a positive number of at most
+    /// 2048 DIPs.
     InvalidOperations,
     /// A `DrawOp::Layout` names a layout this renderer does not hold.
     Layout(LayoutError),
@@ -155,32 +167,52 @@ impl Presenter {
     }
 }
 
-/// Shaped `DrawOp::Text` strings by font size, reused while they keep being drawn.
-#[derive(Default)]
+/// Shaped `DrawOp::Text` and `measure_text` strings by font size, least
+/// recently used first out. Labels a frame draws are kept while it draws them.
 struct Labels {
     by_size: HashMap<u32, HashMap<String, (text::Shaped, u64)>>,
     len: usize,
-    frame: u64,
+    /// Size at which the next insertion trims the cache.
+    limit: usize,
+    /// Use counter; every lookup through [`Labels::prepare`] advances it.
+    tick: u64,
+    /// First tick of the frame being prepared; `u64::MAX` otherwise.
+    frame_start: u64,
+    /// Scratch space for trimming.
+    ticks: Vec<u64>,
+}
+impl Default for Labels {
+    fn default() -> Self {
+        Self {
+            by_size: HashMap::new(),
+            len: 0,
+            limit: MAX_LABELS * 2,
+            tick: 0,
+            frame_start: u64::MAX,
+            ticks: Vec::new(),
+        }
+    }
 }
 impl Labels {
-    /// Shape `text` unless it is cached; marks it used this frame.
+    /// Shape `text` unless it is cached; marks it most recently used.
     fn prepare(&mut self, fonts: &mut text::Fonts, text: &str, size: f32) -> &text::Shaped {
         let text = &text[..text.floor_char_boundary(MAX_LAYOUT_BYTES)];
-        let frame = self.frame;
+        self.tick += 1;
+        let tick = self.tick;
         let cached = self
             .by_size
             .get(&size.to_bits())
             .is_some_and(|labels| labels.contains_key(text));
         if !cached {
-            if self.len >= MAX_LABELS * 4 {
-                self.evict(frame);
+            if self.len >= self.limit {
+                self.trim();
             }
             let family = fonts.family(None, size);
             let shaped = text::shape(fonts, text, size, 1.0e9, &family, false);
             self.by_size
                 .entry(size.to_bits())
                 .or_default()
-                .insert(text.to_owned(), (shaped, frame));
+                .insert(text.to_owned(), (shaped, tick));
             self.len += 1;
         }
         let entry = self
@@ -188,26 +220,42 @@ impl Labels {
             .get_mut(&size.to_bits())
             .and_then(|labels| labels.get_mut(text))
             .expect("the label was inserted above");
-        entry.1 = frame;
+        entry.1 = tick;
         &entry.0
     }
     fn get(&self, text: &str, size: f32) -> Option<&text::Shaped> {
         let text = &text[..text.floor_char_boundary(MAX_LAYOUT_BYTES)];
         self.by_size.get(&size.to_bits())?.get(text).map(|(shaped, _)| shaped)
     }
-    /// Keep only labels used since `frame`.
-    fn evict(&mut self, frame: u64) {
-        self.by_size.retain(|_, labels| {
-            labels.retain(|_, (_, used)| *used >= frame);
-            !labels.is_empty()
-        });
-        self.len = self.by_size.values().map(HashMap::len).sum();
-    }
-    fn end_frame(&mut self) {
-        if self.len > MAX_LABELS {
-            self.evict(self.frame);
+    /// Keep the [`MAX_LABELS`] most recently used labels and every label the
+    /// current frame uses. The next trim waits until the cache has doubled, so
+    /// each insertion costs O(1) amortised.
+    fn trim(&mut self) {
+        self.ticks.clear();
+        self.ticks
+            .extend(self.by_size.values().flat_map(HashMap::values).map(|(_, used)| *used));
+        if self.ticks.len() > MAX_LABELS {
+            let index = self.ticks.len() - MAX_LABELS;
+            let newest_kept = *self.ticks.select_nth_unstable(index).1;
+            let keep_from = newest_kept.min(self.frame_start);
+            self.by_size.retain(|_, labels| {
+                labels.retain(|_, (_, used)| *used >= keep_from);
+                !labels.is_empty()
+            });
+            self.len = self.by_size.values().map(HashMap::len).sum();
         }
-        self.frame += 1;
+        self.limit = (self.len * 2).max(MAX_LABELS * 2);
+    }
+    /// Shape the labels of a frame's `Text` operations, none of which a trim
+    /// while preparing them can drop, so drawing finds every one.
+    fn prepare_frame(&mut self, fonts: &mut text::Fonts, operations: &[DrawOp]) {
+        self.frame_start = self.tick + 1;
+        for op in operations {
+            if let DrawOp::Text { text, size, .. } = op {
+                self.prepare(fonts, text, *size);
+            }
+        }
+        self.frame_start = u64::MAX;
     }
 }
 
@@ -304,8 +352,7 @@ impl SoftRenderer {
     ) -> Result<LayoutId, LayoutError> {
         if text.len() > MAX_LAYOUT_BYTES
             || self.layouts.len() >= MAX_LAYOUTS
-            || !size.is_finite()
-            || size <= 0.0
+            || !valid_text_size(size)
             || !width.is_finite()
             || width <= 0.0
         {
@@ -317,6 +364,11 @@ impl SoftRenderer {
         self.layouts.insert(id, shaped);
         Ok(id)
     }
+}
+
+/// Whether `size` (DIPs) is a text size this renderer shapes and draws.
+fn valid_text_size(size: f32) -> bool {
+    size.is_finite() && size > 0.0 && size <= text::MAX_TEXT_SIZE
 }
 
 /// Paint a shaped layout's glyphs with their top-left at `origin` (DIPs).
@@ -343,7 +395,7 @@ fn draw_glyphs(
         let physical = glyph
             .layout
             .physical((origin.x * scale, (origin.y + glyph.baseline) * scale), scale);
-        let Some(image) = fonts.swash.get_image(&mut fonts.system, physical.cache_key) else {
+        let Some(image) = fonts.glyph_image(physical.cache_key) else {
             continue;
         };
         let x = physical.x + image.placement.left;
@@ -450,15 +502,11 @@ impl RenderBackend for SoftRenderer {
                 DrawOp::Layout { layout, .. } if !self.layouts.contains_key(layout) => {
                     return Err(SoftError::Layout(LayoutError::InvalidHandle));
                 }
-                DrawOp::Text { text, size, .. } => {
-                    if !size.is_finite() || *size <= 0.0 {
-                        return Err(SoftError::InvalidOperations);
-                    }
-                    self.labels.prepare(&mut self.fonts, text, *size);
-                }
+                DrawOp::Text { size, .. } if !valid_text_size(*size) => return Err(SoftError::InvalidOperations),
                 _ => {}
             }
         }
+        self.labels.prepare_frame(&mut self.fonts, operations);
         if !self.canvas.begin(self.size, self.scale) {
             return Err(SoftError::InvalidSize);
         }
@@ -471,7 +519,6 @@ impl RenderBackend for SoftRenderer {
         for op in operations {
             draw_op(&mut self.canvas, &mut sources, op);
         }
-        self.labels.end_frame();
         self.fonts.trim();
         self.rendered = true;
         match (&mut self.presenter, self.canvas.pixmap()) {
@@ -484,7 +531,7 @@ impl RenderBackend for SoftRenderer {
 impl TextBackend for SoftRenderer {
     /// Shaped once per distinct string and size, and cached like `Text` labels.
     fn measure_text(&mut self, text: &str, size: f32) -> Result<(f32, f32), LayoutError> {
-        if text.len() > MAX_LAYOUT_BYTES || !size.is_finite() || size <= 0.0 {
+        if text.len() > MAX_LAYOUT_BYTES || !valid_text_size(size) {
             return Err(LayoutError::ResourceLimit);
         }
         Ok(self.labels.prepare(&mut self.fonts, text, size).size())
@@ -580,18 +627,66 @@ mod tests {
         assert_ne!(renderer.frame_rgba().unwrap().2, first.as_slice());
     }
     #[test]
-    fn labels_are_bounded_and_keep_the_ones_still_drawn() {
+    fn labels_stay_bounded_and_keep_the_most_recently_used() {
         let mut labels = Labels::default();
         let mut fonts = text::Fonts::new(FontSource::BundledOnly);
-        for frame in 0..3 {
-            for index in 0..(MAX_LABELS / 2 + 1) {
-                labels.prepare(&mut fonts, &format!("{frame}:{index}"), 12.0);
-            }
+        let count = MAX_LABELS * 5;
+        for index in 0..count {
+            labels.prepare(&mut fonts, &index.to_string(), 12.0);
             labels.prepare(&mut fonts, "kept", 12.0);
-            labels.end_frame();
-            assert!(labels.len <= MAX_LABELS + 1);
+            assert!(labels.len <= MAX_LABELS * 2, "measuring without frames stays bounded");
         }
         assert!(labels.get("kept", 12.0).is_some());
-        assert!(labels.get("0:0", 12.0).is_none());
+        assert!(labels.get(&(count - 1).to_string(), 12.0).is_some());
+        assert!(labels.get("0", 12.0).is_none());
+    }
+    #[test]
+    fn a_frame_keeps_every_label_it_draws_even_past_the_cap() {
+        let mut renderer = SoftRenderer::offscreen_with_fonts(64, 32, 1.0, FontSource::BundledOnly).unwrap();
+        for index in 0..MAX_LABELS * 2 - 1 {
+            renderer.measure_text(&format!("m{index}"), 12.0).unwrap();
+        }
+        let labels = MAX_LABELS + 10;
+        let ops: Vec<DrawOp> = (0..labels)
+            .map(|index| DrawOp::Text {
+                origin: Point { x: 0.0, y: 100.0 },
+                text: format!("t{index}"),
+                size: 12.0,
+                color: Color(0xFFFFFF),
+            })
+            .collect();
+        renderer.render(&ops).unwrap();
+        assert!((0..labels).all(|index| renderer.labels.get(&format!("t{index}"), 12.0).is_some()));
+        assert!(renderer.labels.get("m0", 12.0).is_none());
+    }
+    #[test]
+    fn the_glyph_cache_keeps_what_the_last_frame_drew() {
+        let mut renderer = SoftRenderer::offscreen_with_fonts(200, 40, 1.0, FontSource::BundledOnly).unwrap();
+        renderer.fonts.glyph_cap = 4;
+        let label = |text: &str| DrawOp::Text {
+            origin: Point { x: 4.0, y: 4.0 },
+            text: text.into(),
+            size: 12.0,
+            color: Color(0xFFFFFF),
+        };
+        renderer.render(&[label("abcdefgh")]).unwrap();
+        // Over the cap, but every bitmap was drawn: nothing is rasterized again.
+        assert_eq!(renderer.fonts.glyph_images(), 8);
+        renderer.render(&[label("xyz")]).unwrap();
+        assert_eq!(renderer.fonts.glyph_images(), 3);
+    }
+    #[test]
+    fn glyphs_beyond_the_pixel_cap_are_skipped() {
+        let mut renderer = SoftRenderer::offscreen_with_fonts(64, 64, 4.0, FontSource::BundledOnly).unwrap();
+        let label = |size: f32| DrawOp::Text {
+            origin: Point { x: 0.0, y: 0.0 },
+            text: "x".into(),
+            size,
+            color: Color(0xFFFFFF),
+        };
+        renderer.render(&[label(text::MAX_TEXT_SIZE)]).unwrap();
+        assert_eq!(renderer.fonts.glyph_images(), 0, "8192 px per em is not rasterized");
+        renderer.render(&[label(4.0)]).unwrap();
+        assert_eq!(renderer.fonts.glyph_images(), 1);
     }
 }

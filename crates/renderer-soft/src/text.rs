@@ -8,16 +8,16 @@
 //! unchanged, as a DirectWrite layout does.
 use bareline_renderer::{Color, LayoutError, Point, Rect, TextHit, TextStyle};
 use cosmic_text::{
-    Align, Attrs, AttrsList, BufferLine, Ellipsize, Family, FontSystem, Hinting, LayoutGlyph, LineEnding, Shaping,
-    SwashCache, Wrap, fontdb,
+    Align, Attrs, AttrsList, BufferLine, CacheKey, Ellipsize, Family, FontSystem, Hinting, LayoutGlyph, LineEnding,
+    Shaping, SwashCache, SwashImage, Wrap, fontdb,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
-/// DejaVu Sans Mono 2.37 (Bitstream Vera licence with public-domain DejaVu
-/// changes; see `fonts/LICENSE-DejaVu.txt`). Always loaded, so every family
+/// DejaVu Sans Mono 2.37 (Bitstream Vera and Arev licences with public-domain
+/// DejaVu changes; see `fonts/LICENSE-DejaVu.txt`). Always loaded, so every family
 /// resolves to a real face and offscreen goldens are reproducible.
 const BUNDLED_FONT: &[u8] = include_bytes!("../fonts/DejaVuSansMono.ttf");
 /// Family name of the bundled face.
@@ -39,8 +39,18 @@ const INTERFACE_FAMILIES: [&str; 8] = [
 ];
 /// Resolved family names; the cache is flushed when it overflows.
 const MAX_RESOLVED_FAMILIES: usize = 64;
-/// Glyph bitmaps kept between frames; the cache is flushed when it overflows.
+/// Glyph bitmaps kept between frames. Past this, a frame keeps only the
+/// bitmaps it drew, so a screen that needs more than this (dense CJK text at
+/// several sizes) still rasterizes each glyph once, not once per frame.
 const MAX_GLYPH_IMAGES: usize = 8192;
+/// Largest glyph rasterized, in pixels per em. Bigger glyphs are not drawn:
+/// their bitmaps would be hundreds of megabytes (text sizes are capped at
+/// [`MAX_TEXT_SIZE`] DIPs, but a window's scale factor is not).
+const MAX_GLYPH_PIXELS: f32 = 4096.0;
+/// Largest text size accepted, in DIPs, by shaping, measuring and `Text`
+/// operations; larger sizes are `LayoutError::ResourceLimit` or
+/// `SoftError::InvalidOperations`.
+pub(crate) const MAX_TEXT_SIZE: f32 = 2048.0;
 /// Tab advance in spaces.
 const TAB_WIDTH: u16 = 4;
 /// Line height of wrapped layouts, in font sizes: Windows sets uniform spacing.
@@ -60,7 +70,11 @@ pub enum FontSource {
 /// The cosmic-text font system and glyph cache, reused across frames.
 pub(crate) struct Fonts {
     pub(crate) system: FontSystem,
-    pub(crate) swash: SwashCache,
+    swash: SwashCache,
+    /// Glyph bitmaps drawn since the last [`Fonts::trim`].
+    drawn: HashSet<CacheKey>,
+    /// Glyph bitmaps kept between frames ([`MAX_GLYPH_IMAGES`]; tests lower it).
+    pub(crate) glyph_cap: usize,
     /// Requested family name to the installed family used for it.
     resolved: HashMap<String, String>,
     /// Natural line height in font sizes, per installed family.
@@ -86,6 +100,8 @@ impl Fonts {
         Self {
             system,
             swash: SwashCache::new(),
+            drawn: HashSet::new(),
+            glyph_cap: MAX_GLYPH_IMAGES,
             resolved: HashMap::new(),
             line_heights: HashMap::new(),
             monospace,
@@ -145,11 +161,28 @@ impl Fonts {
         self.line_heights.insert(family.to_owned(), ratio);
         ratio
     }
-    /// Bound the glyph bitmap cache between frames.
-    pub(crate) fn trim(&mut self) {
-        if self.swash.image_cache.len() > MAX_GLYPH_IMAGES {
-            self.swash.image_cache.clear();
+    /// The bitmap of a glyph at `key`, rasterized once and cached; `None` for
+    /// blank glyphs and for glyphs above [`MAX_GLYPH_PIXELS`].
+    pub(crate) fn glyph_image(&mut self, key: CacheKey) -> Option<&SwashImage> {
+        if f32::from_bits(key.font_size_bits) > MAX_GLYPH_PIXELS {
+            return None;
         }
+        self.drawn.insert(key);
+        self.swash.get_image(&mut self.system, key).as_ref()
+    }
+    /// Bound the glyph bitmap cache between frames: once it is over
+    /// [`MAX_GLYPH_IMAGES`], drop the bitmaps the last frame did not draw.
+    pub(crate) fn trim(&mut self) {
+        let cache = &mut self.swash.image_cache;
+        if cache.len() > self.glyph_cap {
+            cache.retain(|key, _| self.drawn.contains(key));
+        }
+        self.drawn.clear();
+    }
+    /// Cached glyph bitmaps.
+    #[cfg(test)]
+    pub(crate) fn glyph_images(&self) -> usize {
+        self.swash.image_cache.len()
     }
 }
 
