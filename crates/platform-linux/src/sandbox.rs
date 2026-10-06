@@ -22,14 +22,11 @@
 use bareline_extensions_protocol::ExecutionBudget;
 use bareline_macros::process::ProcessTreeGuard;
 use bareline_platform_posix::extension_transport::{HostSandbox, HostSpawn, Isolation, SpawnedHost};
-use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    process::{Pid, Resource, Rlimit, Signal},
-};
+use rustix::process::{Pid, Resource, Rlimit, Signal, WaitId, WaitIdOptions, waitid};
 use std::{
     io,
     os::{
-        fd::{AsRawFd, OwnedFd, RawFd},
+        fd::{AsFd, AsRawFd, OwnedFd, RawFd},
         unix::{
             fs::{DirBuilderExt, MetadataExt, PermissionsExt},
             process::CommandExt,
@@ -213,6 +210,11 @@ pub struct LinuxHostSandbox {
     /// Threads the host may start beyond the tasks this user runs at launch.
     /// `RLIMIT_NPROC` counts every task of the user, so it is set to that count
     /// plus this headroom: enough for the runtime's threads, not for a fork bomb.
+    /// The count is a snapshot taken at launch: tasks the user's other programs
+    /// start afterwards use up the same headroom, so it is generous (a host
+    /// needs a handful of threads) and a thread the host cannot create fails its
+    /// invocation, never the editor, which `RLIMIT_NPROC` in the host does not
+    /// limit.
     pub task_headroom: u64,
     /// Refuse to start the host without Landlock (the default, SEC-05).
     pub require_landlock: bool,
@@ -225,7 +227,7 @@ impl Default for LinuxHostSandbox {
             memory_limit_bytes: 512 * 1024 * 1024,
             address_space_limit_bytes: 64 * 1024 * 1024 * 1024,
             open_files: 64,
-            task_headroom: 64,
+            task_headroom: 256,
             require_landlock: true,
             read_grants: Vec::new(),
         }
@@ -435,6 +437,13 @@ fn close_inherited_on_exec() -> io::Result<()> {
 
 /// The host and its process group. Terminating, or dropping the guard (as the
 /// Windows job object's kill-on-close does), kills both.
+///
+/// The group's number is the host's pid, which cannot be reused while the host
+/// is unreaped (running, or exited and not yet waited for), so the group is
+/// signalled whenever the host is unreaped, also after it exited: whatever it
+/// started is killed with it. The launcher reaps the host only after the guard
+/// is dropped (`host_exit` in the POSIX transport). Once the host is reaped the
+/// number may name someone else's group, so only then is the group spared.
 struct HostTree {
     pid: Option<Pid>,
     /// Identifies the host itself even after its pid is reused (Linux 5.3+).
@@ -446,13 +455,20 @@ impl HostTree {
         let pidfd = pid.and_then(|pid| rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok());
         Self { pid, pidfd }
     }
-    /// Whether the host has exited; unknown counts as running.
-    fn exited(&self) -> bool {
-        let Some(pidfd) = &self.pidfd else {
-            return false;
+    /// Whether the host has been waited for (or is not this process's child).
+    /// `WNOWAIT` leaves an exited host waitable, so asking never reaps it.
+    fn reaped(&self) -> bool {
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        let answer = match (&self.pidfd, self.pid) {
+            // P_PIDFD (Linux 5.4+) names this host even if its pid was reused.
+            (Some(pidfd), _) => match waitid(WaitId::PidFd(pidfd.as_fd()), options) {
+                Err(rustix::io::Errno::INVAL) => self.pid.map(|pid| waitid(WaitId::Pid(pid), options)),
+                answer => Some(answer),
+            },
+            (None, Some(pid)) => Some(waitid(WaitId::Pid(pid), options)),
+            (None, None) => None,
         };
-        let mut fds = [PollFd::new(pidfd, PollFlags::IN)];
-        matches!(poll(&mut fds, Some(&Timespec::default())), Ok(count) if count > 0)
+        matches!(answer, None | Some(Err(rustix::io::Errno::CHILD)))
     }
 }
 impl ProcessTreeGuard for HostTree {
@@ -460,9 +476,7 @@ impl ProcessTreeGuard for HostTree {
         let Some(pid) = self.pid else {
             return Ok(());
         };
-        // The group is the host's only while the host runs: once it exited, its
-        // number may name someone else's group, so only the host is signalled.
-        if !self.exited() {
+        if !self.reaped() {
             match rustix::process::kill_process_group(pid, Signal::KILL) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
                 Err(errno) => return Err(errno.into()),
@@ -470,6 +484,7 @@ impl ProcessTreeGuard for HostTree {
         }
         let result = match &self.pidfd {
             Some(pidfd) => rustix::process::pidfd_send_signal(pidfd, Signal::KILL),
+            None if self.reaped() => return Ok(()),
             None => rustix::process::kill_process(pid, Signal::KILL),
         };
         match result {
@@ -517,15 +532,60 @@ mod tests {
                 .starts_with("isolation=Unsupported")
         );
     }
+    /// Whether the host has exited (reaped or not), from its pidfd.
+    fn exited(tree: &HostTree) -> bool {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        let pidfd = tree.pidfd.as_ref().expect("pidfd_open (Linux 5.3+)");
+        let mut fds = [PollFd::new(pidfd, PollFlags::IN)];
+        matches!(poll(&mut fds, Some(&Timespec::default())), Ok(count) if count > 0)
+    }
+    /// Whether `pid` is gone (or a zombie nobody has reaped yet).
+    fn gone(pid: u32) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+            Err(_) => true,
+        }
+    }
     #[test]
     fn the_guard_kills_a_running_host_and_spares_a_finished_one() {
         let mut child = Command::new("sleep").arg("30").spawn().unwrap();
         let mut guard = HostTree::new(child.id());
-        assert!(!guard.exited());
+        assert!(!exited(&guard) && !guard.reaped());
         guard.terminate().unwrap();
         assert!(child.wait().unwrap().code().is_none(), "killed by a signal");
+        assert!(guard.reaped());
         // Terminating again (or dropping) after the host is gone is harmless.
         guard.terminate().unwrap();
         drop(guard);
+    }
+    #[test]
+    fn the_guard_kills_what_an_exited_host_left_running_until_it_is_reaped() {
+        // A host that starts a background process in its own group and exits.
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 30 >/dev/null 2>&1 & echo $!"])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut left = String::new();
+        std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut left).unwrap();
+        let left: u32 = left.trim().parse().unwrap();
+        let mut guard = HostTree::new(child.id());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !exited(&guard) {
+            assert!(std::time::Instant::now() < deadline, "the host did not exit");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Exited but not waited for: its group is still its own, and is killed.
+        assert!(!guard.reaped() && !gone(left));
+        guard.terminate().unwrap();
+        while !gone(left) {
+            assert!(std::time::Instant::now() < deadline, "the background process survived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(child.wait().unwrap().success());
+        assert!(guard.reaped());
     }
 }

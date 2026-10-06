@@ -30,7 +30,7 @@ use std::{
         },
     },
     path::{Path, PathBuf},
-    process::Child,
+    process::{Child, ExitStatus},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -393,6 +393,35 @@ fn hash(file: &mut File, limit: u64) -> io::Result<[u8; 32]> {
     Ok(digest.finalize().into())
 }
 
+/// The host's exit status once it has exited, without reaping it on Linux: the
+/// guard signals the host's process group, and the group's number stays the
+/// host's only while the host is unreaped, so the host is reaped (by the final
+/// `wait`) only after the watchdog dropped the guard. Elsewhere the guard does
+/// not rely on the pid, and `try_wait` reaps as usual.
+#[cfg(target_os = "linux")]
+fn host_exit(child: &mut Child) -> io::Result<Option<ExitStatus>> {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    use std::os::unix::process::ExitStatusExt;
+    let pid = i32::try_from(child.id())
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| io::Error::other("host pid"))?;
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+    let Some(status) = waitid(WaitId::Pid(pid), options)? else {
+        return Ok(None);
+    };
+    // The raw wait status `std` decodes: the code in the second byte, or the signal.
+    let raw = match (status.exit_status(), status.terminating_signal()) {
+        (Some(code), _) => (code & 0xff) << 8,
+        (None, Some(signal)) => signal | if status.dumped() { 0x80 } else { 0 },
+        (None, None) => return Ok(None),
+    };
+    Ok(Some(ExitStatus::from_raw(raw)))
+}
+#[cfg(not(target_os = "linux"))]
+fn host_exit(child: &mut Child) -> io::Result<Option<ExitStatus>> {
+    child.try_wait()
+}
 /// Synchronous worker entry. A separate watchdog owns the host's process tree
 /// guard and kills it on cancellation or deadline, including compilation or
 /// blocked WASI. Returns how the host was isolated. Returning drops all host
@@ -520,16 +549,17 @@ pub fn run_verified_host_in(
                 Err(ProtocolError::Io) => {
                     // Do not park this worker on a host that closed the socket and
                     // idled: give it a short grace period, then kill it (SEC-11).
+                    // Cancelling makes the watchdog kill the host's tree; the
+                    // exit is then observed like any other.
                     let grace = Instant::now() + Duration::from_millis(2000);
                     let status = loop {
-                        match child.try_wait()? {
-                            Some(status) => break status,
-                            None if Instant::now() >= grace => {
-                                abandoned.store(true, Ordering::Release);
-                                break child.wait()?;
-                            }
-                            None => std::thread::sleep(Duration::from_millis(10)),
+                        if let Some(status) = host_exit(&mut child)? {
+                            break status;
                         }
+                        if Instant::now() >= grace {
+                            abandoned.store(true, Ordering::Release);
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
                     };
                     if status.success() {
                         return Ok(());
