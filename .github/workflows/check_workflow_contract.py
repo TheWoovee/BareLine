@@ -17,7 +17,7 @@ NEUTRAL_MATRIX = "[ubuntu-latest, macos-latest]"
 PULL_REQUEST_WORKFLOWS = {"ci.yml", "supply-chain.yml", "preview-release.yml"}
 # Non-required workflows that also follow pushes to exactly this inline branch
 # list. Pull requests and every other branch filter stay forbidden for them.
-BRANCH_PUSH_WORKFLOWS = {"port-smoke.yml": "[port-integration]"}
+BRANCH_PUSH_WORKFLOWS = {"port-smoke.yml": "[port-integration]", "port-journeys.yml": "[port-integration]"}
 # perf-nightly.yml is owned and re-pinned on its own branch; its jobs are
 # opt-in and informational. Timeouts and action pins still apply to it.
 FLOATING_RUNNER_EXEMPT = {"perf-nightly.yml"}
@@ -141,6 +141,7 @@ jobs:
     assert any("non-required" in error for error in inspect("extra.yml", "on: [pull_request]\n" + valid.split("permissions:\n", 1)[1]))
     branch = scheduled.replace("    tags: ['v*']\n", "    branches: [port-integration]\n")
     assert inspect("port-smoke.yml", branch) == [], inspect("port-smoke.yml", branch)
+    assert inspect("port-journeys.yml", branch) == [], inspect("port-journeys.yml", branch)
     widened = {
         "other workflow": ("extra.yml", branch),
         "extra branch": ("port-smoke.yml", branch.replace("[port-integration]", "[port-integration, master]")),

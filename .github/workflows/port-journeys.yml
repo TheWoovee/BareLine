@@ -1,0 +1,168 @@
+name: Port journeys
+# Runs the ordinary journeys of tests/e2e/journeys.json against the release
+# editor on Linux (Xvfb, driven with xdotool) and macOS (the runner's logged-in
+# GUI session, driven through Quartz events) after every push to the port
+# integration branch and on demand. Each journey reports every step as passed,
+# failed with a class (product, harness, timeout, environment or
+# service_not_wired with the service's name) or skipped with its reason; the
+# summary job lists the failing steps as the port's issue list. Not a required
+# check, never runs on pull requests, and a failing journey does not fail the
+# run: the results are tracked, not gated.
+on:
+  push:
+    branches: [port-integration]
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: Attempts per journey
+        type: choice
+        options: ['1', '3', '5', '10']
+        default: '1'
+permissions:
+  contents: read
+concurrency:
+  group: port-journeys-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install the Linux build packages and display tooling
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-x11-0 libxcursor1 xvfb xauth xdotool imagemagick x11-utils
+      - name: Build the release editor and the journey runner
+        run: |
+          cargo build -p bareline --release --locked
+          cargo build -p xtask --locked
+      - name: Journey harness regressions
+        run: |
+          cargo test -p xtask --locked
+          python -m unittest discover -s tests/e2e -p 'test_macos_desktop.py'
+      - name: Find and capture a window under Xvfb
+        if: runner.os == 'Linux'
+        run: env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' cargo test -p xtask --locked -- --ignored finds_and_captures_a_window
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: port-journeys-runner-${{ matrix.platform }}
+          path: |
+            target/release/bareline
+            target/debug/xtask
+          if-no-files-found: error
+          retention-days: 7
+  journeys:
+    needs: build
+    # Ten attempts of the longest journey (540 s deadline plus cleanup) fit.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos]
+        # Exactly the "ordinary" tier of tests/e2e/journeys.json (xtask's steps::ORDINARY).
+        journey: [plain_text, code_config, regex_transform, column_multi_cursor, huge_log_tail, workspace, udl, macro_external, split_clone_sync, portable, ui_regressions]
+    runs-on: ${{ matrix.platform == 'linux' && 'ubuntu-latest' || 'macos-latest' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install the Linux display, input and screenshot tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0 libxcursor1 xvfb xauth xdotool imagemagick x11-utils fonts-dejavu-core fonts-noto-cjk
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: port-journeys-runner-${{ matrix.platform }}
+          path: target/port-runner
+      - name: Run the journey N times
+        env:
+          ATTEMPTS: ${{ inputs.attempts || '1' }}
+          JOURNEY: ${{ matrix.journey }}
+          PLATFORM: ${{ matrix.platform }}
+        # The runner was built in this checkout's path, so it finds the
+        # fixtures and the manifest beside it. --no-fail: the summary reports.
+        run: |
+          chmod +x target/port-runner/release/bareline target/port-runner/debug/xtask
+          journey=(target/port-runner/debug/xtask journey "$JOURNEY" --executable=target/port-runner/release/bareline --attempts="$ATTEMPTS" --output="target/port-journeys/$PLATFORM-$JOURNEY" --commit="$GITHUB_SHA" --summary="$GITHUB_STEP_SUMMARY" --no-fail)
+          if [ "$RUNNER_OS" = Linux ]; then
+            env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' "${journey[@]}"
+          else
+            "${journey[@]}"
+          fi
+      - name: Retain the journey results, observations, logs and screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # No run_attempt suffix: a re-run replaces it, and a summary-only re-run still finds it.
+          name: port-journey-${{ matrix.platform }}-${{ matrix.journey }}
+          overwrite: true
+          path: target/port-journeys/
+          if-no-files-found: warn
+          retention-days: 30
+  summary:
+    needs: journeys
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: port-journeys-runner-linux
+          path: target/port-runner
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: port-journey-${{ matrix.platform }}-*
+          path: target/port-journeys
+      - name: List the failing steps per journey as the port's issue list
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          chmod +x target/port-runner/debug/xtask
+          target/port-runner/debug/xtask journey summarize --results=target/port-journeys --output="target/port-journeys-summary/$PLATFORM" --summary="$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: port-journeys-summary-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/port-journeys-summary/
+          if-no-files-found: warn
+          retention-days: 90

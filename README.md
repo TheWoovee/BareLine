@@ -286,6 +286,14 @@ gh run download <run-id> --name port-smoke-macos --dir port-smoke/macos
 
 When `packaging/macos/bundle.sh` exists, the macOS job also uploads the `.app` zip and `.dmg` as `port-smoke-macos-bundle`.
 
+**Journeys workflow.** [`port-journeys.yml`](.github/workflows/port-journeys.yml) runs the 11 ordinary journeys of `tests/e2e/journeys.json` on the same triggers, under Xvfb on `ubuntu-latest` and in the GUI session of `macos-latest`, with an `attempts` input on manual dispatch. `cargo xtask journey <name|ordinary>` drives the release editor: xdotool and ImageMagick on X11, Quartz events and `screencapture` on macOS. Where the Windows procedure reads text through UI Automation, the Linux one checks the bytes the editor saves, the tab's modified marker and visible changes, and lists the reads it could not make. Each step passes, fails with a class (`service_not_wired` names the service the shell has not wired yet), or is skipped with a reason; the summary job collects the failing steps per platform. Locally, from a Linux checkout with a release build:
+
+```bash
+env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' cargo run -p xtask -- journey ordinary --executable=target/release/bareline --output=target/port-journeys --no-fail
+```
+
+The macOS run needs the Accessibility permission for the runner's Python (synthetic input); without it every journey fails with the `environment` class.
+
 ## Repository layout
 
 | Path | Contents |
