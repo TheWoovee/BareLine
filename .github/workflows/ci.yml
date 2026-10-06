@@ -170,6 +170,9 @@ jobs:
       # Use the actual host compiler (including native C++ build scripts), not
       # --cfg simulation. Covers helpers/host and every neutral workspace target.
       - run: cargo check --workspace --all-targets --locked
+      # The application shell builds on every OS (PR-028); on Linux and macOS it
+      # runs with stand-in native services until the adapters land.
+      - run: cargo build -p bareline --locked
       - name: Complete Clippy census and exact debt ratchet
         shell: pwsh
         run: |
@@ -196,13 +199,17 @@ jobs:
             target/clippy-census.stderr.log
             target/clippy-ratchet.log
       - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
-      # Includes shared RecordingBackend UI and portable state/path tests.
+      # The stand-ins behind the shell's native seam on Linux and macOS.
+      - run: cargo test -p bareline --bin bareline --locked -- shell::native::
+      # Includes shared RecordingBackend UI and portable state/path tests. The
+      # shell's own tests assume the Windows file system and path trust; they run
+      # in the native job until the POSIX file system lands (PR-030).
       - name: Workspace tests (all failures reported)
         id: workspace_tests
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force target/test-logs | Out-Null
-          cargo test --workspace --locked --no-fail-fast 1> target/test-logs/cargo-test.stdout.log 2> target/test-logs/cargo-test.stderr.log
+          cargo test --workspace --exclude bareline --locked --no-fail-fast 1> target/test-logs/cargo-test.stdout.log 2> target/test-logs/cargo-test.stderr.log
           $testExit = $LASTEXITCODE
           Get-Content -LiteralPath target/test-logs/cargo-test.stderr.log, target/test-logs/cargo-test.stdout.log
           python .github/workflows/libtest_junit.py --stdout target/test-logs/cargo-test.stdout.log --stderr target/test-logs/cargo-test.stderr.log --output target/test-logs/cargo-test.junit.xml
