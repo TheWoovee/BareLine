@@ -64,6 +64,14 @@ pub struct CommandMessage {
     pub id: usize,
     pub action: u16,
 }
+impl CommandMessage {
+    /// The window token the command was sent to. The shell's seam names it
+    /// through this accessor: its portability guard keeps Win32 field names
+    /// out of the shell.
+    pub fn window(&self) -> isize {
+        self.hwnd
+    }
+}
 
 /// How an item reaches its handler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
