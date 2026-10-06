@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-//! POSIX filesystem services shared by the Linux and macOS adapters (PR-030).
+//! POSIX services shared by the Linux and macOS adapters: the filesystem
+//! (PR-030), the single-instance handoff and the extension host transport (PR-031).
 //!
 //! Saves keep the displaced version and swap the stage onto the name in one
 //! rename, path trust is bound to the opened objects through retained directory
@@ -12,7 +13,10 @@
 mod cache;
 mod capability;
 mod entries;
+pub mod extension_transport;
 mod files;
+pub mod instance;
+mod ipc;
 pub mod paths;
 mod process;
 mod resolve;
