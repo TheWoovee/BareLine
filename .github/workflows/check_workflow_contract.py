@@ -15,6 +15,9 @@ REQUIRED_JOBS = {"ci.yml": {"tooling", "native", "neutral"}, "supply-chain.yml":
 NEUTRAL_MATRIX = "[ubuntu-latest, macos-latest]"
 # Everything else must not be able to block or flake a pull request.
 PULL_REQUEST_WORKFLOWS = {"ci.yml", "supply-chain.yml", "preview-release.yml"}
+# Non-required workflows that also follow pushes to exactly this inline branch
+# list. Pull requests and every other branch filter stay forbidden for them.
+BRANCH_PUSH_WORKFLOWS = {"port-smoke.yml": "[port-integration]"}
 # perf-nightly.yml is owned and re-pinned on its own branch; its jobs are
 # opt-in and informational. Timeouts and action pins still apply to it.
 FLOATING_RUNNER_EXEMPT = {"perf-nightly.yml"}
@@ -45,14 +48,16 @@ def events(top):
     return {match[1] for line in body if (match := CHILD_KEY.match(line))}
 
 
-def push_has_branches(top):
+def push_has_branches(top, allowed=None):
+    """Whether push follows branches, other than an exact allowed `branches:` list."""
     _, body = top.get("on", ("", []))
     inside = False
     for line in body:
         if CHILD_KEY.match(line):
             inside = line.startswith("  push:")
-        elif inside and re.match(r"^    branches(?:-ignore)?:", line):
-            return True
+        elif inside and (match := re.match(r"^    (branches(?:-ignore)?):(.*)$", line)):
+            if (match[1], match[2].strip()) != ("branches", allowed):
+                return True
     return False
 
 
@@ -84,7 +89,7 @@ def inspect(name, text):
     if name == "ci.yml" and "neutral" in jobs:
         if not any(line.strip() == f"os: {NEUTRAL_MATRIX}" for line in jobs["neutral"][1]):
             errors.append(f"{name}: neutral matrix must stay {NEUTRAL_MATRIX} (required check names)")
-    if name not in PULL_REQUEST_WORKFLOWS and (triggers & {"pull_request", "pull_request_target"} or push_has_branches(top)):
+    if name not in PULL_REQUEST_WORKFLOWS and (triggers & {"pull_request", "pull_request_target"} or push_has_branches(top, BRANCH_PUSH_WORKFLOWS.get(name))):
         errors.append(f"{name}: only schedule, workflow_dispatch or tag pushes may start this non-required workflow")
     return errors
 
@@ -134,6 +139,16 @@ jobs:
     assert inspect("extra.yml", scheduled) == [], inspect("extra.yml", scheduled)
     assert any("non-required" in error for error in inspect("extra.yml", valid))
     assert any("non-required" in error for error in inspect("extra.yml", "on: [pull_request]\n" + valid.split("permissions:\n", 1)[1]))
+    branch = scheduled.replace("    tags: ['v*']\n", "    branches: [port-integration]\n")
+    assert inspect("port-smoke.yml", branch) == [], inspect("port-smoke.yml", branch)
+    widened = {
+        "other workflow": ("extra.yml", branch),
+        "extra branch": ("port-smoke.yml", branch.replace("[port-integration]", "[port-integration, master]")),
+        "branches-ignore": ("port-smoke.yml", branch.replace("    branches:", "    branches-ignore:")),
+        "pull request": ("port-smoke.yml", branch.replace("  schedule:\n", "  pull_request:\n  schedule:\n")),
+    }
+    for expected, (name, text) in widened.items():
+        assert any("non-required" in error for error in inspect(name, text)), expected
 
 
 if __name__ == "__main__":
