@@ -9,12 +9,23 @@
 //! accessibility, session end, the profile folders and startup failure
 //! reporting. Exactly one backend is compiled: `windows.rs` re-exports the
 //! Windows adapter unchanged, and `unix/` (Linux and macOS, one file per
-//! concern) wires the portable renderer and POSIX services and reports what
-//! this system does not support yet.
+//! concern) wires the portable renderer and the POSIX, Linux and macOS
+//! services. `prompt` is the one data type both sides share: a question the
+//! shell draws itself where the system has no modal dialog it can wait on.
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod backend;
 #[cfg(not(windows))]
 #[path = "unix/mod.rs"]
 mod backend;
+mod prompt;
 pub use backend::*;
+#[cfg_attr(
+    not(test),
+    allow(
+        unused_imports,
+        reason = "the shell reads buttons through the view; its tests build them"
+    )
+)]
+pub use prompt::PromptButtonView;
+pub use prompt::{PromptLevel, PromptView};
