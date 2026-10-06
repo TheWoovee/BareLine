@@ -13,8 +13,11 @@
 //!    event, the save pipeline's pump) as a [`Scope`] it can run again.
 //! 2. A question asked inside a scope starts its prompt or dialog and returns
 //!    nothing at once, so the caller takes its safe answer: nothing is opened,
-//!    saved, discarded or closed. The outermost scope that consumed no earlier
-//!    answer becomes the question's owner.
+//!    saved, discarded or closed. The innermost scope around the question that
+//!    began before the run consumed any answer becomes the question's owner:
+//!    a command run by a key runs again by itself, while a scope that began
+//!    after an earlier answer was consumed could not receive that answer
+//!    again, so the scope around it owns the question instead.
 //! 3. When the answer is in, it is armed together with the answers that run
 //!    had already consumed, and the shell runs the owner again: every question
 //!    now returns its armed answer in order, so the code continues as it does
@@ -26,6 +29,11 @@
 //! answer without showing anything, which is what these systems did before.
 //! One question is open at a time; another asked meanwhile takes its safe
 //! answer, as a second modal dialog could not open on Windows either.
+//!
+//! "Stop waiting" counts a portal dialog as cancelled, but the portal's own
+//! window stays open: `LinuxDialogs` cannot close a portal request yet
+//! (`org.freedesktop.portal.Request.Close`, a follow-up). A location chosen
+//! there afterwards is ignored, and the next dialog may open beside it.
 use super::super::prompt::{PromptButtonView, PromptLevel, PromptView};
 use bareline_platform_linux::{
     InAppPrompt, LinuxDialogs,

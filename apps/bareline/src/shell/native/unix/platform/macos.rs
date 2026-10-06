@@ -279,6 +279,7 @@ impl PlatformServices for Platform {
         self.save_file_with(&SaveDialogOptions::new(bareline_platform::SaveFileKind::Any))
     }
     fn save_file_with(&self, options: &SaveDialogOptions) -> std::result::Result<Option<PathBuf>, String> {
+        self.panel_confirmed.borrow_mut().take();
         let chosen = PlatformServices::save_file_with(&self.dialogs, options)?;
         if let Some(path) = &chosen {
             *self.panel_confirmed.borrow_mut() = Some(path.clone());
@@ -294,6 +295,13 @@ impl PlatformServices for Platform {
 pub struct Scope;
 pub fn interaction_scope<R: 'static>(_platform: Option<&Platform>, _owner: impl FnOnce() -> R) -> Scope {
     Scope
+}
+/// A save destination check completed: the save panel's confirmation that
+/// preceded it no longer applies to anything.
+pub fn save_destination_settled(platform: Option<&Platform>) {
+    if let Some(platform) = platform {
+        platform.panel_confirmed.borrow_mut().take();
+    }
 }
 pub fn interaction_waiting(_platform: Option<&Platform>) -> bool {
     false

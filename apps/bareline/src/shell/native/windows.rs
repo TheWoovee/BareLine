@@ -58,6 +58,8 @@ pub fn interaction_replay<R: 'static>(_platform: Option<&Platform>) -> Option<R>
     None
 }
 pub fn interaction_settle(_platform: Option<&Platform>) {}
+/// Nothing of the Windows save dialog carries over to the destination check.
+pub fn save_destination_settled(_platform: Option<&Platform>) {}
 pub fn in_app_prompt(_platform: Option<&Platform>) -> Option<super::PromptView> {
     None
 }

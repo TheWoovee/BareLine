@@ -3,6 +3,15 @@
 //! answer later (see `interaction`), and the X11 or Wayland clipboard. There is
 //! no native menu bar (the shell draws its menus, ADR-C tier 2), so no menu
 //! command ever arrives.
+//!
+//! Clipboard limitation: a Wayland session whose compositor offers no data
+//! control protocol (ext- or wlr-data-control) and that runs no XWayland
+//! (`DISPLAY` unset) leaves the editor without a clipboard. Copy and Paste then
+//! fail with "This system does not support the clipboard ..." and nothing is
+//! copied. Reading the Wayland clipboard without data control needs the
+//! editor's own `wl_data_device` on its winit surface, which winit does not
+//! expose; it is a follow-up. The desktops without data control (GNOME, WSLg)
+//! normally run XWayland with `DISPLAY` set, so the X11 fallback covers them.
 use super::super::super::prompt::PromptView;
 use super::super::{
     error::{Error, Result, unsupported},
@@ -73,7 +82,10 @@ pub struct Platform {
     clipboard_max_bytes: Cell<usize>,
     /// The path the last Save dialog returned. The portal always asks before
     /// that dialog replaces an existing file and cannot leave the question to
-    /// the application, so replacing exactly this path is already confirmed.
+    /// the application, so replacing exactly this path is already confirmed,
+    /// by the save destination check that follows the dialog only: the check
+    /// clears it when it completes, whatever its outcome
+    /// (`save_destination_settled`), and the next dialog replaces it.
     portal_confirmed: RefCell<Option<PathBuf>>,
 }
 impl Platform {
@@ -100,7 +112,14 @@ impl Platform {
     /// A platform without a window, a portal or a clipboard, for unit tests.
     #[cfg(test)]
     pub(in crate::shell) fn for_tests() -> Self {
-        let platform = Self::with_dialogs(LinuxDialogs::with_chooser(std::sync::Arc::new(tests::NoPortal)));
+        Self::for_tests_with(std::sync::Arc::new(tests::NoPortal))
+    }
+    /// As `for_tests`, with a portal whose dialogs `chooser` answers.
+    #[cfg(test)]
+    pub(in crate::shell) fn for_tests_with(
+        chooser: std::sync::Arc<dyn bareline_platform_linux::portal::FileChooser>,
+    ) -> Self {
+        let platform = Self::with_dialogs(LinuxDialogs::with_chooser(chooser));
         platform.clipboard_max_bytes.set(64);
         let _ = platform
             .clipboard
@@ -323,6 +342,7 @@ impl PlatformServices for Platform {
     fn save_file_with(&self, options: &SaveDialogOptions) -> std::result::Result<Option<PathBuf>, String> {
         let mut options = options.clone();
         options.app_confirms_overwrite = false;
+        self.portal_confirmed.borrow_mut().take();
         let chosen = self
             .dialog(DialogRequest::Save(options))
             .map(|paths| paths.into_iter().next())?;
@@ -341,6 +361,13 @@ impl PlatformServices for Platform {
 /// dialog started inside it has its answer.
 pub fn interaction_scope<R: 'static>(platform: Option<&Platform>, owner: impl FnOnce() -> R) -> Scope {
     platform.map_or_else(Scope::inert, |platform| platform.interactions.scope(Box::new(owner())))
+}
+/// A save destination check completed: the Save dialog's confirmation that
+/// preceded it no longer applies to anything.
+pub fn save_destination_settled(platform: Option<&Platform>) {
+    if let Some(platform) = platform {
+        platform.portal_confirmed.borrow_mut().take();
+    }
 }
 /// Whether a prompt or dialog is open, or its answer waits for its run.
 pub fn interaction_waiting(platform: Option<&Platform>) -> bool {
@@ -577,6 +604,11 @@ cd"
         assert!(!platform.confirm_overwrite(Path::new("/tmp/other.txt")));
         assert!(platform.confirm_overwrite(path));
         // Once only.
+        assert!(!platform.confirm_overwrite(path));
+        // A destination check that never needed to ask still ends it, so a
+        // later replacement of the same path is asked again.
+        *platform.portal_confirmed.borrow_mut() = Some(path.to_path_buf());
+        save_destination_settled(Some(&platform));
         assert!(!platform.confirm_overwrite(path));
     }
 }

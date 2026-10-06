@@ -189,7 +189,29 @@ impl Shell {
 
     pub(super) fn activate_modal(&mut self, surface: ModalSurface) {
         self.retire_partial_unicode_input();
-        if self.modal.is_some() {
+        // A platform question asked from inside another modal (Linux: the
+        // Recovery center's folder picker) covers that modal and keeps its
+        // state, as a native dialog covers it on Windows. The covered modal
+        // returns when the question closes, before the code that asked runs
+        // again (`prompt::Replay`).
+        if surface == ModalSurface::Prompt
+            && let Some(covered) = self.modal.take_if(|modal| modal.surface != ModalSurface::Prompt)
+        {
+            let identity = self.next_modal_identity();
+            let descriptor = ModalDescriptor::new(surface, covered.focused, identity);
+            self.ui_focus.open_layer(
+                bareline_ui::ViewId(covered.focused),
+                vec![bareline_ui::focus::FocusTarget {
+                    id: bareline_ui::ViewId(descriptor.semantics.primary),
+                    enabled: true,
+                }],
+            );
+            self.prompt.covered = Some(covered);
+            self.modal = Some(descriptor);
+            return;
+        }
+        // A prompt covering another modal closes first, then the covered one.
+        while self.modal.is_some() {
             self.dismiss_active_modal();
         }
         let invoker = self.modal_invoker();
@@ -229,6 +251,20 @@ impl Shell {
         let Some(modal) = self.modal.take() else {
             return;
         };
+        if modal.surface == ModalSurface::Prompt
+            && let Some(mut covered) = self.prompt.covered.take()
+        {
+            // The question closed; the modal it covered is active again with
+            // its state and focus as they were.
+            self.prompt_dismissed();
+            self.ui_focus.close_layer();
+            covered.revision = self.next_modal_identity();
+            self.modal = Some(covered);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
         match modal.surface {
             ModalSurface::Run => {
                 self.run_prompt.open = false;

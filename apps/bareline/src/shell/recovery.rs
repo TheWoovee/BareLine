@@ -765,80 +765,7 @@ impl Shell {
                 }
             }
             "recovery.confirm_discard" | "recovery.export" => {
-                if self.recovery.operation.is_some() {
-                    return true;
-                }
-                let discard = id == "recovery.confirm_discard";
-                let directories: Vec<PathBuf> = if discard {
-                    self.recovery.confirm_discard.take().unwrap_or_default()
-                } else {
-                    self.recovery
-                        .rows()
-                        .get(self.recovery.selected)
-                        .map(|row| vec![row.directory.clone()])
-                        .unwrap_or_default()
-                };
-                let destination = if discard {
-                    None
-                } else {
-                    self.platform.as_ref().and_then(|p| p.pick_folder().ok().flatten())
-                };
-                if !directories.is_empty() && (discard || destination.is_some()) {
-                    let (tx, rx) = mpsc::sync_channel(1);
-                    let notify = self.notify.clone();
-                    let cancel = self.recovery.cancellation.clone();
-                    let unreadable: std::collections::HashSet<PathBuf> = self
-                        .recovery
-                        .unreadable
-                        .iter()
-                        .map(|(directory, _)| directory.clone())
-                        .collect();
-                    if std::thread::Builder::new()
-                        .name("recovery-action".into())
-                        .spawn(move || {
-                            let result = (|| -> Result<Vec<PathBuf>, String> {
-                                let platform = crate::shell::native::FileSystem;
-                                if discard {
-                                    let mut removed = Vec::new();
-                                    for directory in &directories {
-                                        let _guard = platform.guard_directory(directory).map_err(|e| e.to_string())?;
-                                        if unreadable.contains(directory) {
-                                            // No manifest to retire; the cleanup proof lets the
-                                            // next startup sweep remove the directory.
-                                            bareline_file_io::paged_recovery::retire_unreadable(directory, &platform)?;
-                                        } else {
-                                            bareline_file_io::recovery::discard(directory, &platform)
-                                                .map_err(|e| e.to_string())?;
-                                        }
-                                        removed.push(directory.clone());
-                                    }
-                                    Ok(removed)
-                                } else {
-                                    let directory = &directories[0];
-                                    let _guard = platform.guard_directory(directory).map_err(|e| e.to_string())?;
-                                    let parent = destination.unwrap();
-                                    let _destination_guard =
-                                        platform.guard_directory(&parent).map_err(|e| e.to_string())?;
-                                    let export = parent.join(format!(
-                                        "recovery-edits-{}",
-                                        std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_nanos()
-                                    ));
-                                    bareline_file_io::recovery::export_edits(directory, &export, &cancel)
-                                        .map_err(|e| e.to_string())?;
-                                    Ok(Vec::new())
-                                }
-                            })();
-                            let _ = tx.send(result);
-                            notify();
-                        })
-                        .is_ok()
-                    {
-                        self.recovery.operation = Some(rx);
-                    }
-                }
+                self.recovery_operation(id == "recovery.confirm_discard");
             }
             "recovery.open_folder" => {
                 let selected = self
@@ -921,6 +848,84 @@ impl Shell {
             window.request_redraw();
         }
         true
+    }
+    /// Discards the checkpoints confirmed for discard, or exports the selected
+    /// one's edits to a folder the person picks, on a worker. It needs no
+    /// event loop, so the folder picker's later answer (Linux) is tested with
+    /// the center that asked still open.
+    fn recovery_operation(&mut self, discard: bool) {
+        if self.recovery.operation.is_some() {
+            return;
+        }
+        let directories: Vec<PathBuf> = if discard {
+            self.recovery.confirm_discard.take().unwrap_or_default()
+        } else {
+            self.recovery
+                .rows()
+                .get(self.recovery.selected)
+                .map(|row| vec![row.directory.clone()])
+                .unwrap_or_default()
+        };
+        let destination = if discard {
+            None
+        } else {
+            self.platform.as_ref().and_then(|p| p.pick_folder().ok().flatten())
+        };
+        if !directories.is_empty() && (discard || destination.is_some()) {
+            let (tx, rx) = mpsc::sync_channel(1);
+            let notify = self.notify.clone();
+            let cancel = self.recovery.cancellation.clone();
+            let unreadable: std::collections::HashSet<PathBuf> = self
+                .recovery
+                .unreadable
+                .iter()
+                .map(|(directory, _)| directory.clone())
+                .collect();
+            if std::thread::Builder::new()
+                .name("recovery-action".into())
+                .spawn(move || {
+                    let result = (|| -> Result<Vec<PathBuf>, String> {
+                        let platform = crate::shell::native::FileSystem;
+                        if discard {
+                            let mut removed = Vec::new();
+                            for directory in &directories {
+                                let _guard = platform.guard_directory(directory).map_err(|e| e.to_string())?;
+                                if unreadable.contains(directory) {
+                                    // No manifest to retire; the cleanup proof lets the
+                                    // next startup sweep remove the directory.
+                                    bareline_file_io::paged_recovery::retire_unreadable(directory, &platform)?;
+                                } else {
+                                    bareline_file_io::recovery::discard(directory, &platform)
+                                        .map_err(|e| e.to_string())?;
+                                }
+                                removed.push(directory.clone());
+                            }
+                            Ok(removed)
+                        } else {
+                            let directory = &directories[0];
+                            let _guard = platform.guard_directory(directory).map_err(|e| e.to_string())?;
+                            let parent = destination.unwrap();
+                            let _destination_guard = platform.guard_directory(&parent).map_err(|e| e.to_string())?;
+                            let export = parent.join(format!(
+                                "recovery-edits-{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_nanos()
+                            ));
+                            bareline_file_io::recovery::export_edits(directory, &export, &cancel)
+                                .map_err(|e| e.to_string())?;
+                            Ok(Vec::new())
+                        }
+                    })();
+                    let _ = tx.send(result);
+                    notify();
+                })
+                .is_ok()
+            {
+                self.recovery.operation = Some(rx);
+            }
+        }
     }
     fn publish_recovery_notice(&mut self, document: toast::DocumentKey, state: RecoveryNoticeState) {
         let id = toast::NotificationId(format!("recovery-preparation-{}", document.0));
@@ -1801,6 +1806,125 @@ mod tests {
         assert!(!runtime.action_enabled("recovery.compare"));
         assert!(!runtime.action_enabled("recovery.export"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Export edits asks for a folder from inside the Recovery center. Where the
+    /// folder dialog answers later (Linux), its "waiting" prompt covers the
+    /// center instead of closing it; once the folder is chosen the center is
+    /// active again, the click that asked runs again there (never in the
+    /// editor), and the export reaches `export_edits` with the chosen folder.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_folder_chosen_from_the_recovery_center_exports_with_the_center_still_open() {
+        use bareline_platform_linux::portal::{
+            ChooserMethod, ChooserOptions, ChooserResponse, FileChooser, PortalError,
+        };
+        use std::sync::{Arc, Mutex, mpsc};
+        /// A portal whose folder dialog answers once the test releases it.
+        struct Released(Mutex<mpsc::Receiver<()>>, String);
+        impl FileChooser for Released {
+            fn choose(
+                &self,
+                method: ChooserMethod,
+                _parent: &str,
+                _title: &str,
+                _options: &ChooserOptions,
+            ) -> Result<ChooserResponse, PortalError> {
+                assert_eq!(method, ChooserMethod::OpenFile, "a folder is picked through OpenFile");
+                let _ = self.0.lock().unwrap().recv_timeout(Duration::from_secs(10));
+                Ok(ChooserResponse {
+                    code: 0,
+                    uris: vec![self.1.clone()],
+                })
+            }
+        }
+        let root = temp_recovery_root("export-folder");
+        let destination = temp_recovery_root("export-destination");
+        complete_journal(&root.join("paged-600500-1-1"));
+        let cancel = bareline_file_io::cancellation::Cancellation::default();
+        let found = inspect_recovery_root(
+            &root,
+            &Default::default(),
+            &cancel,
+            &|_| None,
+            &crate::shell::native::FileSystem,
+        )
+        .unwrap();
+        let (release, released) = mpsc::channel();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        shell.platform = Some(crate::shell::native::Platform::for_tests_with(Arc::new(Released(
+            Mutex::new(released),
+            format!("file://{}", destination.display()),
+        ))));
+        shell.recovery.configure(Some(root.clone()), true);
+        let token = shell.recovery.token();
+        assert!(shell.recovery.accept_discovery(&token, Ok(found)));
+        shell.open_recovery_center();
+        assert!(shell.recovery.action_enabled("recovery.export"));
+        let click = || "Export edits";
+        {
+            // The click on Export edits, as the event loop scopes input.
+            let _input = crate::shell::native::interaction_scope(shell.platform.as_ref(), click);
+            shell.recovery_operation(false);
+        }
+        assert!(
+            shell.recovery.operation.is_none(),
+            "nothing is exported before a folder is chosen"
+        );
+        shell.prompt_sync();
+        assert_eq!(
+            shell.modal.map(|modal| modal.surface),
+            Some(modal::ModalSurface::Prompt)
+        );
+        assert!(
+            shell.recovery.open,
+            "the waiting prompt covers the center and keeps it open"
+        );
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let owner = loop {
+            if let Some(owner) = crate::shell::native::interaction_replay::<&str>(shell.platform.as_ref()) {
+                break owner;
+            }
+            assert!(Instant::now() < deadline, "the folder dialog never answered");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(owner, "Export edits");
+        // As `interactions_poll`: the prompt closes before the click runs again.
+        shell.prompt_sync();
+        assert_eq!(
+            shell.modal.map(|modal| modal.surface),
+            Some(modal::ModalSurface::Recovery)
+        );
+        assert!(shell.recovery.open, "the center is still open with its selection");
+        assert!(
+            shell.input_replay_allowed(Some(modal::ModalSurface::Recovery)),
+            "the click runs again in the center"
+        );
+        assert!(
+            !shell.input_replay_allowed(None),
+            "a click taken by the editor would not run"
+        );
+        {
+            let _input = crate::shell::native::interaction_scope(shell.platform.as_ref(), click);
+            shell.recovery_operation(false);
+        }
+        crate::shell::native::interaction_settle(shell.platform.as_ref());
+        let operation = shell.recovery.operation.take().expect("the export started");
+        assert_eq!(operation.recv_timeout(Duration::from_secs(10)).unwrap(), Ok(Vec::new()));
+        let exported = std::fs::read_dir(&destination)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("recovery-edits-"))
+            .count();
+        assert_eq!(exported, 1, "export_edits wrote into the chosen folder");
+        assert!(
+            shell
+                .modal
+                .is_some_and(|modal| modal.surface == modal::ModalSurface::Recovery)
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(destination);
     }
 
     #[test]

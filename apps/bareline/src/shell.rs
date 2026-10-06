@@ -806,6 +806,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Portal dialogs, the desktop appearance and (macOS) the menu bar answer
     // from other threads and wake the loop through it.
     native::set_event_notify(notify.clone());
+    // How an extension host would be confined on this system (Linux: the
+    // Landlock ABI, or why the host will not run), logged once as
+    // `event=extension_isolation`; the Extensions page shows the same words.
+    let _ = native::extension_transport::isolation();
     if !smoke && !perf && !prototype {
         ledger.record(StartupAction::InstanceHandoff);
     }
@@ -1168,12 +1172,14 @@ impl ApplicationHandler<Wake> for Handler {
         // A key or click the shell handles itself may ask a question that
         // answers later (Linux); the same input then runs again.
         let (pointer, modifiers) = (self.shell.pointer, self.shell.modifiers);
+        let modal = self.shell.modal.map(|modal| modal.surface);
         let _interaction = input.then(|| {
             native::interaction_scope(self.shell.platform.as_ref(), || prompt::Replay::Input {
                 window: id,
                 event: event.clone(),
                 pointer,
                 modifiers,
+                modal,
             })
         });
         self.shell.window_event(el, id, event);
@@ -2531,6 +2537,11 @@ impl Shell {
             return;
         }
         if !confirmed && !self.confirm_exit() {
+            if native::interaction_waiting(self.platform.as_ref()) {
+                // The exit prompt answers later (Linux): the exit stays queued
+                // and the queued close asks again once it has the answer.
+                self.pending_close = Some(PendingClose::Application);
+            }
             self.instance_resume();
             return;
         }
@@ -2577,9 +2588,8 @@ impl Shell {
             .record(ticket, "dialog-enter", "application", 0, 0, 0);
         let outcome = self.platform.as_ref().unwrap().confirm_save_all(&names);
         if native::interaction_waiting(self.platform.as_ref()) {
-            // The shell's own prompt answers later (Linux): the exit stays
-            // queued and asks again once it has the answer.
-            self.pending_close = Some(PendingClose::Application);
+            // The shell's own prompt answers later (Linux); the caller keeps
+            // what asked queued, and it asks again once it has the answer.
             return false;
         }
         match outcome {

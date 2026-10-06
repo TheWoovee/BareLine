@@ -33,13 +33,16 @@ pub(super) enum Replay {
     Close,
     /// The save pipeline's pump, for Save All's destinations.
     Lifecycle,
-    /// A click or key the shell handled directly (a banner button, a picker),
-    /// with the pointer and modifiers it had.
+    /// A click or key the shell handled directly (a banner button, a picker,
+    /// a button of the Recovery center), with the pointer and modifiers it had
+    /// and the modal it went to. It runs again only while that modal (or none)
+    /// is active again, so it never lands somewhere else.
     Input {
         window: WindowId,
         event: WindowEvent,
         pointer: Point,
         modifiers: ModifiersState,
+        modal: Option<modal::ModalSurface>,
     },
 }
 
@@ -56,6 +59,9 @@ pub(super) struct PromptSemantics {
 #[derive(Default)]
 pub(super) struct PromptRuntime {
     view: Option<PromptView>,
+    /// The modal the prompt covers while it is open; it returns, with its
+    /// state, when the prompt closes (`modal::activate_modal`).
+    pub(super) covered: Option<modal::ModalDescriptor>,
     focus: usize,
     bounds: Rect,
     text_bounds: Rect,
@@ -377,6 +383,11 @@ impl Shell {
         }
         true
     }
+    /// Whether input taken while `modal` was active may run again now: the
+    /// same modal (restored from under the prompt) or none must be active.
+    pub(super) fn input_replay_allowed(&self, modal: Option<modal::ModalSurface>) -> bool {
+        self.modal.map(|active| active.surface) == modal
+    }
     pub(super) fn prompt_contains(&self, point: Point) -> bool {
         self.prompt.bounds.contains(point)
     }
@@ -415,23 +426,37 @@ impl Shell {
                     event,
                     pointer,
                     modifiers,
+                    modal,
                 } => {
-                    self.pointer = pointer;
-                    self.modifiers = modifiers;
-                    let again = event.clone();
-                    let _scope = native::interaction_scope(self.platform.as_ref(), move || Replay::Input {
-                        window,
-                        event: again,
-                        pointer,
-                        modifiers,
-                    });
-                    self.window_event(el, window, event);
+                    if self.input_replay_allowed(modal) {
+                        self.pointer = pointer;
+                        self.modifiers = modifiers;
+                        let again = event.clone();
+                        let _scope = native::interaction_scope(self.platform.as_ref(), move || Replay::Input {
+                            window,
+                            event: again,
+                            pointer,
+                            modifiers,
+                            modal,
+                        });
+                        self.window_event(el, window, event);
+                    } else {
+                        // The modal the input went to has closed meanwhile
+                        // (or another opened): the answer is dropped rather
+                        // than letting the click or key reach what is there now.
+                        eprintln!("event=interaction_replay_dropped reason=modal-changed");
+                    }
                 }
             }
             native::interaction_settle(self.platform.as_ref());
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
+        }
+        // A save destination that could not ask while another question was
+        // open asks now.
+        if self.lifecycle.destination_asking() && !native::interaction_waiting(self.platform.as_ref()) {
+            self.lifecycle_pump(el);
         }
         self.prompt_sync();
     }

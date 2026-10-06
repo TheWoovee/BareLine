@@ -1035,6 +1035,12 @@ impl Shell {
             return;
         }
         if !self.confirm_exit() {
+            if crate::shell::native::interaction_waiting(self.platform.as_ref()) {
+                // The save-changes prompt answers later (Linux): the "Restart
+                // now" that asked stays offered, so pressing it again when the
+                // input runs again receives the answer.
+                self.settings.controller.restart_pending = true;
+            }
             self.instance_resume();
             return;
         }
