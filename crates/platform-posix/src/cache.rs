@@ -296,6 +296,11 @@ fn remove_inner(
     if identity(node) != expected_candidate {
         return Err(changed());
     }
+    // A cancelled request answers Interrupted before it ever contends for the
+    // lease: a child another thread is spawning holds duplicates of every
+    // descriptor until it execs, so the lock can be busy for a moment even
+    // when no other owner exists.
+    walk.budget()?;
     // A lease held anywhere keeps the folder; the sweep retries later.
     lock(&directory, FlockOperation::NonBlockingLockExclusive)?;
     walk.visited = 1;
