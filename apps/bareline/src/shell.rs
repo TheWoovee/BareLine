@@ -1933,7 +1933,7 @@ impl Shell {
     fn annotate_shared_context(&self, context: &mut bareline_commands::CommandContext) {
         use bareline_commands::CommandState;
         // Find/Replace and split/clone are implemented for paged documents
-        // (crates/app/src/find.rs, search_panel.rs and windows_app/views.rs), so they
+        // (crates/app/src/find.rs, search_panel.rs and shell/views.rs), so they
         // are no longer gated off here.
         let pause = self.workspace.as_ref().and_then(|w| w.paused_transcode_info());
         let resume = if let Some((_, used, required, limit)) = pause {

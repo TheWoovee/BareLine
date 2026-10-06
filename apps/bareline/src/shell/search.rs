@@ -529,7 +529,7 @@ mod menu_projection_tests {
 
     #[test]
     fn scope_mode_and_options_follow_current_intent_after_panel_cancellation() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace = bareline_app::workspace::Workspace::new(
             Arc::new(|| {}),
             Arc::new(bareline_platform_windows::WindowsFileSystem),

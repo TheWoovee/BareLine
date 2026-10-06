@@ -533,7 +533,7 @@ mod tests {
         workspace.open(path);
         let mut backend = RecordingBackend::default();
         settle(&mut workspace, &mut backend);
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.workspace = Some(workspace);
 
         // The extent is the whole source line, not the loaded window.
@@ -615,7 +615,7 @@ mod tests {
         let index = workspace
             .add_snapshot_preview(&document.snapshot(), "line.txt".into())
             .unwrap();
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.app.active = index;
         shell.workspace = Some(workspace);
         shell

@@ -2065,7 +2065,7 @@ mod tests {
         let saved = root.join("saved.txt");
         std::fs::write(&other, "other\n").unwrap();
         std::fs::write(&saved, "alpha\nbeta\ngamma\n").unwrap();
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),

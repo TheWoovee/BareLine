@@ -1850,7 +1850,7 @@ mod publication_tests {
     use super::*;
     #[test]
     fn print_preview_lays_out_the_document_instead_of_sample_text() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace =
             Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
         workspace.new_document().unwrap();
@@ -1948,7 +1948,7 @@ mod publication_tests {
     }
     #[test]
     fn json_tools_edit_once_and_put_the_caret_on_errors() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace =
             Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
         workspace.new_document().unwrap();
@@ -2014,7 +2014,7 @@ mod publication_tests {
     }
     #[test]
     fn hex_view_opens_a_read_only_tab_and_closes_the_dialog() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace =
             Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
         workspace.new_document().unwrap();
@@ -2038,7 +2038,7 @@ mod publication_tests {
     #[test]
     fn xpath_prompt_is_a_named_text_field_screen_readers_can_set() {
         use bareline_platform::accessibility::AccessibilityRole;
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         accessibility_test_setup(&mut shell, "xpath");
         let nodes = shell.utilities_accessibility_nodes();
         let field = nodes

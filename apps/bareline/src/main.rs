@@ -12,7 +12,7 @@ const _: () = assert!(
 #[cfg(feature = "qa-faults")]
 mod qa_faults;
 #[cfg(windows)]
-mod windows_app;
+mod shell;
 mod build_capabilities {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -31,9 +31,9 @@ fn main() {
     bareline_file_io::install_qa_save_boundary_hook(qa_faults::hit)
         .expect("QA save boundary hook must be installed exactly once");
     #[cfg(windows)]
-    if let Err(error) = windows_app::run() {
+    if let Err(error) = shell::run() {
         eprintln!("event=startup_failed error={error}");
-        windows_app::report_startup_failure(&*error);
+        shell::report_startup_failure(&*error);
         std::process::exit(1);
     }
     #[cfg(not(windows))]

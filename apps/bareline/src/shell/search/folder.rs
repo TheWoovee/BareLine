@@ -105,7 +105,7 @@ impl FolderControls {
         self.focus = 0;
         self.error = None;
     }
-    pub(in crate::windows_app) fn close(&mut self) {
+    pub(in crate::shell) fn close(&mut self) {
         self.open = false;
         for field in &mut self.fields {
             field.cancel();
@@ -279,7 +279,7 @@ impl FolderControls {
 }
 impl Shell {
     #[cfg(test)]
-    pub(in crate::windows_app) fn search_folder_accessibility_test_setup(&mut self, focus: usize) {
+    pub(in crate::shell) fn search_folder_accessibility_test_setup(&mut self, focus: usize) {
         self.search.folder.show(
             PathBuf::from("accessibility-folder"),
             bareline_search::SearchQuery::literal("needle"),
@@ -287,7 +287,7 @@ impl Shell {
         self.search.folder.focus_control(focus);
     }
 
-    pub(in crate::windows_app) fn search_folder_open(&self) -> bool {
+    pub(in crate::shell) fn search_folder_open(&self) -> bool {
         self.search.folder.open
     }
     fn search_folder_activate(&mut self, index: usize) {
@@ -314,14 +314,14 @@ impl Shell {
             _ => {}
         }
     }
-    pub(in crate::windows_app) fn search_folder_field(&mut self) -> Option<&mut TextField> {
+    pub(in crate::shell) fn search_folder_field(&mut self) -> Option<&mut TextField> {
         if self.search.folder.open && self.search.folder.focus < 3 {
             Some(&mut self.search.folder.fields[self.search.folder.focus])
         } else {
             None
         }
     }
-    pub(in crate::windows_app) fn search_folder_accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
+    pub(in crate::shell) fn search_folder_accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
         (self.search.folder.open && self.search.folder.focus < 3).then(|| {
             let index = self.search.folder.focus;
             let field = &self.search.folder.fields[index];
@@ -350,13 +350,13 @@ impl Shell {
             )
         })
     }
-    pub(in crate::windows_app) fn search_folder_accessibility_focus(&self) -> Option<u64> {
+    pub(in crate::shell) fn search_folder_accessibility_focus(&self) -> Option<u64> {
         self.search
             .folder
             .open
             .then_some(BASE + self.search.folder.focus as u64)
     }
-    pub(in crate::windows_app) fn search_folder_event(&mut self, event: &WindowEvent) -> bool {
+    pub(in crate::shell) fn search_folder_event(&mut self, event: &WindowEvent) -> bool {
         if !self.search.folder.open || self.palette.open {
             return false;
         }
@@ -500,15 +500,10 @@ impl Shell {
         }
         true
     }
-    pub(in crate::windows_app) fn search_folder_semantics(&self) -> Vec<Semantics> {
+    pub(in crate::shell) fn search_folder_semantics(&self) -> Vec<Semantics> {
         self.search.folder.semantics()
     }
-    pub(in crate::windows_app) fn search_folder_accessibility(
-        &mut self,
-        id: u64,
-        invoke: bool,
-        value: Option<&str>,
-    ) -> bool {
+    pub(in crate::shell) fn search_folder_accessibility(&mut self, id: u64, invoke: bool, value: Option<&str>) -> bool {
         if !self.search.folder.open || !(BASE..BASE + 7).contains(&id) {
             return false;
         }

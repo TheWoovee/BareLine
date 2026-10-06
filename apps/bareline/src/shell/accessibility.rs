@@ -1968,7 +1968,7 @@ pub(super) mod tests {
         assert_eq!(source.read(0, 64 * 1024 + 1), AccessibleRead::Unavailable);
     }
 
-    pub(in crate::windows_app) fn headless_shell() -> Shell {
+    pub(in crate::shell) fn headless_shell() -> Shell {
         let launch = launch::LaunchConfig {
             mode: launch::LaunchMode::Installed,
             performance: None,

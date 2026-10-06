@@ -1293,8 +1293,8 @@ mod tests {
         );
     }
 
-    fn recovery_shell(target: &std::path::Path, conflict: SaveConflict) -> crate::windows_app::Shell {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+    fn recovery_shell(target: &std::path::Path, conflict: SaveConflict) -> crate::shell::Shell {
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace =
             Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
         workspace.open(target.to_path_buf());
@@ -1315,7 +1315,7 @@ mod tests {
         shell
     }
 
-    fn settle_conflict_action(shell: &mut crate::windows_app::Shell) {
+    fn settle_conflict_action(shell: &mut crate::shell::Shell) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while shell.lifecycle.conflict_action.is_some() {
             shell.workspace.as_mut().unwrap().pump();
@@ -1451,7 +1451,7 @@ mod tests {
             })
             .expect("the consumed peer failure must remain available as a typed notification");
         assert_eq!(failure.level, bareline_ui::theme::ToastLevel::Error);
-        assert_eq!(failure.kind, crate::windows_app::toast::NotificationKind::Outcome);
+        assert_eq!(failure.kind, crate::shell::toast::NotificationKind::Outcome);
         assert!(
             failure
                 .details

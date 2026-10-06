@@ -1442,7 +1442,7 @@ mod tests {
                 std::thread::yield_now();
             }
         }
-        fn finish_rename(shell: &mut crate::windows_app::Shell) {
+        fn finish_rename(shell: &mut crate::shell::Shell) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while shell.shell_integration.rename.is_some() {
                 shell.shell_rename_pump();
@@ -1462,7 +1462,7 @@ mod tests {
         let source = root.join("before.txt");
         let target = root.join("after.txt");
         std::fs::write(&source, b"kept text").unwrap();
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),

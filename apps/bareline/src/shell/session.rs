@@ -1361,8 +1361,8 @@ mod close_tests {
         std::fs::write(&requested, "opened from the command line\n").unwrap();
         std::fs::write(&restored, "restored from the session\n").unwrap();
         let session = root.join("session.json");
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
-        shell.startup = crate::windows_app::startup::StartupSequence::new(true);
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        shell.startup = crate::shell::startup::StartupSequence::new(true);
         shell.startup.mark_first_frame();
         shell.session.configure(Some(session.clone()), Some(session), true);
         shell.workspace =
@@ -1463,7 +1463,7 @@ mod close_tests {
         let bytes = bareline_file_io::session::encode(&session.named()).unwrap();
         let manifest = bareline_file_io::session::decode(&bytes).unwrap();
         assert_eq!(manifest.documents.len(), 2);
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.startup.mark_first_frame();
         shell.workspace =
             Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
@@ -1572,7 +1572,7 @@ mod close_tests {
         };
 
         // Every document closes: the load goes ahead.
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.startup.mark_first_frame();
         shell.workspace = Some(two_documents(false));
         let closed: Vec<u64> = shell.workspace.as_ref().unwrap().tab_documents();
@@ -1613,7 +1613,7 @@ mod close_tests {
 
         // A dirty document refuses its close (no prompt headless, like Cancel):
         // nothing loads and it stays open.
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.startup.mark_first_frame();
         shell.workspace = Some(two_documents(true));
         shell.session_named_read(session_file).unwrap();
@@ -1649,7 +1649,7 @@ mod close_tests {
             title: format!("Untitled {id}"),
         };
         for user_chose in [false, true] {
-            let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+            let mut shell = crate::shell::accessibility::tests::headless_shell();
             let mut workspace =
                 Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
             workspace.new_document().unwrap();
@@ -1713,7 +1713,7 @@ mod close_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.startup.mark_first_frame();
         shell.session.configure(Some(root.join("session.json")), None, true);
         // Headroom for the process-global recovery worker under a loaded

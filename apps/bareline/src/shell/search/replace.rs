@@ -300,8 +300,8 @@ fn comparable_path(path: &Path) -> PathBuf {
 /// Another running process still owns (and may be writing) this job directory.
 fn replace_job_owner_running(owner: u32, created_unix_nanos: u128) -> bool {
     owner != std::process::id()
-        && crate::windows_app::recovery::process_started(owner).is_some_and(|start| {
-            start <= created_unix_nanos.saturating_add(crate::windows_app::recovery::OWNER_START_SLACK_NANOS)
+        && crate::shell::recovery::process_started(owner).is_some_and(|start| {
+            start <= created_unix_nanos.saturating_add(crate::shell::recovery::OWNER_START_SLACK_NANOS)
         })
 }
 fn backup_job_label(job: &ReceiptJob, now_unix_nanos: u128) -> String {
@@ -822,7 +822,7 @@ impl ReplaceRuntime {
     }
 }
 impl Shell {
-    pub(in crate::windows_app) fn search_replace_accessibility_nodes(
+    pub(in crate::shell) fn search_replace_accessibility_nodes(
         &self,
         width: f32,
         height: f32,
@@ -1963,10 +1963,10 @@ impl Shell {
     /// APP-10: exit neither abandons nor silently cancels a disk replacement. Returns
     /// the request when exit may continue; otherwise it is retained (Wait, or Cancel
     /// and exit until the worker stops) or retired (the prompt itself was cancelled).
-    pub(in crate::windows_app) fn search_replace_exit_gate(
+    pub(in crate::shell) fn search_replace_exit_gate(
         &mut self,
-        pending: crate::windows_app::PendingClose,
-    ) -> Option<crate::windows_app::PendingClose> {
+        pending: crate::shell::PendingClose,
+    ) -> Option<crate::shell::PendingClose> {
         if !self.search.replace.disk_busy() {
             self.search.replace.exit_prompted = None;
             return Some(pending);
@@ -2023,7 +2023,7 @@ mod menu_state_tests {
 
     #[test]
     fn replacement_preview_accessibility_tracks_only_rendered_rows_and_terminal_status() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         assert!(shell.search_replace_accessibility_nodes(1000.0, 700.0).is_empty());
         shell.search.replace.open = true;
         shell.search.replace.report = (0..20).map(|i| format!("Outcome {i}")).collect();
@@ -2136,7 +2136,7 @@ mod menu_state_tests {
         settle(&mut workspace);
         assert!(!preview.selected_sources_current(&workspace));
 
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.workspace = Some(workspace);
         shell.search.replace.open = true;
         shell.search.replace.preview = Some(preview);
@@ -2161,14 +2161,14 @@ mod menu_state_tests {
     /// APP-10: exit waits for a disk replacement instead of cancelling it mid-job.
     #[test]
     fn exit_waits_for_a_running_disk_replacement() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.search.replace.disk_queue = Some(empty_disk_preview());
         shell.queue_application_close();
         let pending = shell.pending_close.take().unwrap();
         assert!(!shell.application_close_ready(pending));
         assert!(matches!(
             shell.pending_close,
-            Some(crate::windows_app::PendingClose::Application)
+            Some(crate::shell::PendingClose::Application)
         ));
         assert!(shell.search.replace.status.contains("replacement finishes"));
         let pending = shell.pending_close.take().unwrap();
@@ -2302,7 +2302,7 @@ mod menu_state_tests {
     /// SRC-11: receipts and backups are never kept in %TEMP%; Apply refuses first.
     #[test]
     fn replace_receipts_and_backups_never_live_under_temp() {
-        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
         let durable = std::env::temp_dir().parent().unwrap().join("Bareline").join("recovery");
         shell.recovery_root = Some(durable.clone());
         assert_eq!(shell.replace_receipt_root(), Some(durable));
