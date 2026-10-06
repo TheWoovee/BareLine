@@ -29,7 +29,7 @@ pub(super) fn register(registry: &mut CommandRegistry) {
 impl ToolbarRuntime {
     pub fn draw(
         &mut self,
-        _renderer: &mut WindowsRenderer,
+        _renderer: &mut Renderer,
         width: f32,
         height: f32,
         ops: &mut Vec<bareline_renderer::DrawOp>,

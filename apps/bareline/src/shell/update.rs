@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Explicit native update controller. No check is scheduled automatically.
-use bareline_platform_windows::update as native;
+use crate::shell::native::update as native;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},

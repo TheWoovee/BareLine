@@ -40,7 +40,7 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
     );
     let mut workspace = Workspace::new(
         shell.notify.clone(),
-        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        std::sync::Arc::new(crate::shell::native::FileSystem),
     )
     .unwrap();
     let count = if scenario == "open" { 2 } else { 14 };
@@ -145,7 +145,7 @@ mod tests {
     fn close_multiple_closes_the_strip_one_tab_at_a_time() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         for _ in 0..3 {
@@ -186,7 +186,7 @@ mod tests {
     fn vertical_tabs_share_find_draw_and_hover_geometry() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -216,7 +216,7 @@ mod tests {
     fn find_selection_scope_uses_the_active_split_view() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -246,7 +246,7 @@ mod tests {
     fn session_capture_preserves_unavailable_tab_when_temporary_id_collides() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -303,7 +303,7 @@ mod tests {
         std::fs::write(&path, &body).unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 1;
@@ -583,7 +583,7 @@ mod tests {
         .unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 1;
@@ -839,7 +839,7 @@ mod tests {
     fn delayed_restore_guard_rejects_a_different_document_with_identical_text() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -853,7 +853,7 @@ mod tests {
     fn completion_target_tracks_secondary_cursor_and_rejects_focus_change() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -921,7 +921,7 @@ mod tests {
     fn delayed_fold_result_targets_the_requested_view_after_focus_moves() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -977,7 +977,7 @@ mod tests {
         // collapse every region of the document.
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1019,7 +1019,7 @@ mod tests {
     fn promotion_rebinds_linked_views_without_replacing_tabs_or_history() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1133,7 +1133,7 @@ mod tests {
     fn queued_edits_in_both_native_panes_share_the_document() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1209,7 +1209,7 @@ mod tests {
         fn exercise(writer: u32, close_from: u32) {
             let mut workspace = Workspace::new(
                 std::sync::Arc::new(|| {}),
-                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                std::sync::Arc::new(crate::shell::native::FileSystem),
             )
             .unwrap();
             workspace.new_document().unwrap();
@@ -1269,7 +1269,7 @@ mod tests {
         for pane in [None, Some(0), Some(1)] {
             let mut workspace = Workspace::new(
                 std::sync::Arc::new(|| {}),
-                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                std::sync::Arc::new(crate::shell::native::FileSystem),
             )
             .unwrap();
             workspace.new_document().unwrap();
@@ -1335,7 +1335,7 @@ mod tests {
         std::fs::write(&path, "hello world\nsecond line").unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 1;
@@ -1399,7 +1399,7 @@ mod tests {
     fn pane_source_generation_tracks_full_document_replacement_and_revision() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1439,7 +1439,7 @@ mod tests {
     fn closed_view_retires_its_source_generation_without_recycling_the_survivor() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1465,7 +1465,7 @@ mod tests {
     fn closing_secondary_tab_returns_its_document_history() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1509,7 +1509,7 @@ mod tests {
     fn close_compare_waits_for_secondary_history_to_settle() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1566,11 +1566,8 @@ mod tests {
         let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
             let _ = notifier.send(());
         });
-        let mut workspace = Workspace::new(
-            notify.clone(),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
-        )
-        .unwrap();
+        let mut workspace =
+            Workspace::new(notify.clone(), std::sync::Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("needle needle".into()));
@@ -1641,7 +1638,7 @@ mod tests {
     ) -> (ViewsRuntime, Workspace, Vec<DrawOp>) {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1897,7 +1894,7 @@ mod tests {
         let path = root.join("large.txt");
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -1986,7 +1983,7 @@ mod tests {
         std::fs::write(&path, "alpha\n").unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -2068,7 +2065,7 @@ mod tests {
         let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.open(other.clone());
@@ -2162,7 +2159,7 @@ mod tests {
     fn thirty_tabs_at_1200_px_shrink_and_list_every_tab() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         for _ in 0..30 {
@@ -2231,7 +2228,7 @@ mod tests {
         for (width, count) in [(1054.0, 7), (1103.0, 7), (1200.0, 9)] {
             let mut workspace = Workspace::new(
                 std::sync::Arc::new(|| {}),
-                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                std::sync::Arc::new(crate::shell::native::FileSystem),
             )
             .unwrap();
             for _ in 0..count {
@@ -2259,7 +2256,7 @@ mod tests {
         let mut shell = super::super::accessibility::tests::headless_shell();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -2324,7 +2321,7 @@ mod tests {
         let mut shell = super::super::accessibility::tests::headless_shell();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -2405,7 +2402,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();
@@ -2471,7 +2468,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.open(root.join("missing.txt"));
@@ -2505,7 +2502,7 @@ mod tests {
     fn scoped_notice_survives_a_crowded_status_bar() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();

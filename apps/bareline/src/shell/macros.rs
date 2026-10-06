@@ -454,7 +454,7 @@ impl MacrosRuntime {
         self.controller.set_output_focused(self.focused);
         self.controller.draw_output(bounds, self.theme, ops);
     }
-    pub fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+    pub fn draw(&mut self, renderer: &mut Renderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
         if let Err(error) = self.controller.manager.draw(
             renderer,
             width,
@@ -527,7 +527,7 @@ impl MacrosRuntime {
                         .as_nanos()
                 ));
                 let result = (|| {
-                    let fs = bareline_platform_windows::WindowsFileSystem;
+                    let fs = crate::shell::native::FileSystem;
                     fs.validate_target(&path).map_err(|error| error.to_string())?;
                     let mut file = std::fs::OpenOptions::new()
                         .write(true)
@@ -574,7 +574,7 @@ fn bounded_read(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
 }
 fn atomic_text(path: &std::path::Path, text: &str) -> Result<(), String> {
     use bareline_platform::LocalFileSystem;
-    let fs = bareline_platform_windows::WindowsFileSystem;
+    let fs = crate::shell::native::FileSystem;
     fs.validate_target(path).map_err(|error| error.to_string())?;
     let stage = path.with_file_name(format!(
         ".bareline-macro-{}-{}.tmp",
@@ -1095,7 +1095,7 @@ impl Shell {
             } else {
                 ProcessPermission::UserGrantedDirect
             },
-            std::sync::Arc::new(bareline_platform_windows::WindowsProcessLauncher),
+            std::sync::Arc::new(crate::shell::native::ProcessLauncher),
         )?;
         self.macros.output_directory = directory;
         Ok(())

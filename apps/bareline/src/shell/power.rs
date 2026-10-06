@@ -220,7 +220,7 @@ impl PowerRuntime {
     }
     pub(super) fn draw(
         &mut self,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         width: f32,
         height: f32,
         theme: bareline_ui::theme::UiTheme,
@@ -1778,7 +1778,7 @@ mod column_mode_pointer_tests {
     fn paged_shell() -> Shell {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();

@@ -148,7 +148,7 @@ impl LaunchRuntime {
             diag_handles: config.diag_handles,
             drops: DropQueue::default(),
         };
-        let _ = runtime.queue(&bareline_platform_windows::instance::OpenRequest {
+        let _ = runtime.queue(&crate::shell::native::instance::OpenRequest {
             paths: config.paths.clone(),
             line: config.line,
             column: config.column,
@@ -157,7 +157,7 @@ impl LaunchRuntime {
         });
         runtime
     }
-    pub(super) fn queue(&mut self, request: &bareline_platform_windows::instance::OpenRequest) -> Option<Vec<u64>> {
+    pub(super) fn queue(&mut self, request: &crate::shell::native::instance::OpenRequest) -> Option<Vec<u64>> {
         if self.requests.len().saturating_add(request.paths.len()) > 256 {
             return None;
         }
@@ -292,7 +292,7 @@ impl super::Shell {
                 if !self.ensure_workspace(el) {
                     return true;
                 }
-                let request = bareline_platform_windows::instance::OpenRequest {
+                let request = crate::shell::native::instance::OpenRequest {
                     paths,
                     ..Default::default()
                 };
@@ -591,8 +591,8 @@ mod request_tests {
         }
     }
 
-    fn request(paths: Vec<PathBuf>) -> bareline_platform_windows::instance::OpenRequest {
-        bareline_platform_windows::instance::OpenRequest {
+    fn request(paths: Vec<PathBuf>) -> crate::shell::native::instance::OpenRequest {
+        crate::shell::native::instance::OpenRequest {
             paths,
             line: Some(7),
             column: Some(3),
@@ -694,7 +694,7 @@ mod request_tests {
         // The files join the launch queue together, in drop order.
         let mut launch = runtime();
         let ids = launch
-            .queue(&bareline_platform_windows::instance::OpenRequest {
+            .queue(&crate::shell::native::instance::OpenRequest {
                 paths: batch.files,
                 ..Default::default()
             })
@@ -809,7 +809,7 @@ mod request_tests {
         std::fs::write(&completed_path, "completed\n".repeat(2_000)).unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 4;
@@ -945,7 +945,7 @@ mod request_tests {
         std::fs::write(&path, "line\n".repeat(2_000)).unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 4;
@@ -1255,7 +1255,7 @@ impl ProfileInitializationRuntime {
                     (Some(roaming), Some(local)) => {
                         let retire_sources = bareline_file_io::profile_migration::retirement_ready(
                             local,
-                            &bareline_platform_windows::WindowsFileSystem,
+                            &crate::shell::native::FileSystem,
                         );
                         bareline_file_io::profile_migration::migrate(
                             bareline_file_io::profile_migration::MigrationRequest {
@@ -1266,7 +1266,7 @@ impl ProfileInitializationRuntime {
                                 max_io_bytes: 8 * 1024 * 1024 * 1024,
                                 max_time: std::time::Duration::from_secs(30),
                             },
-                            &bareline_platform_windows::WindowsFileSystem,
+                            &crate::shell::native::FileSystem,
                             &|| cancel.load(std::sync::atomic::Ordering::Acquire),
                         )
                         .map_err(|error| error.to_string())
@@ -1290,14 +1290,14 @@ impl ProfileInitializationRuntime {
                     (Some(roaming), Some(local)) => bareline_file_io::profile_migration::inspect_authorities(
                         roaming,
                         local,
-                        &bareline_platform_windows::WindowsFileSystem,
+                        &crate::shell::native::FileSystem,
                     ),
                     _ => Default::default(),
                 };
                 let cleanup = bareline_file_io::owned_cache::sweep(
                     &initialization.temp,
                     &std::collections::HashSet::new(),
-                    &bareline_platform_windows::WindowsFileSystem,
+                    &crate::shell::native::FileSystem,
                     &|| cancel.load(std::sync::atomic::Ordering::Acquire),
                     256,
                     std::time::Duration::from_millis(100),
@@ -1582,7 +1582,7 @@ pub(super) fn prepare(
     };
     // Relative command line paths were resolved against the launch directory above;
     // from here the process must not search it for executables or DLLs (SEC-01).
-    let _ = bareline_platform_windows::shell_integration::harden_process_search_paths();
+    let _ = crate::shell::native::shell_integration::harden_process_search_paths();
     if config.diag_handles {
         log_handle_counters(config.diagnostics_path.as_deref());
     }
@@ -1612,7 +1612,7 @@ fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<Strin
 /// `MAX_STDIN_BYTES` arrive, but never longer than `STDIN_WAIT`: a producer that
 /// does not finish gets its text so far and a notice instead of an invisible hang.
 fn read_stdin() -> StdinText {
-    if !bareline_platform_windows::cli::stdin_redirected() {
+    if !crate::shell::native::cli::stdin_redirected() {
         return StdinText {
             text: String::new(),
             note: Some("Standard input was not redirected, so nothing was read.".into()),
@@ -1764,9 +1764,7 @@ fn resolve_launch_path(cwd: &Path, path: &Path) -> Result<PathBuf, String> {
 
 /// The same limits the instance handoff enforces for every forwarded path.
 fn valid_launch_path(path: &Path) -> bool {
-    use std::os::windows::ffi::OsStrExt;
-    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
-    path.is_absolute() && !units.is_empty() && !units.contains(&0) && units.len() <= 32767
+    super::native::valid_launch_path(path)
 }
 
 fn legacy_root(mode: LaunchMode, roaming: Option<PathBuf>) -> Option<PathBuf> {
@@ -1846,7 +1844,7 @@ pub(super) fn log_handle_counters(directory: Option<&Path>) {
         drop(file);
         if result.is_ok() {
             let _ = bareline_platform::LocalFileSystem::commit(
-                &bareline_platform_windows::WindowsFileSystem,
+                &crate::shell::native::FileSystem,
                 &stage,
                 &path,
                 path.exists(),
@@ -1856,27 +1854,7 @@ pub(super) fn log_handle_counters(directory: Option<&Path>) {
     }
 }
 
-#[cfg(windows)]
-fn handle_counters() -> (u32, u32, u32) {
-    use windows::Win32::System::Threading::{
-        GR_GDIOBJECTS, GR_USEROBJECTS, GetCurrentProcess, GetGuiResources, GetProcessHandleCount,
-    };
-    // SAFETY: pseudo handle for the current process; counters are plain outputs.
-    unsafe {
-        let process = GetCurrentProcess();
-        let mut handles = 0u32;
-        let _ = GetProcessHandleCount(process, &mut handles);
-        (
-            handles,
-            GetGuiResources(process, GR_GDIOBJECTS),
-            GetGuiResources(process, GR_USEROBJECTS),
-        )
-    }
-}
-#[cfg(not(windows))]
-fn handle_counters() -> (u32, u32, u32) {
-    (0, 0, 0)
-}
+use super::native::handle_counters;
 
 #[cfg(test)]
 mod tests {

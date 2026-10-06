@@ -797,7 +797,7 @@ impl Shell {
                         .name("recovery-action".into())
                         .spawn(move || {
                             let result = (|| -> Result<Vec<PathBuf>, String> {
-                                let platform = bareline_platform_windows::WindowsFileSystem;
+                                let platform = crate::shell::native::FileSystem;
                                 if discard {
                                     let mut removed = Vec::new();
                                     for directory in &directories {
@@ -1128,7 +1128,7 @@ impl Shell {
                                 let bytes = bareline_document::Budget::new(256 << 20);
                                 let mut opened = bareline_file_io::paged_recovery::restore(
                                     &path,
-                                    Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                    Arc::new(crate::shell::native::FileSystem),
                                     bytes.clone(),
                                     bareline_document::Budget::new(0),
                                     &cancel,
@@ -1251,7 +1251,7 @@ impl Shell {
                     .name("recovery-discovery".into())
                     .spawn(move || {
                         let result = (|| -> RecoveryDiscovery {
-                            let platform = bareline_platform_windows::WindowsFileSystem;
+                            let platform = crate::shell::native::FileSystem;
                             let _guard = match platform.guard_directory(&root) {
                                 Ok(guard) => guard,
                                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1648,7 +1648,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&root).unwrap();
-        let platform = bareline_platform_windows::WindowsFileSystem;
+        let platform = crate::shell::native::FileSystem;
         let cancel = bareline_file_io::cancellation::Cancellation::default();
         let mut paths = Vec::new();
         for (name, byte) in [("paged-live", b'U'), ("paged-other", b'V')] {
@@ -1706,7 +1706,7 @@ mod tests {
         root
     }
     fn complete_journal(directory: &std::path::Path) {
-        let platform = bareline_platform_windows::WindowsFileSystem;
+        let platform = crate::shell::native::FileSystem;
         let cancel = bareline_file_io::cancellation::Cancellation::default();
         let mut writer = bareline_file_io::recovery::RecoveryWriter::create(
             directory,
@@ -1738,7 +1738,7 @@ mod tests {
     #[test]
     fn discovery_lists_shared_and_instance_journals_and_keeps_unreadable_ones() {
         let root = temp_recovery_root("discovery");
-        let platform = bareline_platform_windows::WindowsFileSystem;
+        let platform = crate::shell::native::FileSystem;
         let cancel = bareline_file_io::cancellation::Cancellation::default();
         // 25 journals of ended processes in the shared root.
         let shared: Vec<PathBuf> = (0..25u32)
@@ -1806,7 +1806,7 @@ mod tests {
     #[test]
     fn read_only_recovery_root_is_never_swept() {
         let root = temp_recovery_root("read-only");
-        let platform = bareline_platform_windows::WindowsFileSystem;
+        let platform = crate::shell::native::FileSystem;
         let retired = root.join("paged-600400-1-1");
         let kept = root.join("paged-600401-1-1");
         complete_journal(&retired);
@@ -2799,62 +2799,7 @@ pub(super) fn accessibility_modal_test_setup(shell: &mut Shell) {
 }
 
 #[cfg(windows)]
-mod alive {
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    const STILL_ACTIVE: u32 = 259;
-    const ERROR_INVALID_PARAMETER: u32 = 87;
-    unsafe extern "system" {
-        fn OpenProcess(access: u32, inherit: i32, id: u32) -> isize;
-        fn GetExitCodeProcess(process: isize, code: *mut u32) -> i32;
-        fn CloseHandle(handle: isize) -> i32;
-        fn GetLastError() -> u32;
-        fn GetProcessTimes(process: isize, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64)
-        -> i32;
-    }
-    /// FILETIME (100 ns ticks since 1601) of the Unix epoch.
-    const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
-    /// Start time, in nanoseconds since the Unix epoch, of the running process with
-    /// this id. `None` when it cannot be opened or queried, or has exited.
-    pub fn started(id: u32) -> Option<u128> {
-        unsafe {
-            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
-            if process == 0 {
-                return None;
-            }
-            let mut code = 0u32;
-            let active = GetExitCodeProcess(process, &mut code) != 0 && code == STILL_ACTIVE;
-            // A FILETIME is two little-endian u32 halves; a u64 has the same layout
-            // and at least its alignment.
-            let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
-            let timed = active && GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) != 0;
-            CloseHandle(process);
-            timed.then(|| u128::from(creation.saturating_sub(UNIX_EPOCH_FILETIME)) * 100)
-        }
-    }
-    /// `OpenProcess` reports a process id that names no process as an invalid
-    /// parameter. Any other failure (for example access denied for an elevated or
-    /// another user's process) leaves the owner possibly alive.
-    pub fn alive_after_open_failure(error: u32) -> bool {
-        error != ERROR_INVALID_PARAMETER
-    }
-    /// True when a process with this id is still running. Unknown ids are reported as
-    /// running so a doubtful case never deletes someone else's recovery data.
-    pub fn running(id: u32) -> bool {
-        if id == std::process::id() {
-            return true;
-        }
-        unsafe {
-            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
-            if process == 0 {
-                return alive_after_open_failure(GetLastError());
-            }
-            let mut code = 0u32;
-            let queried = GetExitCodeProcess(process, &mut code) != 0;
-            CloseHandle(process);
-            !queried || code == STILL_ACTIVE
-        }
-    }
-}
+use super::native::alive;
 #[cfg(windows)]
 fn process_alive(id: u32) -> bool {
     alive::running(id)

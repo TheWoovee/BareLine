@@ -60,7 +60,7 @@ pub(super) struct LanguageRuntime {
 impl LanguageRuntime {
     pub fn draw(
         &mut self,
-        _renderer: &mut WindowsRenderer,
+        _renderer: &mut Renderer,
         width: f32,
         height: f32,
         theme: bareline_ui::theme::UiTheme,
@@ -114,7 +114,7 @@ impl Shell {
                     )) {
                     Ok(Some(path)) => self.language.controller.export_definition(
                         path,
-                        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                        std::sync::Arc::new(crate::shell::native::FileSystem),
                         self.notify.clone(),
                     ),
                     Ok(None) => {}

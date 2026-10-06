@@ -2,7 +2,10 @@
 //! Native composition only. Bounded background metadata reconciliation never replaces buffers.
 use super::*;
 use bareline_platform::{FileIdentity, FilesystemCapability, LocalFileSystem, PathOrigin, PathTrustProvider};
-use bareline_platform_windows::{WindowsFileSystem, WindowsPathTrustProvider, WindowsWatchService};
+// The seam's neutral names are aliased so baselined lint context here stays unchanged.
+use crate::shell::native::{
+    FileSystem as WindowsFileSystem, PathTrust as WindowsPathTrustProvider, WatchService as WindowsWatchService,
+};
 use std::{
     collections::{BTreeSet, VecDeque},
     sync::mpsc::{self, Receiver},
@@ -1540,7 +1543,7 @@ mod tests {
         std::fs::write(&path, b"current bytes").unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.open(path);
@@ -1622,7 +1625,7 @@ mod tests {
         std::fs::write(&path, b"one two\nthree four\nfive six").unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.open(path);
@@ -1729,7 +1732,7 @@ mod tests {
         std::fs::write(&secondary, "secondary\n".repeat(2_000)).unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 4;
@@ -1869,7 +1872,7 @@ mod tests {
         std::fs::write(&path, b"one\ntwo\n").unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.open(path);
@@ -2022,7 +2025,7 @@ mod tests {
         std::fs::write(&secondary, "secondary\n".repeat(2_000)).unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 4;

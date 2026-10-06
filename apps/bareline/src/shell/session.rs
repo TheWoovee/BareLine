@@ -94,8 +94,8 @@ pub(super) struct SessionRuntime {
     /// not move it to the saved active tab (APP-07).
     user_focused: bool,
     /// Shared with the logoff/shutdown subclass of the main window.
-    end: std::rc::Rc<bareline_platform_windows::SessionEndSignal>,
-    end_monitor: Option<bareline_platform_windows::SessionEndMonitor>,
+    end: std::rc::Rc<crate::shell::native::SessionEndSignal>,
+    end_monitor: Option<crate::shell::native::SessionEndMonitor>,
     /// `SESSION_END_BUDGET`; tests on a loaded machine allow more.
     end_budget: Duration,
     named: Option<NamedSession>,
@@ -182,10 +182,7 @@ impl SessionRuntime {
     }
     fn service(&mut self, notify: Arc<dyn Fn() + Send + Sync>) -> std::io::Result<&SessionService> {
         if self.service.is_none() {
-            self.service = Some(SessionService::new(
-                Arc::new(bareline_platform_windows::WindowsFileSystem),
-                notify,
-            )?);
+            self.service = Some(SessionService::new(Arc::new(crate::shell::native::FileSystem), notify)?);
         }
         Ok(self.service.as_ref().unwrap())
     }
@@ -522,7 +519,7 @@ impl Shell {
             if !documents.is_empty() {
                 let request = SessionRequest::ResolvePaths {
                     documents,
-                    provider: Arc::new(bareline_platform_windows::WindowsSessionPathTrustProvider),
+                    provider: Arc::new(crate::shell::native::SessionPathTrust),
                 };
                 match self
                     .session
@@ -957,14 +954,14 @@ impl Shell {
     pub(super) fn session_end_attach(&mut self, hwnd: isize) {
         // SAFETY: `hwnd` is the live main window created on this thread. The
         // monitor removes its subclass on drop or on WM_NCDESTROY, whichever is first.
-        match unsafe { bareline_platform_windows::SessionEndMonitor::attach(hwnd, self.session.end.clone()) } {
+        match unsafe { crate::shell::native::SessionEndMonitor::attach(hwnd, self.session.end.clone()) } {
             Ok(monitor) => self.session.end_monitor = Some(monitor),
             Err(error) => eprintln!("event=session_end_unavailable error={error}"),
         }
         if !self.smoke
             && !self.perf
             && self.prototype.is_none()
-            && let Err(error) = bareline_platform_windows::register_application_restart()
+            && let Err(error) = crate::shell::native::register_application_restart()
         {
             eprintln!("event=restart_registration_failed error={error}");
         }
@@ -1325,8 +1322,7 @@ mod close_tests {
     use super::*;
     #[test]
     fn deferred_session_write_cannot_exit_after_an_intervening_edit_or_new_tab() {
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         let captured = vec![CapturedDocument::new(&workspace.editors[0])];
         assert!(exit_unchanged(&workspace, &captured));
@@ -1365,11 +1361,10 @@ mod close_tests {
         shell.startup = crate::shell::startup::StartupSequence::new(true);
         shell.startup.mark_first_frame();
         shell.session.configure(Some(session.clone()), Some(session), true);
-        shell.workspace =
-            Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
+        shell.workspace = Some(Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap());
         shell
             .launch
-            .queue(&bareline_platform_windows::instance::OpenRequest {
+            .queue(&crate::shell::native::instance::OpenRequest {
                 paths: vec![requested.clone()],
                 line: None,
                 column: None,
@@ -1465,8 +1460,7 @@ mod close_tests {
         assert_eq!(manifest.documents.len(), 2);
         let mut shell = crate::shell::accessibility::tests::headless_shell();
         shell.startup.mark_first_frame();
-        shell.workspace =
-            Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
+        shell.workspace = Some(Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap());
         shell.session_named_install(manifest);
         assert!(shell.session.startup_pending());
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -1554,8 +1548,7 @@ mod close_tests {
         std::fs::write(&session_file, bareline_file_io::session::encode(&session).unwrap()).unwrap();
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         let two_documents = |dirty: bool| {
-            let mut workspace =
-                Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+            let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
             workspace.new_document().unwrap();
             workspace.new_document().unwrap();
             if dirty {
@@ -1650,8 +1643,7 @@ mod close_tests {
         };
         for user_chose in [false, true] {
             let mut shell = crate::shell::accessibility::tests::headless_shell();
-            let mut workspace =
-                Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+            let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
             workspace.new_document().unwrap();
             workspace.new_document().unwrap();
             let saved = workspace.editors[0].document_identity().0;
@@ -1691,7 +1683,7 @@ mod close_tests {
         shell: &'a mut Shell,
         ordinary_closes: u32,
     }
-    impl bareline_platform_windows::SessionEndHost for MainWindow<'_> {
+    impl crate::shell::native::SessionEndHost for MainWindow<'_> {
         fn deliver(&mut self) {
             if !self.shell.session_end_event(&WindowEvent::CloseRequested) {
                 self.ordinary_closes += 1;
@@ -1719,8 +1711,7 @@ mod close_tests {
         // Headroom for the process-global recovery worker under a loaded
         // parallel run; the flush still has to settle on its own.
         shell.session.end_budget = Duration::from_secs(60);
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.recovery_root = Some(root.join("recovery"));
         workspace.new_document().unwrap();
         // Typed just before logoff: neither acknowledged nor checkpointed yet.
@@ -1733,13 +1724,13 @@ mod close_tests {
             ordinary_closes: 0,
         };
         assert_eq!(
-            signal.respond(&mut window, bareline_platform_windows::SessionEndMessage::Query),
+            signal.respond(&mut window, crate::shell::native::SessionEndMessage::Query),
             1
         );
         assert_eq!(
             signal.respond(
                 &mut window,
-                bareline_platform_windows::SessionEndMessage::End { ending: true }
+                crate::shell::native::SessionEndMessage::End { ending: true }
             ),
             0
         );

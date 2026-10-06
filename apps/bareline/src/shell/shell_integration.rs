@@ -2,7 +2,7 @@
 use super::*;
 #[derive(Default)]
 pub(super) struct ShellIntegrationRuntime {
-    tray: Option<bareline_platform_windows::shell_integration::TrayIcon>,
+    tray: Option<crate::shell::native::shell_integration::TrayIcon>,
     pub keep_in_tray: bool,
     recent: std::collections::BTreeSet<PathBuf>,
     pub recent_files: RecentFiles,
@@ -622,11 +622,11 @@ impl Shell {
                 match path {
                     Some(path) => {
                         if id == "file.reveal" {
-                            bareline_platform_windows::shell_integration::reveal(&path)
+                            crate::shell::native::shell_integration::reveal(&path)
                         } else {
                             path.parent()
                                 .ok_or_else(|| "File has no parent folder".to_owned())
-                                .and_then(bareline_platform_windows::shell_integration::open_terminal)
+                                .and_then(crate::shell::native::shell_integration::open_terminal)
                         }
                     }
                     None => Err("Save the current document first".into()),
@@ -665,7 +665,7 @@ impl Shell {
             let RawWindowHandle::Win32(handle) = handle.as_raw() else {
                 return Err("Windows handle unavailable".into());
             };
-            self.shell_integration.tray = Some(bareline_platform_windows::shell_integration::TrayIcon::new(
+            self.shell_integration.tray = Some(crate::shell::native::shell_integration::TrayIcon::new(
                 handle.hwnd.get(),
             )?);
         }
@@ -771,12 +771,9 @@ impl Shell {
             .spawn(move || {
                 // A handle rename: it never replaces an existing file and never
                 // crosses volumes, so the moved file keeps its identity.
-                let result = bareline_platform::LocalFileSystem::rename_entry(
-                    &bareline_platform_windows::WindowsFileSystem,
-                    &from,
-                    &to,
-                )
-                .map_err(|error| error.to_string());
+                let result =
+                    bareline_platform::LocalFileSystem::rename_entry(&crate::shell::native::FileSystem, &from, &to)
+                        .map_err(|error| error.to_string());
                 let _ = tx.send(result);
                 notify();
             })
@@ -1068,7 +1065,7 @@ impl Shell {
                 && self.shell_integration.recent.len() < 256
                 && self.shell_integration.recent.insert(path.clone())
             {
-                bareline_platform_windows::shell_integration::add_recent(
+                crate::shell::native::shell_integration::add_recent(
                     &path,
                     self.shell_integration.portable,
                     shell_recent,
@@ -1465,7 +1462,7 @@ mod tests {
         let mut shell = crate::shell::accessibility::tests::headless_shell();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.open(source.clone());

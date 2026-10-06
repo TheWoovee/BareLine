@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Startup handoff and native request consumer. Only the elected owner saves the shared session.
 use super::*;
-use bareline_platform_windows::instance::{InstanceServer, OpenRequest, Outcome};
+use crate::shell::native::instance::{InstanceServer, OpenRequest, Outcome};
 
 #[derive(Default)]
 pub(super) struct InstanceRuntime {
@@ -43,7 +43,7 @@ pub(super) fn prepare(
         monitor: config.monitor,
     };
     // A running extension-enabled process cannot honor --no-extensions for just one request.
-    let outcome = bareline_platform_windows::instance::coordinate(
+    let outcome = crate::shell::native::instance::coordinate(
         &scope,
         profile,
         request,

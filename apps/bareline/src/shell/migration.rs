@@ -63,7 +63,7 @@ impl Shell {
                             if cancel.load(std::sync::atomic::Ordering::Acquire) {
                                 return Err("Import cancelled".into());
                             }
-                            let opened = bareline_platform_windows::WindowsPathTrustProvider
+                            let opened = crate::shell::native::PathTrust
                                 .open_read(&path, PathOrigin::User)
                                 .map_err(|e| e.to_string())?;
                             let mut bytes = Vec::new();
@@ -176,7 +176,7 @@ impl Shell {
                             .take(16)
                             .take_while(|_| !cancel.load(std::sync::atomic::Ordering::Acquire))
                             .filter(|p| {
-                                bareline_platform_windows::WindowsSessionPathTrustProvider
+                                crate::shell::native::SessionPathTrust
                                     .open_read(p, PathOrigin::Session)
                                     .is_ok()
                             })

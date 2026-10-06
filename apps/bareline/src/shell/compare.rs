@@ -1113,7 +1113,7 @@ impl Shell {
                                 budget,
                                 &std::env::temp_dir().join("Bareline-compare-staging"),
                                 quota,
-                                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                std::sync::Arc::new(crate::shell::native::FileSystem),
                                 &worker_cancel,
                             )
                             .map(PreparedMerge::Source)
@@ -1245,7 +1245,7 @@ impl Shell {
                                 budget,
                                 &std::env::temp_dir().join("Bareline-compare-staging"),
                                 quota,
-                                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                std::sync::Arc::new(crate::shell::native::FileSystem),
                                 &worker_cancel,
                             )
                             .map(PreparedMerge::Source)
@@ -1402,7 +1402,7 @@ impl Shell {
                 .name("compare-promoted-merge".into())
                 .spawn(move || {
                     let cache = std::env::temp_dir().join("Bareline-compare-staging");
-                    let platform = std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+                    let platform = std::sync::Arc::new(crate::shell::native::FileSystem);
                     let result = if let Some(hunk) = promotion.hunk {
                         bareline_app::compare::prepare_streamed_hunk_merge(
                             &promotion.inputs[0],
@@ -2512,11 +2512,8 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
     }
     shell.views = views::ViewsRuntime::default();
     let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
-    let mut workspace = Workspace::new(
-        notify,
-        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
-    )
-    .expect("compare fixture workspace");
+    let mut workspace = Workspace::new(notify, std::sync::Arc::new(crate::shell::native::FileSystem))
+        .expect("compare fixture workspace");
     workspace.new_document().unwrap();
     workspace.new_document().unwrap();
     workspace.editors[0].enqueue(Input::Insert("anchor\nleft 🙂\nend\n".into()));
@@ -2639,7 +2636,7 @@ mod tests {
     #[test]
     fn large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor() {
         use bareline_document::{Budget, Document, TextOffset, paged::WindowPoll};
-        let platform = std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+        let platform = std::sync::Arc::new(crate::shell::native::FileSystem);
         let mut workspace = Workspace::new(std::sync::Arc::new(|| {}), platform.clone()).unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("old\n".into()));
@@ -2734,11 +2731,8 @@ mod tests {
     #[test]
     fn native_compare_merges_through_document_actor_and_undo() {
         let notify = std::sync::Arc::new(|| {});
-        let mut workspace = Workspace::new(
-            notify.clone(),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
-        )
-        .unwrap();
+        let mut workspace =
+            Workspace::new(notify.clone(), std::sync::Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("anchor\nleft\n".into()));

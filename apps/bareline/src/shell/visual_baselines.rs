@@ -13,7 +13,7 @@
 //! `tests/visual/compare.py` compares the cells with the reviewed baselines
 //! under a tolerance.
 use super::Shell;
-use bareline_platform_windows::WindowsRenderer;
+use crate::shell::native::Renderer;
 use bareline_renderer::{DrawOp, FrameStatus, RenderBackend};
 
 const WIDTH: f32 = 960.0;
@@ -25,7 +25,7 @@ const SOURCE: &str = "use std::path::Path;\n\n/// Parsed server settings.\n#[der
 fn cell_shell(dark: bool) -> Shell {
     let mut workspace = bareline_app::workspace::Workspace::new(
         std::sync::Arc::new(|| {}),
-        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        std::sync::Arc::new(crate::shell::native::FileSystem),
     )
     .unwrap();
     let document = bareline_document::Document::from_utf8(
@@ -77,7 +77,7 @@ fn settle(shell: &mut Shell) {
 
 /// The frame `render_frame` would compose for this shell, without the toolbar,
 /// panels and overlays.
-fn compose(shell: &mut Shell, renderer: &mut WindowsRenderer, scale: f32) -> Vec<DrawOp> {
+fn compose(shell: &mut Shell, renderer: &mut Renderer, scale: f32) -> Vec<DrawOp> {
     let toolbar = shell.toolbar.controller.height();
     let bounds = bareline_ui::rect(0.0, toolbar, WIDTH, HEIGHT - toolbar);
     let mut ops = bareline_ui::shell_with_theme(
@@ -147,7 +147,7 @@ fn capture_whole_window_cells() {
     for dark in [false, true] {
         for scale in SCALES {
             let (width, height) = ((WIDTH * scale) as u32, (HEIGHT * scale) as u32);
-            let mut renderer = WindowsRenderer::offscreen(width, height, scale).expect("offscreen renderer");
+            let mut renderer = Renderer::offscreen(width, height, scale).expect("offscreen renderer");
             let mut shell = cell_shell(dark);
             // The first frame lays out and starts background work; capture a settled one.
             compose(&mut shell, &mut renderer, scale);

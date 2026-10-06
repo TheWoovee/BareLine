@@ -676,7 +676,7 @@ impl Shell {
         let printer = if printing {
             let chosen = match &self.platform {
                 Some(platform) => platform.choose_printer(),
-                None => bareline_platform_windows::printing::choose_printer(None),
+                None => crate::shell::native::printing::choose_printer(None),
             };
             match chosen {
                 Ok(Some(p)) => Some(p),
@@ -904,7 +904,7 @@ impl Shell {
                         } else {
                             bareline_syntax::Language::PlainText
                         };
-                        let job = bareline_platform_windows::printing::WindowsPrintJob::start(printer, print_options)
+                        let job = crate::shell::native::printing::PrintJob::start(printer, print_options)
                             .map_err(|e| e.to_string())?;
                         let range = if print_selection {
                             range
@@ -1744,7 +1744,7 @@ fn publish_export(
     write: impl FnOnce(&mut std::fs::File) -> Result<(), core::UtilityError>,
 ) -> Result<(), String> {
     use std::io::Write;
-    let platform = bareline_platform_windows::WindowsFileSystem;
+    let platform = crate::shell::native::FileSystem;
     platform
         .validate_target(path)
         .map_err(|e| format!("Export validate destination: {e}"))?;
@@ -1851,8 +1851,7 @@ mod publication_tests {
     #[test]
     fn print_preview_lays_out_the_document_instead_of_sample_text() {
         let mut shell = crate::shell::accessibility::tests::headless_shell();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("alpha\n\tbeta\n".into()));
         for _ in 0..100_000 {
@@ -1949,8 +1948,7 @@ mod publication_tests {
     #[test]
     fn json_tools_edit_once_and_put_the_caret_on_errors() {
         let mut shell = crate::shell::accessibility::tests::headless_shell();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("{\"a\":[1,2]}".into()));
@@ -2015,8 +2013,7 @@ mod publication_tests {
     #[test]
     fn hex_view_opens_a_read_only_tab_and_closes_the_dialog() {
         let mut shell = crate::shell::accessibility::tests::headless_shell();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         shell.workspace = Some(workspace);
         shell.utilities.open = true;

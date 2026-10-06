@@ -189,7 +189,7 @@ impl WorkspacePanelsRuntime {
         self.explorer.get_or_insert_with(|| {
             let mut panel = WorkspacePanel::new(self.notify.clone());
             panel.set_directory_guard(|path| {
-                let retained = bareline_platform_windows::WindowsPathTrustProvider.open_read(path, PathOrigin::User)?;
+                let retained = crate::shell::native::PathTrust.open_read(path, PathOrigin::User)?;
                 Ok(Box::new(retained) as Box<dyn Send>)
             });
             panel
@@ -611,10 +611,10 @@ impl Shell {
                     .spawn(move || {
                         use std::io::Read;
                         let result = (|| -> Result<_, String> {
-                            let _guard = bareline_platform_windows::WindowsPathTrustProvider
+                            let _guard = crate::shell::native::PathTrust
                                 .open_read(&path, PathOrigin::User)
                                 .map_err(|e| e.to_string())?;
-                            let file = bareline_platform_windows::WindowsFileSystem
+                            let file = crate::shell::native::FileSystem
                                 .open_sealed_read(&path)
                                 .map_err(|e| e.to_string())?;
                             let mut bytes = Vec::new();
@@ -679,7 +679,7 @@ impl Shell {
                         use std::io::Write;
                         let result = (|| -> Result<_, String> {
                             let text = definition.to_toml()?;
-                            let fs = bareline_platform_windows::WindowsFileSystem;
+                            let fs = crate::shell::native::FileSystem;
                             let parent = path.parent().ok_or("Missing destination parent")?;
                             let _guard = fs.guard_directory(parent).map_err(|e| e.to_string())?;
                             fs.validate_target(&path).map_err(|e| e.to_string())?;
@@ -791,11 +791,11 @@ impl Shell {
                 if std::thread::Builder::new()
                     .name("workspace-file-action".into())
                     .spawn(move || {
-                        let fs = bareline_platform_windows::WindowsFileSystem;
+                        let fs = crate::shell::native::FileSystem;
                         let result = match kind.as_str() {
                             // Restorable from the Recycle Bin; nothing hidden stays in the folder.
                             "workspace.delete" => {
-                                bareline_platform_windows::recycle_entry(&fs, selected.as_ref().unwrap(), owner)
+                                crate::shell::native::recycle_entry(&fs, selected.as_ref().unwrap(), owner)
                                     .map(|()| "Moved to the Recycle Bin")
                             }
                             "workspace.createFile" => fs
@@ -859,7 +859,7 @@ impl Shell {
         if std::thread::Builder::new()
             .name("workspace-root-trust".into())
             .spawn(move || {
-                let provider = bareline_platform_windows::WindowsPathTrustProvider;
+                let provider = crate::shell::native::PathTrust;
                 let result = provider
                     .canonicalize(&path, PathOrigin::User)
                     .map_err(|e| e.to_string())
@@ -1170,8 +1170,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(
     }
     let mut runtime = WorkspacePanelsRuntime::default();
     let mut renderer = bareline_renderer_recording::RecordingBackend::default();
-    let mut workspace =
-        Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+    let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
     let source = Document::from_utf8("fn first() {}\nfn second() {}\n", Budget::new(4096), Budget::new(4096))
         .unwrap()
         .snapshot();

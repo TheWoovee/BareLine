@@ -22,10 +22,7 @@ impl Scratch {
         Self(root)
     }
     fn store(&self) -> Store {
-        Store::new(
-            self.0.join("languages"),
-            Arc::new(bareline_platform_windows::WindowsFileSystem),
-        )
+        Store::new(self.0.join("languages"), Arc::new(crate::shell::native::FileSystem))
     }
 }
 impl Drop for Scratch {

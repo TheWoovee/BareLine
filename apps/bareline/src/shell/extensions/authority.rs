@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Resolve current signed owner authority on extension workers, before use.
 use super::*;
-use bareline_platform_windows::update::AuthorityFreshness;
+use crate::shell::native::update::AuthorityFreshness;
 
 pub(super) fn now() -> Result<u64, String> {
     std::time::SystemTime::now()
@@ -32,15 +32,15 @@ impl OwnerTrust {
     ) -> Result<Self, String> {
         // Ledgers and the lock are per-user state; a per-machine installation stays
         // read-only (SEC-04).
-        let state = bareline_platform_windows::update::update_state_root(root)
+        let state = crate::shell::native::update::update_state_root(root)
             .map_err(|error| format!("Extension authority state: {error}"))?;
-        let authority = bareline_platform_windows::update::resolve_release_authority(
+        let authority = crate::shell::native::update::resolve_release_authority(
             root,
             &state,
             &self.release_public_key,
             &self.signer,
             self.metadata_floor,
-            Some(bareline_platform_windows::update::OfflineRootPolicy {
+            Some(crate::shell::native::update::OfflineRootPolicy {
                 public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
                 minimum_version: env!("BARELINE_ROOT_VERSION_FLOOR")
                     .parse()
@@ -155,7 +155,7 @@ impl InvocationCheck {
         {
             return Err("Queued extension identity or permissions changed".into());
         }
-        let runtime = bareline_platform_windows::update::restore_verified_runtime(
+        let runtime = crate::shell::native::update::restore_verified_runtime(
             &self.root,
             &self.runtime_digest,
             &trust.runtime_policy(index.runtime_metadata_version),

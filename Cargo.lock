@@ -187,6 +187,8 @@ dependencies = [
  "bareline-extensions-protocol",
  "bareline-file-io",
  "bareline-platform",
+ "bareline-platform-linux",
+ "bareline-platform-macos",
  "bareline-platform-windows",
  "bareline-renderer",
  "bareline-renderer-recording",

@@ -489,7 +489,7 @@ impl Shell {
                     source.as_deref(),
                     document,
                     operation,
-                    &bareline_platform_windows::WindowsFileSystem,
+                    &crate::shell::native::FileSystem,
                     &worker_cancellation,
                 );
                 let _ = sender.send(result);
@@ -1295,8 +1295,7 @@ mod tests {
 
     fn recovery_shell(target: &std::path::Path, conflict: SaveConflict) -> crate::shell::Shell {
         let mut shell = crate::shell::accessibility::tests::headless_shell();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.open(target.to_path_buf());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while workspace.io_busy() {
@@ -1519,8 +1518,7 @@ mod tests {
         let second = root.join("second.txt");
         std::fs::write(&first, "first").unwrap();
         std::fs::write(&second, "second").unwrap();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.open(first);
         workspace.open(second);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

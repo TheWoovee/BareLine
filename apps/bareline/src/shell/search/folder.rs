@@ -127,7 +127,7 @@ impl FolderControls {
     }
     pub fn draw(
         &mut self,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         theme: bareline_ui::theme::UiTheme,
         width: f32,
         height: f32,
@@ -300,8 +300,8 @@ impl Shell {
                         workspace.search_panel.start_folder(
                             scope,
                             query,
-                            Arc::new(bareline_platform_windows::WindowsPathTrustProvider),
-                            Arc::new(bareline_platform_windows::WindowsFileSystem),
+                            Arc::new(crate::shell::native::PathTrust),
+                            Arc::new(crate::shell::native::FileSystem),
                             self.notify.clone(),
                         );
                         workspace.search_focus = true;

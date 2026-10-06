@@ -183,7 +183,7 @@ fn compose_snapshot(
 
 fn split_text_view(
     editor: &bareline_app::workspace::WorkspaceEditor,
-    renderer: Option<&bareline_platform_windows::WindowsRenderer>,
+    renderer: Option<&crate::shell::native::Renderer>,
     bounds: bareline_renderer::Rect,
     scale: f64,
     tab: u64,
@@ -3570,7 +3570,7 @@ pub(super) mod tests {
         std::fs::create_dir(&root).unwrap();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         for index in 0..10 {

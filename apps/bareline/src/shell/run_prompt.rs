@@ -207,7 +207,7 @@ impl Shell {
         };
         if std::path::Path::new(&line.program).is_absolute() {
             // An absolute program is used as typed; resolving it touches no file.
-            let result = run_definition(&line, bareline_platform_windows::resolve_program)
+            let result = run_definition(&line, crate::shell::native::resolve_program)
                 .and_then(|definition| self.macros_run_definition(definition));
             self.run_prompt_finish(result);
             return;
@@ -220,7 +220,7 @@ impl Shell {
         let spawned = std::thread::Builder::new()
             .name("bareline-run-lookup".into())
             .spawn(move || {
-                let _ = tx.send(run_definition(&line, bareline_platform_windows::resolve_program));
+                let _ = tx.send(run_definition(&line, crate::shell::native::resolve_program));
                 notify();
             });
         match spawned {

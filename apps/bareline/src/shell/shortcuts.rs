@@ -536,7 +536,7 @@ impl Shell {
                                         bareline_settings::atomic_create_config(
                                             &path,
                                             document.to_toml().as_bytes(),
-                                            &bareline_platform_windows::WindowsFileSystem,
+                                            &crate::shell::native::FileSystem,
                                         )
                                         .map_err(|e| e.to_string())?;
                                         Ok(path)

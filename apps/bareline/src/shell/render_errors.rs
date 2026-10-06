@@ -92,7 +92,7 @@ mod tests {
         shell.startup.mark_first_frame();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.new_document().unwrap();

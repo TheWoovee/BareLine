@@ -1040,8 +1040,8 @@ impl Shell {
                             &receipt,
                             &registry,
                             job,
-                            &bareline_platform_windows::WindowsPathTrustProvider,
-                            Arc::new(bareline_platform_windows::WindowsFileSystem),
+                            &crate::shell::native::PathTrust,
+                            Arc::new(crate::shell::native::FileSystem),
                         )
                         .map_err(|error| error.to_string())
                     },
@@ -1118,9 +1118,8 @@ impl Shell {
         self.search.replace.cancel_requested = false;
         self.search.replace.preparing = Some(self.search.replace.worker.as_ref().unwrap().operation(
             move |job| {
-                let platform: Arc<dyn bareline_platform::LocalFileSystem> =
-                    Arc::new(bareline_platform_windows::WindowsFileSystem);
-                let trust = bareline_platform_windows::WindowsPathTrustProvider;
+                let platform: Arc<dyn bareline_platform::LocalFileSystem> = Arc::new(crate::shell::native::FileSystem);
+                let trust = crate::shell::native::PathTrust;
                 let mut folder_scope = FolderScope::user(root);
                 folder_scope.include_binary = replacement_options.include_binary;
                 let found =
@@ -1620,7 +1619,7 @@ impl Shell {
                                 next.transaction,
                                 job,
                                 |ticket| handle.resolve_page(ticket).map_err(|error| error.to_string()),
-                                Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                Arc::new(crate::shell::native::FileSystem),
                                 &cache,
                                 20u64 << 30,
                             )?;
@@ -1659,8 +1658,8 @@ impl Shell {
                                 &options,
                                 &registry,
                                 job,
-                                &bareline_platform_windows::WindowsPathTrustProvider,
-                                Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                &crate::shell::native::PathTrust,
+                                Arc::new(crate::shell::native::FileSystem),
                             )
                             .map_err(|error| error.to_string())
                         },
@@ -1923,8 +1922,8 @@ impl Shell {
         self.search.replace.listing_note = None;
         self.search.replace.listing = Some(worker.operation(
             move |job| {
-                let platform = bareline_platform_windows::WindowsFileSystem;
-                let trust = bareline_platform_windows::WindowsPathTrustProvider;
+                let platform = crate::shell::native::FileSystem;
+                let trust = crate::shell::native::PathTrust;
                 let mut retired = 0;
                 let mut released = 0;
                 if let Some(receipt) = delete {
@@ -2083,8 +2082,7 @@ mod menu_state_tests {
 
     #[test]
     fn apply_route_preserves_preview_when_a_selected_source_changed() {
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         for _ in 0..2 {
             workspace.new_document().unwrap();
         }
@@ -2113,8 +2111,8 @@ mod menu_state_tests {
             &query,
             "replacement",
             &SearchJob::default(),
-            &bareline_platform_windows::WindowsPathTrustProvider,
-            &bareline_platform_windows::WindowsFileSystem,
+            &crate::shell::native::PathTrust,
+            &crate::shell::native::FileSystem,
             MAX_RESULT_BYTES,
         )
         .unwrap();
@@ -2151,8 +2149,8 @@ mod menu_state_tests {
             &bareline_search::SearchQuery::literal("x"),
             "y",
             &SearchJob::default(),
-            &bareline_platform_windows::WindowsPathTrustProvider,
-            &bareline_platform_windows::WindowsFileSystem,
+            &crate::shell::native::PathTrust,
+            &crate::shell::native::FileSystem,
             MAX_RESULT_BYTES,
         )
         .unwrap()
@@ -2329,8 +2327,8 @@ mod menu_state_tests {
             &bareline_search::SearchQuery::literal("x"),
             "y",
             &SearchJob::default(),
-            &bareline_platform_windows::WindowsPathTrustProvider,
-            &bareline_platform_windows::WindowsFileSystem,
+            &crate::shell::native::PathTrust,
+            &crate::shell::native::FileSystem,
             MAX_RESULT_BYTES,
         )
         .unwrap();

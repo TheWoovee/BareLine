@@ -526,7 +526,7 @@ mod tests {
         std::fs::write(&path, "x".repeat(length)).unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 4;
@@ -603,7 +603,7 @@ mod tests {
     fn resident_shell(text: &str) -> Shell {
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         let document = bareline_document::Document::from_utf8(

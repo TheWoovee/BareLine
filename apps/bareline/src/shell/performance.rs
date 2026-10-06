@@ -163,7 +163,7 @@ fn clock_ns() -> Option<u128> {
     // QPC is the same process-independent clock used by Python perf_counter_ns
     // on supported Windows. The FFI lives in platform-windows (ARCH-19); fail
     // closed instead of mixing wall clocks.
-    bareline_platform_windows::monotonic_ns()
+    crate::shell::native::monotonic_ns()
 }
 
 #[derive(Default)]
@@ -223,7 +223,7 @@ impl PerformanceRuntime {
             if let Some(operation) = self.operation {
                 metrics.push(format!("\"operation_us\":{}", operation.elapsed().as_micros()));
             }
-            if let Ok(value) = bareline_platform_windows::private_bytes() {
+            if let Ok(value) = crate::shell::native::private_bytes() {
                 metrics.push(format!("\"private_bytes_point\":{value}"));
             }
             if !self.samples.is_empty() {
@@ -349,8 +349,8 @@ impl PerformanceRuntime {
                     workspace.search_panel.start_folder(
                         bareline_search::folders::FolderScope::user(parent.to_owned()),
                         bareline_search::SearchQuery::literal("PERF_NEEDLE"),
-                        std::sync::Arc::new(bareline_platform_windows::WindowsPathTrustProvider),
-                        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                        std::sync::Arc::new(crate::shell::native::PathTrust),
+                        std::sync::Arc::new(crate::shell::native::FileSystem),
                         std::sync::Arc::new(|| {}),
                     );
                 }
@@ -361,7 +361,7 @@ impl PerformanceRuntime {
                         return true;
                     };
                     if editor
-                        .start_follow(std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem))
+                        .start_follow(std::sync::Arc::new(crate::shell::native::FileSystem))
                         .is_err()
                     {
                         self.finish(false);
@@ -600,7 +600,7 @@ impl PerformanceRuntime {
                     return true;
                 };
                 if editor
-                    .follow_tick(std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem), true)
+                    .follow_tick(std::sync::Arc::new(crate::shell::native::FileSystem), true)
                     .is_err()
                 {
                     self.finish(false);
@@ -833,8 +833,7 @@ mod tests {
             origin_ns: None,
             extension_command: None,
         }));
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         let mut app = bareline_app::App::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {

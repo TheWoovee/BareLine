@@ -16,11 +16,11 @@ pub(super) fn accessibility_test_cases() -> Vec<(
 )> {
     ui::accessibility_test_cases()
 }
+use crate::shell::native::extension_transport::{HostLaunch, HostLifecycle, run_verified_host_observed};
 use bareline_platform::{
     PlatformServices,
     executor::{BoundedExecutor, SubmitError, WorkKind},
 };
-use bareline_platform_windows::extension_transport::{HostLaunch, HostLifecycle, run_verified_host_observed};
 use std::{
     path::PathBuf,
     sync::{
@@ -251,7 +251,7 @@ pub struct ExtensionsRuntime {
     manager_pending: Option<mpsc::Receiver<Result<ManagerResult, String>>>,
     manager_cancel: Arc<AtomicBool>,
     installed: Vec<InstalledRow>,
-    runtime_package: Option<bareline_platform_windows::update::InstalledRuntime>,
+    runtime_package: Option<crate::shell::native::update::InstalledRuntime>,
     selected: usize,
     index: ManagerIndex,
     restore_pending: bool,
@@ -736,7 +736,7 @@ mod release_delivery_fixture {
             highest_metadata_version: metadata_floor,
             maximum_package_bytes: 256 * 1024 * 1024,
         };
-        let runtime = bareline_platform_windows::update::install_verified_runtime_nonshipping_fixture(
+        let runtime = crate::shell::native::update::install_verified_runtime_nonshipping_fixture(
             &runtime_source,
             &runtime_metadata,
             &runtime_signature,
@@ -753,7 +753,7 @@ mod release_delivery_fixture {
         let corrupt_root = evidence_root.join("corrupt-installation");
         fs::create_dir(&corrupt_root).unwrap();
         assert!(
-            bareline_platform_windows::update::install_verified_runtime_nonshipping_fixture(
+            crate::shell::native::update::install_verified_runtime_nonshipping_fixture(
                 &corrupt_runtime,
                 &runtime_metadata,
                 &runtime_signature,
@@ -881,7 +881,7 @@ pub fn register(registry: &mut bareline_commands::CommandRegistry) {
 impl ExtensionsRuntime {
     pub fn draw(
         &mut self,
-        _renderer: &mut super::WindowsRenderer,
+        _renderer: &mut super::Renderer,
         width: f32,
         height: f32,
         top: f32,
@@ -1159,12 +1159,12 @@ enum ManagerResult {
         PathBuf,
         ManagerIndex,
         Vec<InstalledRow>,
-        Option<bareline_platform_windows::update::InstalledRuntime>,
+        Option<crate::shell::native::update::InstalledRuntime>,
         Vec<String>,
     ),
     Permissions(ManagerIndex),
     Removed(String, ManagerIndex),
-    RuntimeInstalled(bareline_platform_windows::update::InstalledRuntime, ManagerIndex),
+    RuntimeInstalled(crate::shell::native::update::InstalledRuntime, ManagerIndex),
     RuntimeRemoved(ManagerIndex),
 }
 struct InstalledRow {
@@ -1228,7 +1228,7 @@ impl ExtensionsRuntime {
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
-            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Required)?;
             use bareline_extensions_protocol::OfflinePackageSource;
             use std::io::Read;
             let mut bytes = Vec::new();
@@ -1334,7 +1334,7 @@ impl ExtensionsRuntime {
             .find(|row| row.package.id == entry.id)
             .map(|row| row.package.clone());
         self.manager_work(notify, move |cancel| {
-            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Required)?;
             let source = catalog
                 .source
                 .revalidate(&trust.catalog_policy("extension", catalog.source.metadata_version(), authority::now()?))
@@ -2077,7 +2077,7 @@ impl ExtensionsRuntime {
                 .map_err(|e| e.to_string())?
                 .as_secs();
             // Installed packages were verified at acceptance; expiry never disables them (SEC-02).
-            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Installed)?;
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Installed)?;
             let policy = trust.catalog_policy("extension", 0, now);
             let mut rows = Vec::new();
             let mut errors = Vec::new();
@@ -2103,7 +2103,7 @@ impl ExtensionsRuntime {
                 }
             }
             let runtime = if let Some(digest) = &index.runtime_digest {
-                match bareline_platform_windows::update::restore_verified_runtime(
+                match crate::shell::native::update::restore_verified_runtime(
                     &root,
                     digest,
                     &trust.runtime_policy(index.runtime_metadata_version),
@@ -2265,7 +2265,7 @@ impl ExtensionsRuntime {
         let root = self.mutation_root()?;
         let mut index = self.index.clone();
         self.manager_work(notify, move |cancel| {
-            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Required)?;
             use std::io::Read;
             let directory = executable.parent().ok_or("Runtime package directory")?;
             let mut metadata = Vec::new();
@@ -2285,7 +2285,7 @@ impl ExtensionsRuntime {
                 .map_err(|e| e.to_string())?
                 .as_secs();
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-            let runtime = bareline_platform_windows::update::install_verified_runtime(
+            let runtime = crate::shell::native::update::install_verified_runtime(
                 &executable,
                 &metadata,
                 &signature,
@@ -2314,7 +2314,7 @@ impl ExtensionsRuntime {
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
-            bareline_platform_windows::update::remove_verified_runtime(&runtime).map_err(|e| e.to_string())?;
+            crate::shell::native::update::remove_verified_runtime(&runtime).map_err(|e| e.to_string())?;
             index.runtime_digest = None;
             index.save(&root)?;
             Ok(ManagerResult::RuntimeRemoved(index))

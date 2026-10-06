@@ -108,7 +108,7 @@ pub(super) struct SettingsRuntime {
 pub(super) fn read_migrated_user(path: &std::path::Path) -> Result<SettingsDocument, String> {
     use bareline_platform::LocalFileSystem;
     use std::io::Read;
-    let platform = bareline_platform_windows::WindowsFileSystem;
+    let platform = crate::shell::native::FileSystem;
     let lease = platform
         .migration_entry_guard(path)
         .map_err(|error| error.to_string())?;
@@ -141,8 +141,8 @@ impl SettingsRuntime {
             None,
             SystemAppearance {
                 dark: true,
-                high_contrast: bareline_platform_windows::high_contrast_enabled().unwrap_or(false),
-                highlight: bareline_platform_windows::high_contrast_highlight(),
+                high_contrast: crate::shell::native::high_contrast_enabled().unwrap_or(false),
+                highlight: crate::shell::native::high_contrast_highlight(),
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
@@ -159,7 +159,7 @@ impl SettingsRuntime {
             storage_blocked: false,
             locale_requested: String::new(),
             locale_explicit: false,
-            system_locale: bareline_platform_windows::system_ui_language(),
+            system_locale: crate::shell::native::system_ui_language(),
             locale_result: None,
             language_change: None,
             workspace_requested: None,
@@ -478,7 +478,7 @@ impl SettingsRuntime {
                 && let Err(error) = self.controller.configure_storage(
                     path.clone(),
                     None,
-                    Arc::new(bareline_platform_windows::WindowsFileSystem),
+                    Arc::new(crate::shell::native::FileSystem),
                     self.notify.clone(),
                 )
             {
@@ -593,7 +593,7 @@ impl SettingsRuntime {
                             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                         }
                         document
-                            .save(&target, &bareline_platform_windows::WindowsFileSystem)
+                            .save(&target, &crate::shell::native::FileSystem)
                             .map_err(|e| e.to_string())?;
                     }
                     Ok(document)
@@ -621,7 +621,7 @@ impl SettingsRuntime {
         if std::thread::Builder::new()
             .name("bareline-font-enumeration".into())
             .spawn(move || {
-                let families: Vec<(String, bool)> = bareline_platform_windows::installed_font_families()
+                let families: Vec<(String, bool)> = crate::shell::native::installed_font_families()
                     .into_iter()
                     .map(|family| (family.name, family.monospace))
                     .collect();
@@ -661,7 +661,7 @@ impl SettingsRuntime {
                         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                     }
                     document
-                        .save(&target, &bareline_platform_windows::WindowsFileSystem)
+                        .save(&target, &crate::shell::native::FileSystem)
                         .map_err(|e| e.to_string())?;
                     Ok(document)
                 })();
@@ -677,7 +677,7 @@ impl SettingsRuntime {
     /// toolbar when it is shown), so the strip stays visible (UI-05).
     pub fn draw(
         &mut self,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         width: f32,
         height: f32,
         top: f32,
@@ -855,8 +855,8 @@ impl Shell {
     pub(super) fn settings_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if let WindowEvent::ThemeChanged(theme) = event {
             self.settings.controller.system.high_contrast =
-                bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
-            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
+                crate::shell::native::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = crate::shell::native::high_contrast_highlight();
             // Sets the dark flag and invalidates the resolved theme cache.
             self.settings.apply_window_theme(Some(*theme));
             if let Some(window) = &self.window {
@@ -866,8 +866,8 @@ impl Shell {
         }
         if matches!(event, WindowEvent::Focused(true)) {
             self.settings.controller.system.high_contrast =
-                bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
-            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
+                crate::shell::native::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = crate::shell::native::high_contrast_highlight();
         }
         if !self.settings.controller.open {
             return false;

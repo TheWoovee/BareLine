@@ -11,7 +11,6 @@ const _: () = assert!(
 );
 #[cfg(feature = "qa-faults")]
 mod qa_faults;
-#[cfg(windows)]
 mod shell;
 mod build_capabilities {
     include!(concat!(
@@ -30,12 +29,9 @@ fn main() {
     #[cfg(feature = "qa-faults")]
     bareline_file_io::install_qa_save_boundary_hook(qa_faults::hit)
         .expect("QA save boundary hook must be installed exactly once");
-    #[cfg(windows)]
     if let Err(error) = shell::run() {
         eprintln!("event=startup_failed error={error}");
         shell::report_startup_failure(&*error);
         std::process::exit(1);
     }
-    #[cfg(not(windows))]
-    eprintln!("The native shell currently supports Windows. Neutral crates support headless verification.");
 }

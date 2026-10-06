@@ -340,7 +340,7 @@ impl Shell {
         let options = StagingOptions {
             cache: std::env::temp_dir().join("Bareline-drag-staging"),
             quota: workspace.transcode_quota_bytes,
-            platform: std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            platform: std::sync::Arc::new(crate::shell::native::FileSystem),
             source_options: bareline_file_io::source::SourceOptions::default(),
             budget: workspace.source_edit_budget(),
             memory: 16 << 20,
@@ -372,7 +372,7 @@ mod tests {
         std::fs::write(&path, "line with drag text\n".repeat(20_000)).unwrap();
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         )
         .unwrap();
         workspace.resident_max_bytes = 1;

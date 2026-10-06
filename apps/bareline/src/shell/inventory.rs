@@ -96,7 +96,7 @@ fn write_inventory_with_before_publish(
     if cancel.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Inventory export cancelled".into());
     }
-    bareline_platform::LocalFileSystem::validate_target(&bareline_platform_windows::WindowsFileSystem, &request.path)
+    bareline_platform::LocalFileSystem::validate_target(&crate::shell::native::FileSystem, &request.path)
         .map_err(|e| e.to_string())?;
     let parent = request.path.parent().ok_or("Inventory parent unavailable")?;
     let operation = INVENTORY_STAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -120,12 +120,8 @@ fn write_inventory_with_before_publish(
     if cancel.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Inventory export cancelled".into());
     }
-    bareline_platform::LocalFileSystem::rename_entry(
-        &bareline_platform_windows::WindowsFileSystem,
-        &stage,
-        &request.path,
-    )
-    .map_err(|e| e.to_string())?;
+    bareline_platform::LocalFileSystem::rename_entry(&crate::shell::native::FileSystem, &stage, &request.path)
+        .map_err(|e| e.to_string())?;
     ownership.published = true;
     Ok(())
 }

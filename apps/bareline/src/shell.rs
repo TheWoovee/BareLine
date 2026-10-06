@@ -14,6 +14,7 @@ mod lifecycle;
 mod macros;
 mod migration;
 mod modal;
+mod native;
 mod performance;
 mod power;
 mod profile;
@@ -45,9 +46,9 @@ use bareline_app::workspace::{Input, Workspace};
 use bareline_commands::Action;
 use bareline_diagnostics::{Event, LocalLog, StartupAction, StartupLedger};
 use bareline_platform::PlatformServices;
-use bareline_platform_windows::{SaveChoice, SavePromptOutcome, WindowsPlatform, WindowsRenderer};
 use bareline_renderer::{FrameStatus, Point, RenderBackend};
 use bareline_settings::RendererMode;
+use native::{Platform, Renderer, SaveChoice, SavePromptOutcome};
 use std::{
     fs::{File, OpenOptions},
     io::Write as _,
@@ -61,7 +62,6 @@ use winit::{
     event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key, ModifiersState, NamedKey},
-    platform::windows::EventLoopBuilderExtWindows,
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{Window, WindowId},
 };
@@ -166,9 +166,9 @@ struct DiscardConsent {
 struct Shell {
     unicode_input_window: std::rc::Rc<std::cell::Cell<(isize, u64)>>,
     // Drop renderer/platform before destroying the window.
-    renderer: Option<WindowsRenderer>,
-    platform: Option<WindowsPlatform>,
-    accessibility: Option<bareline_platform_windows::WindowsAccessibility>,
+    renderer: Option<Renderer>,
+    platform: Option<Platform>,
+    accessibility: Option<crate::shell::native::Accessibility>,
     shell_integration: shell_integration::ShellIntegrationRuntime,
     window: Option<Window>,
     app: App,
@@ -661,22 +661,20 @@ static STARTUP_UNATTENDED: std::sync::atomic::AtomicBool = std::sync::atomic::At
 /// has no console of its own, so an error that is only printed is never seen.
 pub fn report_startup_failure(error: &(dyn std::error::Error + 'static)) {
     if let Some(error) = error.downcast_ref::<UsageError>() {
-        bareline_platform_windows::cli::report(&format!("bareline: {error}\n\n{}", launch::HELP), true);
+        crate::shell::native::cli::report(&format!("bareline: {error}\n\n{}", launch::HELP), true);
         return;
     }
     // The caller already wrote the error to stderr. A harness that captures it, or
     // an unattended diagnostic or performance run, must get the exit code rather
     // than a modal box that nobody will close.
-    if STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
-        || bareline_platform_windows::cli::stderr_redirected()
-    {
+    if STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed) || crate::shell::native::cli::stderr_redirected() {
         return;
     }
     let logs = STARTUP_DIAGNOSTICS.get().map_or_else(
         || "No diagnostic log folder was selected yet.".to_owned(),
         |path| format!("Diagnostic logs: {}", path.display()),
     );
-    bareline_platform_windows::cli::show_startup_error(&format!("Bareline could not start.\n\n{error}\n\n{logs}"));
+    crate::shell::native::cli::show_startup_error(&format!("Bareline could not start.\n\n{error}\n\n{logs}"));
 }
 
 fn rejected_paths_text(rejected: &[String]) -> String {
@@ -704,11 +702,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     match parsed.mode() {
         launch::LaunchMode::Help => {
-            bareline_platform_windows::cli::report(launch::HELP, false);
+            crate::shell::native::cli::report(launch::HELP, false);
             return Ok(());
         }
         launch::LaunchMode::Version => {
-            bareline_platform_windows::cli::report(
+            crate::shell::native::cli::report(
                 &format!(
                     "Bareline {} ({})",
                     bareline_diagnostics::build_version(),
@@ -729,7 +727,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    let platform = bareline_platform_windows::WindowsFileSystem;
+    let platform = crate::shell::native::FileSystem;
     let mut settings_writable = true;
     let mut recovered = None;
     let mut legacy_settings_deferred = false;
@@ -752,7 +750,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             .as_ref()
             .filter(|legacy| Some(*legacy) != launch.settings_path.as_ref())
     {
-        if bareline_platform_windows::shell_integration::is_network_path(legacy) {
+        if crate::shell::native::shell_integration::is_network_path(legacy) {
             // A redirected roaming folder may be an unreachable share: never wait
             // for it before the first frame (ADR-33, APP-11). Defaults apply until
             // profile migration copies the file on its worker and applies it.
@@ -785,23 +783,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = EventLoop::<Wake>::with_user_event();
     let (tx, rx) = std::sync::mpsc::channel();
     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
-    let mut unicode_input = bareline_platform_windows::unicode_input::UnicodePacketInput::default();
     let unicode_input_window = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
-    let input_target = unicode_input_window.clone();
-    builder.with_msg_hook(move |message| {
-        // SAFETY: winit supplies a live MSG on this window's event-loop thread.
-        if unsafe { unicode_input.process_message(message, input_target.get()) } {
-            return true;
-        }
-        // SAFETY: winit supplies a valid MSG pointer during the hook invocation.
-        if let Some(command) = unsafe { WindowsPlatform::command_message(message) } {
-            let _ = tx.send(command);
-        }
-        if let Some(action) = unsafe { bareline_platform_windows::shell_integration::tray_message(message) } {
-            let _ = tray_tx.send(action);
-        }
-        false
-    });
+    native::install_message_hook(&mut builder, unicode_input_window.clone(), tx, tray_tx);
     let event_loop = builder.build()?;
     let proxy = event_loop.create_proxy();
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -824,7 +807,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Some(instance) = instance::prepare(&mut launch, notify.clone())? else {
         // The running instance received the usable paths; name the rest here.
         if !launch.rejected_paths.is_empty() {
-            bareline_platform_windows::cli::report(&rejected_paths_text(&launch.rejected_paths), true);
+            crate::shell::native::cli::report(&rejected_paths_text(&launch.rejected_paths), true);
         }
         return Ok(());
     };
@@ -944,7 +927,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent()) {
         shell.language.pending_catalog = Some(bareline_app::language::catalog::Store::new(
             root.join("languages"),
-            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
         ));
     }
     if launch.portable
@@ -1036,8 +1019,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 // Native commands are drained by about_to_wait, without a worker or timer.
 struct Handler {
     shell: Shell,
-    commands: std::sync::mpsc::Receiver<bareline_platform_windows::CommandMessage>,
-    tray_actions: std::sync::mpsc::Receiver<bareline_platform_windows::shell_integration::TrayAction>,
+    commands: std::sync::mpsc::Receiver<crate::shell::native::CommandMessage>,
+    tray_actions: std::sync::mpsc::Receiver<crate::shell::native::shell_integration::TrayAction>,
 }
 impl ApplicationHandler<Wake> for Handler {
     fn user_event(&mut self, el: &ActiveEventLoop, wake: Wake) {
@@ -1225,7 +1208,7 @@ impl ApplicationHandler<Wake> for Handler {
         // too, so a running restore leaves it alone (APP-07).
         let before = self.shell.active_document();
         while let Ok(action) = self.tray_actions.try_recv() {
-            use bareline_platform_windows::shell_integration::TrayAction;
+            use crate::shell::native::shell_integration::TrayAction;
             if let Some(window) = &self.shell.window {
                 window.set_visible(true);
                 window.set_minimized(false);
@@ -1320,7 +1303,7 @@ impl ApplicationHandler<Wake> for Handler {
         el.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
         if let Some(deadline) = self.shell.idle_at {
             if Instant::now() >= deadline {
-                match bareline_platform_windows::private_bytes() {
+                match crate::shell::native::private_bytes() {
                     Ok(bytes) => {
                         println!(
                             "{{\"event\":\"idle\",\"private_bytes\":{bytes},\"frames\":{}}}",
@@ -2089,17 +2072,17 @@ impl Shell {
             self.ledger.record(StartupAction::SpawnWorker);
             match Workspace::new(
                 self.notify.clone(),
-                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                std::sync::Arc::new(crate::shell::native::FileSystem),
             ) {
                 Ok(mut workspace) => {
-                    workspace.set_system_code_page(bareline_platform_windows::system_code_page());
+                    workspace.set_system_code_page(crate::shell::native::system_code_page());
                     workspace.recovery_root = self.recovery_root.clone();
                     let settings = self.settings.effective();
                     workspace.apply_resource_settings(&settings);
                     workspace.transcode_quota_bytes = settings.transcode_quota_bytes;
                     workspace
                         .spelling
-                        .set_factory(bareline_platform_windows::spell_checker_factory());
+                        .set_factory(crate::shell::native::spell_checker_factory());
                     self.workspace = Some(workspace);
                 }
                 Err(error) => {
@@ -2123,20 +2106,20 @@ impl Shell {
             .take()
             .unwrap_or_else(|| self.allocate_trace_ticket())
     }
-    fn trace_command_received(&mut self, message: bareline_platform_windows::CommandMessage) -> u64 {
+    fn trace_command_received(&mut self, message: crate::shell::native::CommandMessage) -> u64 {
         let ticket = self.allocate_trace_ticket();
         self.qa_command_trace
             .record(ticket, "ingress-received", "wm-command", message.id, message.hwnd, 0);
         ticket
     }
-    fn trace_command_accepted(&mut self, ticket: u64, message: bareline_platform_windows::CommandMessage) {
+    fn trace_command_accepted(&mut self, ticket: u64, message: crate::shell::native::CommandMessage) {
         self.qa_command_trace
             .record(ticket, "ingress-owner", "accepted", message.id, message.hwnd, 0);
     }
     fn trace_command_rejected(
         &mut self,
         ticket: u64,
-        message: bareline_platform_windows::CommandMessage,
+        message: crate::shell::native::CommandMessage,
         reason: &'static str,
     ) {
         self.qa_command_trace
@@ -2145,7 +2128,7 @@ impl Shell {
     fn trace_command_resolved(
         &mut self,
         ticket: u64,
-        message: bareline_platform_windows::CommandMessage,
+        message: crate::shell::native::CommandMessage,
         command: bareline_commands::CommandId,
         action: Action,
     ) {
@@ -2865,7 +2848,7 @@ impl Shell {
         );
         let result = self.platform.as_ref().map(|p| p.about_details(&details));
         match result {
-            Some(Ok(Some(bareline_platform_windows::AboutAction::CopyDiagnostics))) => {
+            Some(Ok(Some(crate::shell::native::AboutAction::CopyDiagnostics))) => {
                 if let Some(platform) = &self.platform {
                     if let Err(error) = platform.set_clipboard_text(&details) {
                         platform.operation_failed(&error.to_string());
@@ -2874,9 +2857,9 @@ impl Shell {
             }
             Some(Ok(Some(action))) => {
                 let name = match action {
-                    bareline_platform_windows::AboutAction::License => "LICENSE",
-                    bareline_platform_windows::AboutAction::ThirdPartyNotices => "THIRD-PARTY-NOTICES.md",
-                    bareline_platform_windows::AboutAction::CopyDiagnostics => {
+                    crate::shell::native::AboutAction::License => "LICENSE",
+                    crate::shell::native::AboutAction::ThirdPartyNotices => "THIRD-PARTY-NOTICES.md",
+                    crate::shell::native::AboutAction::CopyDiagnostics => {
                         unreachable!()
                     }
                 };
@@ -3366,21 +3349,17 @@ impl ApplicationHandler for Shell {
         // The first frame follows the OS light/dark preference; the window
         // reads it when it is created (APP-15).
         self.settings.apply_window_theme(window.theme());
-        let handle = match window.window_handle() {
-            Ok(h) => h.as_raw(),
+        let handle = match native::raw_window(&window) {
+            Ok(handle) => handle,
             Err(e) => {
                 self.fail(el, e);
                 return;
             }
         };
-        let RawWindowHandle::Win32(handle) = handle else {
-            self.fail(el, "Expected Win32 window");
-            return;
-        };
-        self.unicode_input_window.set((handle.hwnd.get(), 0));
+        self.unicode_input_window.set((handle, 0));
         // SAFETY: window is owned below until after platform and renderer are dropped.
         let menu_model = bareline_app::menus::curated_model(&self.app.commands);
-        match unsafe { WindowsPlatform::new(handle.hwnd.get(), &self.app.commands, menu_model) } {
+        match unsafe { Platform::new(handle, &self.app.commands, menu_model) } {
             Ok(platform) => self.platform = Some(platform),
             Err(e) => {
                 self.fail(el, e);
@@ -3388,9 +3367,7 @@ impl ApplicationHandler for Shell {
             }
         }
         let initial = bareline_app::accessibility::snapshot("Bareline", 1200.0, 760.0, None, Vec::new(), 1);
-        match unsafe {
-            bareline_platform_windows::WindowsAccessibility::new(handle.hwnd.get(), initial, self.notify.clone())
-        } {
+        match unsafe { native::Accessibility::new(handle, initial, self.notify.clone()) } {
             Ok(mut provider) => {
                 provider.set_text_sources(self.accessibility_text_sources());
                 self.accessibility = Some(provider);
@@ -3401,7 +3378,7 @@ impl ApplicationHandler for Shell {
             }
         }
         // winit does not forward WM_QUERYENDSESSION/WM_ENDSESSION.
-        self.session_end_attach(handle.hwnd.get());
+        self.session_end_attach(handle);
         window.set_ime_allowed(true);
         // Reveal now that accessibility is attached to the still-hidden window.
         // set_visible drives winit's own flag diff, so its cached WS_VISIBLE stays
@@ -4452,7 +4429,7 @@ impl Shell {
         if self.renderer.is_none() {
             self.ledger.record(StartupAction::CreateRenderer);
             let _renderer_phase = bareline_diagnostics::startup_span(StartupAction::CreateRenderer);
-            match self.platform.as_ref().unwrap().renderer(self.software) {
+            match native::create_renderer(self.platform.as_ref().unwrap(), self.window.as_ref(), self.software) {
                 Ok(mut r) => {
                     // Selected hardware drawing starts its device after the first
                     // frame, which the software target paints (ADR-32, PERF-02).
@@ -4555,7 +4532,7 @@ impl Shell {
     fn render_frame(
         &mut self,
         el: &ActiveEventLoop,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         editor_bounds: bareline_renderer::Rect,
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
@@ -4584,7 +4561,7 @@ impl Shell {
     fn draw_editor_layer(
         &mut self,
         el: &ActiveEventLoop,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         editor_bounds: bareline_renderer::Rect,
         operations: &mut Vec<bareline_renderer::DrawOp>,
     ) -> Vec<String> {
@@ -5015,7 +4992,7 @@ impl Shell {
     fn draw_panels(
         &mut self,
         el: &ActiveEventLoop,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         editor_bounds: bareline_renderer::Rect,
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
@@ -5098,7 +5075,7 @@ impl Shell {
     fn draw_overlays(
         &mut self,
         el: &ActiveEventLoop,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
         operations: &mut Vec<bareline_renderer::DrawOp>,
@@ -5327,7 +5304,7 @@ impl Shell {
     fn present_frame(
         &mut self,
         el: &ActiveEventLoop,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut Renderer,
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
         operations: &[bareline_renderer::DrawOp],
@@ -5360,7 +5337,7 @@ impl Shell {
                     if !self.smoke
                         && !self.perf
                         && !self.performance.enabled()
-                        && let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
+                        && let Err(error) = crate::shell::native::shell_integration::initialize_jump_list(
                             self.shell_integration.portable,
                         )
                     {
@@ -5614,7 +5591,7 @@ mod deferred_close_tests {
             &self,
             path: &Path,
         ) -> std::io::Result<Option<bareline_platform::CacheDirectoryLease>> {
-            LocalFileSystem::cache_directory_guard(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::cache_directory_guard(&crate::shell::native::FileSystem, path)
         }
         fn remove_owned_cache_directory(
             &self,
@@ -5629,7 +5606,7 @@ mod deferred_close_tests {
             cancelled: &dyn Fn() -> bool,
         ) -> bareline_platform::CacheRemovalOutcome {
             LocalFileSystem::remove_owned_cache_directory(
-                &bareline_platform_windows::WindowsFileSystem,
+                &crate::shell::native::FileSystem,
                 root,
                 candidate,
                 expected_root,
@@ -5642,19 +5619,19 @@ mod deferred_close_tests {
             )
         }
         fn open_sealed_read(&self, path: &Path) -> std::io::Result<std::fs::File> {
-            LocalFileSystem::open_sealed_read(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::open_sealed_read(&crate::shell::native::FileSystem, path)
         }
         fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
-            LocalFileSystem::guard_directory(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::guard_directory(&crate::shell::native::FileSystem, path)
         }
         fn available_space(&self, path: &Path) -> std::io::Result<u64> {
-            LocalFileSystem::available_space(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::available_space(&crate::shell::native::FileSystem, path)
         }
         fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
-            LocalFileSystem::identity(&bareline_platform_windows::WindowsFileSystem, file)
+            LocalFileSystem::identity(&crate::shell::native::FileSystem, file)
         }
         fn validate_target(&self, path: &Path) -> std::io::Result<()> {
-            LocalFileSystem::validate_target(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::validate_target(&crate::shell::native::FileSystem, path)
         }
         fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
             if self.armed.load(Ordering::SeqCst) && target.file_name().is_some_and(|name| name == "retired.json") {
@@ -5665,7 +5642,7 @@ mod deferred_close_tests {
                     entered = self.wake.wait(entered).unwrap();
                 }
             }
-            LocalFileSystem::commit(&bareline_platform_windows::WindowsFileSystem, staged, target, existed)
+            LocalFileSystem::commit(&crate::shell::native::FileSystem, staged, target, existed)
         }
     }
 
@@ -5741,17 +5718,17 @@ mod deferred_close_tests {
     struct SaveGate(Arc<WorkerGate>);
     impl LocalFileSystem for SaveGate {
         fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
-            LocalFileSystem::guard_directory(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::guard_directory(&crate::shell::native::FileSystem, path)
         }
         fn available_space(&self, path: &Path) -> std::io::Result<u64> {
-            LocalFileSystem::available_space(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::available_space(&crate::shell::native::FileSystem, path)
         }
         fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
-            LocalFileSystem::identity(&bareline_platform_windows::WindowsFileSystem, file)
+            LocalFileSystem::identity(&crate::shell::native::FileSystem, file)
         }
         fn validate_target(&self, path: &Path) -> std::io::Result<()> {
             self.0.enter_and_wait()?;
-            LocalFileSystem::validate_target(&bareline_platform_windows::WindowsFileSystem, path)
+            LocalFileSystem::validate_target(&crate::shell::native::FileSystem, path)
         }
         fn prepare_commit(
             &self,
@@ -5769,7 +5746,7 @@ mod deferred_close_tests {
             bareline_platform::simulate_commit_transaction(self, transaction)
         }
         fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
-            LocalFileSystem::commit(&bareline_platform_windows::WindowsFileSystem, staged, target, existed)
+            LocalFileSystem::commit(&crate::shell::native::FileSystem, staged, target, existed)
         }
     }
 
@@ -5926,8 +5903,7 @@ mod deferred_close_tests {
 
     #[test]
     fn changed_document_retires_deferred_close_without_closing_or_requeueing() {
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("first".into()));
         settle(&mut workspace);
@@ -6120,8 +6096,7 @@ mod deferred_close_tests {
 
     #[test]
     fn clean_read_only_close_and_non_discard_mismatch_preserve_read_only_state() {
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].set_read_only(true);
         let identity = workspace.editors[0].document_identity();
@@ -6175,8 +6150,7 @@ mod deferred_close_tests {
         std::fs::create_dir(&root).unwrap();
         let path = root.join("paged.txt");
         std::fs::write(&path, "line\n".repeat(2_000)).unwrap();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.resident_max_bytes = 4;
         workspace.open(path);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -6267,8 +6241,7 @@ mod notification_shell_tests {
     #[test]
     fn shell_sync_retains_more_than_visible_conflicts_without_replay_or_status_erasure() {
         let mut shell = headless_shell();
-        let mut workspace =
-            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
         workspace.message = Some("Unrelated scoped status".into());
         for index in 0..40 {
             workspace.track_save_conflict(conflict(index));
