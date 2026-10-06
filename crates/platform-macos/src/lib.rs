@@ -9,7 +9,15 @@
 //! - [`menu_plan`]: the menu bar as data, with the HIG application menu;
 //! - [`prompts`]: typed in-app prompts and their alert layouts;
 //! - [`types`]: pasteboard types, path UTIs, save-panel plans, language tags;
-//! - on Unix, [`isolation_policy`] (sandbox profile and launch chain).
+//! - on Unix, `watch_snapshot` (directory diffs in the Windows watch
+//!   vocabulary) and [`isolation_policy`] (sandbox profile and launch chain).
+//!
+//! macOS only, re-exported at the root: [`MacMenuBar`], [`MacClipboard`],
+//! [`MacDialogs`], [`MacAppearance`], [`MacWatchService`], [`MacIsolation`]
+//! and [`peer`]. Every AppKit type is created and used on the main thread:
+//! constructors take a `MainThreadMarker`, which only the main thread can
+//! obtain, and the values are not `Send`, so the compiler enforces the rule.
+//! The watcher, the clipboard's limits and isolation have no thread rule.
 use bareline_platform::{Capability, PlatformReadiness, PlatformServices, Unsupported};
 /// Filesystem, path trust, capability and data-folder services (PR-030).
 #[cfg(unix)]
@@ -25,7 +33,22 @@ pub mod keys;
 pub mod menu_plan;
 pub mod prompts;
 pub mod types;
+// Used by the macOS watcher; built on other Unix systems for its tests.
+#[cfg(all(unix, any(target_os = "macos", test)))]
+mod watch_snapshot;
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{
+    appearance::{Appearance, MacAppearance, high_contrast_enabled, system_ui_language},
+    clipboard::MacClipboard,
+    dialogs::MacDialogs,
+    isolation::{IsolationSupport, IsolationUnavailable, MacHostChild, MacIsolation},
+    menu::{MacMenuBar, MenuDispatch},
+    peer,
+    watch::MacWatchService,
+};
 pub use menu_plan::CommandMessage;
 pub use prompts::{AboutAction, SaveChoice, SavePromptOutcome};
 

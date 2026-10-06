@@ -414,11 +414,17 @@ dependencies = [
  "bareline-document",
  "bareline-extensions-protocol",
  "bareline-file-io",
+ "bareline-macros",
  "bareline-platform",
  "bareline-platform-posix",
  "bareline-renderer",
  "bareline-renderer-recording",
  "bareline-ui",
+ "libc",
+ "objc2 0.5.2",
+ "objc2-app-kit",
+ "objc2-foundation 0.2.2",
+ "rustix 1.1.4",
  "winit",
 ]
 
