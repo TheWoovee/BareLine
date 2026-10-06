@@ -410,7 +410,9 @@ dependencies = [
 name = "bareline-platform-macos"
 version = "0.2.0"
 dependencies = [
+ "bareline-commands",
  "bareline-document",
+ "bareline-extensions-protocol",
  "bareline-file-io",
  "bareline-platform",
  "bareline-platform-posix",

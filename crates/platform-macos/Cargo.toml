@@ -9,6 +9,11 @@ rust-version.workspace = true
 bareline-platform = { path = "../platform" }
 # Empty off Unix; the Linux and macOS adapters share its filesystem services.
 bareline-platform-posix = { path = "../platform-posix" }
+# Menu plans read the command registry, menu model and keymap; the extension
+# host's isolation takes its limits from the execution budget. Both are
+# portable workspace crates.
+bareline-commands = { path = "../commands" }
+bareline-extensions-protocol = { path = "../extensions-protocol" }
 
 [dev-dependencies]
 winit.workspace = true
