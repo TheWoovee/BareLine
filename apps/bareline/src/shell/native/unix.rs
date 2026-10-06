@@ -8,10 +8,6 @@
 //! replace these one by one (CROSS_PLATFORM_PLAN: PR-029 renderer, PR-030 file
 //! system and path trust, PR-031 and PR-032 adapters), each by editing only this
 //! file.
-#![allow(
-    dead_code,
-    reason = "stand-ins mirror the Windows adapter surface the shared shell names; some members are only reached on Windows paths"
-)]
 use bareline_app::task::Wake;
 use bareline_platform::{
     Capability, CapabilityReport, FileIdentity, FilesystemCapability, LocalFileSystem, PlatformServices,
@@ -141,11 +137,11 @@ impl Renderer {
         renderer.resize(width, height, scale)?;
         Ok(renderer)
     }
-    /// The recording stand-in paints nothing, so its pixels stay transparent black.
+    /// The recording stand-in paints nothing, so a capture would only record black
+    /// cells as if they were baselines. It fails instead until PR-029.
     #[cfg(test)]
     pub fn pixels_bgra(&self) -> Result<Vec<u8>> {
-        let (width, height) = self.backend.size;
-        Ok(vec![0; width as usize * height as usize * 4])
+        Err(Error::other("Pixel capture needs the software renderer (PR-029)"))
     }
     pub fn take_init_failure(&mut self) -> Option<(i32, bool)> {
         None
@@ -230,12 +226,20 @@ pub fn installed_font_families() -> Vec<InstalledFontFamily> {
 }
 
 /// Answer to a "save changes?" prompt; the same shape as on Windows.
+#[allow(
+    dead_code,
+    reason = "no save prompt exists here, so only the Windows prompt produces these answers"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveChoice {
     Save,
     DontSave,
     Cancel,
 }
+#[allow(
+    dead_code,
+    reason = "no save prompt exists here, so only the Windows prompt produces these answers"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SavePromptOutcome {
     Choice { choice: SaveChoice, selected: i32 },
@@ -248,6 +252,10 @@ pub struct CommandMessage {
     pub id: usize,
     pub action: u16,
 }
+#[allow(
+    dead_code,
+    reason = "the About dialog is unsupported here, so it never returns an action"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AboutAction {
     License,
@@ -319,6 +327,7 @@ impl Platform {
     pub fn accepts_command(&self, _message: &CommandMessage) -> bool {
         false
     }
+    #[allow(dead_code, reason = "named only by the Windows menu-command path")]
     pub fn action(&self, _menu_id: usize) -> Option<bareline_commands::Action> {
         None
     }
@@ -444,7 +453,10 @@ impl Accessibility {
 /// A minimal POSIX file system until `bareline-platform-posix` lands (PR-030):
 /// file identity from the device and inode numbers, plain regular-file targets
 /// and rename-replace commits. Everything else keeps the trait's refusing
-/// defaults, so no unverified save strategy is ever claimed.
+/// defaults, so no unverified save strategy is ever claimed. Document saves go
+/// through `prepare_commit`, which still refuses here, so a save fails with an
+/// error and the document stays open and modified; settings, session, recovery
+/// and profile files are written through `commit`.
 pub struct PlaceholderFileSystem;
 pub use PlaceholderFileSystem as FileSystem;
 fn identity_of(metadata: &std::fs::Metadata) -> FileIdentity {
@@ -489,18 +501,47 @@ impl LocalFileSystem for PlaceholderFileSystem {
         }
     }
     fn commit(&self, staged: &Path, target: &Path, existed: bool) -> io::Result<()> {
-        if !existed && std::fs::symlink_metadata(target).is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "Another file appeared at this location before the save finished",
-            ));
+        if existed {
+            std::fs::rename(staged, target)?;
+        } else {
+            publish_new(staged, target)?;
         }
-        std::fs::rename(staged, target)?;
-        // Make the rename durable: the directory entry lives in the parent.
-        match target.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            Some(parent) => std::fs::File::open(parent)?.sync_all(),
-            None => Ok(()),
+        // Make the new directory entry durable; it lives in the parent. The target
+        // already holds the staged contents at this point, so a failure here is
+        // logged rather than returned: an error would tell the caller that nothing
+        // was written.
+        let parent = target.parent().filter(|parent| !parent.as_os_str().is_empty());
+        let synced = parent.map(|parent| std::fs::File::open(parent).and_then(|folder| folder.sync_all()));
+        if let Some(Err(error)) = synced {
+            eprintln!("event=commit_folder_sync_failed error={error}");
         }
+        Ok(())
+    }
+}
+fn appeared() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "Another file appeared at this location before the save finished",
+    )
+}
+/// Publish `staged` under a name that must not exist yet, never replacing a file
+/// someone else created meanwhile. A hard link fails atomically when the name is
+/// taken. File systems without hard links (FAT, exFAT and some network shares)
+/// fall back to a checked rename, which leaves a short window between the check
+/// and the rename until PR-030 brings `renameat2(RENAME_NOREPLACE)` and
+/// `renamex_np(RENAME_EXCL)`.
+fn publish_new(staged: &Path, target: &Path) -> io::Result<()> {
+    match std::fs::hard_link(staged, target) {
+        Ok(()) => {
+            // The contents are published; a leftover staged name only costs space.
+            if let Err(error) = std::fs::remove_file(staged) {
+                eprintln!("event=commit_stage_cleanup_failed error={error}");
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(appeared()),
+        Err(_) if std::fs::symlink_metadata(target).is_ok() => Err(appeared()),
+        Err(_) => std::fs::rename(staged, target),
     }
 }
 impl FilesystemCapability for PlaceholderFileSystem {
@@ -550,6 +591,10 @@ pub fn recycle_entry(_fs: &dyn LocalFileSystem, _path: &Path, _owner: RawWindow)
 
 /// Logoff and shutdown reach Bareline as SIGTERM or SIGHUP on these systems
 /// (ADR-C); until that handler exists the signal state is kept but never fed.
+#[allow(
+    dead_code,
+    reason = "nothing feeds session-end notifications here until the signal handler exists"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionEndMessage {
     /// The session may end. Answered at once and never vetoed.
@@ -558,6 +603,10 @@ pub enum SessionEndMessage {
     End { ending: bool },
 }
 /// Side effects of a session-end notification.
+#[allow(
+    dead_code,
+    reason = "nothing feeds session-end notifications here until the signal handler exists"
+)]
 pub trait SessionEndHost {
     /// Route one flush request to the application.
     fn deliver(&mut self);
@@ -567,6 +616,10 @@ pub trait SessionEndHost {
 }
 /// UI-thread state shared by the session-end source and the application; the
 /// same protocol as the Windows adapter's.
+#[allow(
+    dead_code,
+    reason = "nothing feeds session-end notifications here until the signal handler exists"
+)]
 #[derive(Debug, Default)]
 pub struct SessionEndSignal {
     requests: Cell<u32>,
@@ -591,6 +644,10 @@ impl SessionEndSignal {
         self.flushed.set(complete);
     }
     /// Answer one notification and return its result.
+    #[allow(
+        dead_code,
+        reason = "nothing feeds session-end notifications here until the signal handler exists"
+    )]
     pub fn respond(&self, host: &mut dyn SessionEndHost, message: SessionEndMessage) -> isize {
         match message {
             SessionEndMessage::Query => {
@@ -611,6 +668,10 @@ impl SessionEndSignal {
             }
         }
     }
+    #[allow(
+        dead_code,
+        reason = "nothing feeds session-end notifications here until the signal handler exists"
+    )]
     fn request(&self, host: &mut dyn SessionEndHost) {
         self.flushed.set(false);
         self.requests.set(self.requests.get().saturating_add(1));
@@ -670,6 +731,37 @@ pub fn private_bytes() -> Result<u64> {
     ))
 }
 
+pub mod alive {
+    //! Whether the process that owns a recovery journal or a replace job still
+    //! runs. Unknown owners count as running, as on Windows, so a doubtful case
+    //! never sweeps or offers another window's files; that matters here because
+    //! every window runs as its own instance (see `instance`).
+    //!
+    //! Linux answers from `/proc`; macOS has no `/proc` and std offers no other
+    //! query, so every other process counts as running there. Start times are not
+    //! read yet: a running owner counts as started before any of its journals,
+    //! so a crash journal whose id a new process reused stays hidden, never
+    //! deleted, until that process exits. PR-030 replaces this with real start
+    //! times (`/proc/<pid>/stat`, `proc_pidinfo`) before it enables
+    //! `guard_directory`, the step that lets recovery discovery and sweeping run.
+    use std::path::Path;
+
+    /// `Some(running)` where `/proc` lists processes, `None` where it does not.
+    fn listed(id: u32) -> Option<bool> {
+        let proc = Path::new("/proc");
+        proc.join("self").exists().then(|| proc.join(id.to_string()).exists())
+    }
+    /// True unless the process is known to be gone.
+    pub fn running(id: u32) -> bool {
+        id == std::process::id() || listed(id).unwrap_or(true)
+    }
+    /// Start time in Unix nanoseconds, or `None` when the process is gone. A
+    /// running process reports the epoch, which keeps its journals its own.
+    pub fn started(id: u32) -> Option<u128> {
+        running(id).then_some(0)
+    }
+}
+
 /// The longest path the handoff accepts, in bytes (Linux `PATH_MAX`).
 const MAX_PATH_BYTES: usize = 4096;
 /// The same limits the instance handoff enforces for every forwarded path.
@@ -724,6 +816,10 @@ pub mod instance {
         pub read_only: bool,
         pub monitor: bool,
     }
+    #[allow(
+        dead_code,
+        reason = "every window runs independently until the instance handoff exists"
+    )]
     pub enum Outcome {
         Forwarded,
         Primary(InstanceServer),
@@ -735,6 +831,7 @@ pub mod instance {
             None
         }
         pub fn set_accepting(&self, _accepting: bool) {}
+        #[allow(dead_code, reason = "named only by the Windows handoff path")]
         pub fn pending(&self) -> usize {
             0
         }
@@ -765,6 +862,10 @@ pub mod extension_transport {
         sync::{Arc, atomic::AtomicBool},
     };
 
+    #[allow(
+        dead_code,
+        reason = "no extension host runs here, so the launch is never read or observed"
+    )]
     pub struct HostLaunch<'a> {
         pub executable: &'a Path,
         pub executable_sha256: [u8; 32],
@@ -774,6 +875,10 @@ pub mod extension_transport {
         pub invocation: &'a Invocation,
         pub budget: ExecutionBudget,
     }
+    #[allow(
+        dead_code,
+        reason = "no extension host runs here, so the launch is never read or observed"
+    )]
     #[derive(Clone, Copy, Debug)]
     pub enum HostLifecycle {
         Started(u32),
@@ -857,6 +962,10 @@ pub mod shell_integration {
     pub fn initialize_jump_list(_portable: bool) -> Result<(), String> {
         Ok(())
     }
+    #[allow(
+        dead_code,
+        reason = "the tray icon is unsupported here, so it never reports an action"
+    )]
     #[derive(Clone, Copy, Debug)]
     pub enum TrayAction {
         Restore,
@@ -895,6 +1004,10 @@ pub mod update {
         Required,
         Installed,
     }
+    #[allow(
+        dead_code,
+        reason = "in-app updates are unsupported here, so these values are never produced or read"
+    )]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum LaunchDecision {
         NotPending,
@@ -909,11 +1022,19 @@ pub mod update {
         Recover,
         AutoRecover,
     }
+    #[allow(
+        dead_code,
+        reason = "in-app updates are unsupported here, so these values are never produced or read"
+    )]
     #[derive(Clone, Copy, Debug)]
     pub struct OfflineRootPolicy<'a> {
         pub public_key: &'a str,
         pub minimum_version: u64,
     }
+    #[allow(
+        dead_code,
+        reason = "in-app updates are unsupported here, so these values are never produced or read"
+    )]
     pub struct ResolvedReleaseAuthority {
         pub release_public_key: String,
         pub signer: PublisherPin,
@@ -928,6 +1049,10 @@ pub mod update {
         pub file: File,
         pub directory: PathBuf,
     }
+    #[allow(
+        dead_code,
+        reason = "in-app updates are unsupported here, so these values are never produced or read"
+    )]
     #[derive(Clone, Debug)]
     pub struct InstalledRuntime {
         pub executable: PathBuf,
@@ -1087,6 +1212,11 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "theirs");
         assert!(staged.exists());
+        // A name that is still free is published and the staged name goes away.
+        let fresh = root.join("fresh.txt");
+        FileSystem.commit(&staged, &fresh, false).unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "mine");
+        assert!(!staged.exists());
         assert!(FileSystem.validate_target(&root).is_err());
         assert!(
             FileSystem
@@ -1104,6 +1234,24 @@ mod tests {
         assert_eq!(locale_name("C.UTF-8"), None);
         assert_eq!(locale_name("POSIX"), None);
         assert_eq!(locale_name(""), None);
+    }
+
+    #[test]
+    fn unknown_process_owners_count_as_running() {
+        let own = std::process::id();
+        assert!(alive::running(own));
+        assert!(alive::started(own).is_some());
+        // No process can have this id (Linux caps ids at 2^22). Linux knows it is
+        // gone; macOS cannot tell and keeps the owner's files.
+        let gone = u32::MAX;
+        assert_eq!(alive::running(gone), cfg!(target_os = "macos"));
+        assert_eq!(alive::started(gone).is_some(), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn stand_in_renderer_refuses_pixel_capture() {
+        let renderer = Renderer::offscreen(16, 16, 1.0).unwrap();
+        assert!(renderer.pixels_bgra().unwrap_err().message().contains("PR-029"));
     }
 
     #[test]

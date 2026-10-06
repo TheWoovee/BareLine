@@ -2798,21 +2798,10 @@ pub(super) fn accessibility_modal_test_setup(shell: &mut Shell) {
     shell.recovery.draw(Default::default(), 1000.0, 800.0, &mut Vec::new());
 }
 
-#[cfg(windows)]
 use super::native::alive;
-#[cfg(windows)]
 fn process_alive(id: u32) -> bool {
     alive::running(id)
 }
-#[cfg(not(windows))]
-fn process_alive(id: u32) -> bool {
-    id == std::process::id()
-}
-#[cfg(windows)]
 pub(super) fn process_started(id: u32) -> Option<u128> {
     alive::started(id)
-}
-#[cfg(not(windows))]
-pub(super) fn process_started(id: u32) -> Option<u128> {
-    (id == std::process::id()).then_some(0)
 }
