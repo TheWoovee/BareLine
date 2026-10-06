@@ -6,19 +6,26 @@
                       screen-recording permission)
   trusted             "true" when this process may post synthetic input
                       (System Settings > Privacy & Security > Accessibility)
+  capture-allowed     "true" when this process may capture other windows and read
+                      their titles (System Settings > Privacy & Security > Screen Recording)
   key PID CHORD       post one chord to PID, neutral names joined by "+":
-                      Primary (Command), Shift, Alt (Option), letters, digits, Return,
+                      Primary, Shift, Alt (Option), letters, digits, Return,
                       Escape, Tab, Space, Home, End, Up, Down, Left, Right, PageDown, F1..F12
   text PID TEXT       post Unicode text to PID
+
+Primary is Command, or Control when BARELINE_QA_MAC_PRIMARY=control (xtask
+sets it while the shell still reads its keymap's Ctrl from the Control key).
 
 Quartz is reached through ctypes (CoreGraphics, CoreFoundation and
 ApplicationServices by full framework path), so no PyObjC is needed. Events go
 to the process with CGEventPostToPid and need no keyboard focus.
 """
 import json
+import os
 import sys
 
-FLAGS = {"Shift": 0x20000, "Control": 0x40000, "Alt": 0x80000, "Primary": 0x100000}
+FLAGS = {"Shift": 0x20000, "Control": 0x40000, "Alt": 0x80000, "Command": 0x100000}
+PRIMARY = {"command": "Command", "control": "Control"}
 KEY_CODES = {
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
     "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23,
@@ -29,11 +36,13 @@ KEY_CODES = {
 }
 
 
-def chord(text):
-    """(key code, modifier flags) of one neutral chord."""
+def chord(text, primary="command"):
+    """(key code, modifier flags) of one neutral chord; Primary is `primary`."""
     *modifiers, key = text.split("+")
     flags = 0
     for modifier in modifiers:
+        if modifier == "Primary":
+            modifier = PRIMARY[primary]
         if modifier not in FLAGS:
             raise ValueError(f"unknown modifier {modifier!r} in {text!r}")
         flags |= FLAGS[modifier]
@@ -91,6 +100,7 @@ class Quartz:
         cg.CGEventKeyboardSetUnicodeString.restype = None
         cg.CGEventPostToPid.argtypes, cg.CGEventPostToPid.restype = [ctypes.c_int, pointer], None
         self.ax.AXIsProcessTrusted.restype = ctypes.c_bool
+        cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
 
     def number(self, dictionary, key):
         value = self.cf.CFDictionaryGetValue(dictionary, self.keys[key])
@@ -152,8 +162,10 @@ def main(argv):
         print(json.dumps(quartz.windows(int(arguments[0]) if arguments else None)))
     elif command == "trusted":
         print("true" if quartz.ax.AXIsProcessTrusted() else "false")
+    elif command == "capture-allowed":
+        print("true" if quartz.cg.CGPreflightScreenCaptureAccess() else "false")
     elif command == "key":
-        code, flags = chord(arguments[1])
+        code, flags = chord(arguments[1], os.environ.get("BARELINE_QA_MAC_PRIMARY", "command"))
         quartz.post(int(arguments[0]), code, flags, True)
         quartz.post(int(arguments[0]), code, flags, False)
     elif command == "text":

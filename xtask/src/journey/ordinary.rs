@@ -19,7 +19,7 @@
 //! menu bar is wired.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
@@ -146,6 +146,37 @@ pub(super) trait Desktop {
     fn dialog_host(&self) -> Result<String, String>;
 }
 
+/// Run a desktop tool to completion within `deadline`, draining its pipes on a
+/// thread (a capture writes megabytes to stdout). A tool that cannot start is
+/// an environment failure; one that does not answer in time (a hung display,
+/// a permission prompt nobody answers) is killed and reported as a timeout.
+pub(super) fn output_within(command: &mut Command, name: &str, deadline: Duration) -> Result<Output, Failure> {
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| Failure::environment(format!("{name} is not available: {error}")))?;
+    let pid = child.id();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    match receiver.recv_timeout(deadline) {
+        Ok(output) => output.map_err(|error| Failure::harness(format!("{name}: {error}"))),
+        Err(_) => {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status();
+            Err(Failure::timeout(format!(
+                "{name} did not answer within {} s",
+                deadline.as_secs()
+            )))
+        }
+    }
+}
+
 /// The isolated profile layout below one scratch home.
 struct Layout {
     home: PathBuf,
@@ -238,6 +269,24 @@ impl From<Failure> for Stop {
 
 type StepResult = Result<(), Stop>;
 
+/// Why a pixel wait ended without the expected state.
+enum Miss {
+    /// The region's last difference from the reference, which the caller's
+    /// oracle rejected: a product failure.
+    Pixels(f64),
+    /// The capture itself failed, with the desktop's own class.
+    Capture(Failure),
+}
+
+impl Miss {
+    fn into_failure(self, mismatch: impl FnOnce(f64) -> String) -> Failure {
+        match self {
+            Miss::Pixels(diff) => Failure::product(mismatch(diff)),
+            Miss::Capture(failure) => failure,
+        }
+    }
+}
+
 struct Editor {
     child: Child,
     pid: u32,
@@ -293,7 +342,11 @@ fn drive(env: &Env, journey: &'static str, procedure: fn(&mut Run) -> Result<(),
     let attempt = env.attempt.get();
     let evidence = env.output.join(format!("{journey}-{attempt}"));
     if evidence.exists() {
-        return Err(format!("evidence directory {} already exists", evidence.display()));
+        // Never overwrite an earlier run's evidence: each run takes its own --output.
+        return Err(format!(
+            "evidence directory {} already exists; pass a new --output for each run",
+            evidence.display()
+        ));
     }
     std::fs::create_dir_all(evidence.join("shots")).map_err(|error| error.to_string())?;
     let (scratch, _) = env.scratch(journey)?;
@@ -392,7 +445,7 @@ fn finish_report(
     let report = steps::report(journey, env.attempt.get(), evidence, platform, steps);
     let bytes = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     std::fs::write(evidence.join("result.json"), bytes).map_err(|error| error.to_string())?;
-    let failed = report["status"] == "failed";
+    let failed = report["outcome"] == "failed";
     let line = steps::outcome_line(&report);
     *env.report.borrow_mut() = Some(report);
     if failed { Err(line) } else { Ok(()) }
@@ -543,12 +596,8 @@ impl Run<'_> {
 
     /// Keep a small file from the scratch as evidence.
     fn retain(&mut self, path: &Path, name: &str) {
-        let target = self.evidence.join(name);
-        match std::fs::metadata(path) {
-            Ok(metadata) if metadata.len() <= 1024 * 1024 => {
-                let _ = std::fs::copy(path, &target);
-            }
-            _ => {}
+        if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() <= 1024 * 1024) {
+            let _ = std::fs::copy(path, self.evidence.join(name));
         }
     }
 
@@ -625,7 +674,7 @@ impl Run<'_> {
         command
             .args(&arguments)
             .current_dir(&self.scratch)
-            .env("BARELINE_QA_COMMAND_TRACE", &trace)
+            .env("BARELINE_QA_COMMAND_TRACE", trace)
             .stdin(Stdio::null())
             .stdout(open(&stdout)?)
             .stderr(open(&stderr)?);
@@ -894,7 +943,9 @@ impl Run<'_> {
         timeout: Duration,
     ) -> Result<Image, Failure> {
         self.expect_pixels(reference, region, stage, |diff| diff >= threshold, timeout)
-            .map_err(|diff| Failure::product(format!("No visible change ({region:?} differed by {diff:.5}): {stage}")))
+            .map_err(|miss| {
+                miss.into_failure(|diff| format!("No visible change ({region:?} differed by {diff:.5}): {stage}"))
+            })
     }
 
     /// Wait until `region` matches `reference` within `tolerance`.
@@ -912,7 +963,7 @@ impl Run<'_> {
             |diff| diff <= tolerance,
             Duration::from_secs(5),
         )
-        .map_err(|diff| Failure::product(format!("Visible state differs ({region:?} by {diff:.5}): {stage}")))
+        .map_err(|miss| miss.into_failure(|diff| format!("Visible state differs ({region:?} by {diff:.5}): {stage}")))
     }
 
     fn expect_pixels(
@@ -922,15 +973,23 @@ impl Run<'_> {
         stage: &str,
         accept: impl Fn(f64) -> bool,
         timeout: Duration,
-    ) -> Result<Image, f64> {
+    ) -> Result<Image, Miss> {
         let deadline = Instant::now() + timeout;
-        let mut last = 1.0;
         loop {
-            let Ok(image) = self.capture() else {
-                return Err(last);
+            // A capture that fails is the desktop's failure, not a pixel mismatch.
+            let image = match self.capture() {
+                Ok(image) => image,
+                Err(failure) => {
+                    self.record(
+                        stage,
+                        serde_json::json!({"region": format!("{region:?}"), "capture_failure": failure.detail,
+                            "class": failure.class.name()}),
+                    );
+                    return Err(Miss::Capture(failure));
+                }
             };
             let rect = self.rect(region, &image);
-            last = image.diff_fraction(reference, rect);
+            let last = image.diff_fraction(reference, rect);
             if accept(last) || Instant::now() >= deadline {
                 let passed = accept(last);
                 let _ = self.shot(stage);
@@ -939,7 +998,7 @@ impl Run<'_> {
                     serde_json::json!({"region": format!("{region:?}"), "rect": [rect.0, rect.1, rect.2, rect.3],
                         "diff_fraction": last, "accepted": passed}),
                 );
-                return if passed { Ok(image) } else { Err(last) };
+                return if passed { Ok(image) } else { Err(Miss::Pixels(last)) };
             }
             std::thread::sleep(Duration::from_millis(150));
         }
@@ -966,7 +1025,11 @@ impl Run<'_> {
             "document load wait",
             serde_json::json!({"elapsed_ms": started.elapsed().as_millis(), "tab_changed": result.is_ok()}),
         );
-        result.or_else(|_| self.capture())
+        match result {
+            Ok(image) => Ok(image),
+            Err(Miss::Capture(failure)) => Err(failure),
+            Err(Miss::Pixels(_)) => self.capture(),
+        }
     }
 
     /// Wait until two consecutive captures agree (progress, scrolling and
@@ -1030,38 +1093,55 @@ impl Run<'_> {
         }
     }
 
-    /// Run `title`, which opens a native file or folder chooser, and choose
-    /// `target` in it. Without a chooser the step is classified: the dialog
+    /// Open a native file or folder chooser with `opener` and choose `target`
+    /// in it. Only a window that appeared after the opener and belongs to the
+    /// editor or to a file-chooser host (an XDG desktop portal backend, the
+    /// macOS open and save panel service) is taken for the dialog, so no input
+    /// ever reaches a window that was already on the desktop or one of another
+    /// application. Without a chooser the step is classified: the dialog
     /// service is not wired, or this session cannot host dialogs at all.
-    fn choose_in_dialog(&mut self, title: &str, target: &Path) -> StepResult {
+    fn choose_in_dialog(&mut self, opener: Opener<'_>, target: &Path) -> StepResult {
+        let label = opener.label();
+        let editor = self.pid()?;
         let before = self.desktop.all_windows()?;
-        self.command(title)?;
+        match opener {
+            Opener::Command(title) => self.command(title)?,
+            Opener::Key { chord, .. } => self.key(chord)?,
+        }
         let deadline = Instant::now() + Duration::from_secs(8);
+        let mut ignored: Vec<Window> = Vec::new();
         let dialog = loop {
-            let windows = self.desktop.all_windows()?;
-            if let Some(window) = windows
-                .into_iter()
-                .find(|window| !before.iter().any(|known| known.id == window.id))
-            {
-                break Some(window);
+            let (dialog, foreign) = pick_dialog(&before, self.desktop.all_windows()?, |window| {
+                dialog_owner(window, editor)
+            });
+            for window in foreign {
+                if !ignored.iter().any(|known| known.id == window.id) {
+                    ignored.push(window);
+                }
             }
-            if Instant::now() >= deadline {
-                break None;
+            if dialog.is_some() || Instant::now() >= deadline {
+                break dialog;
             }
             std::thread::sleep(Duration::from_millis(200));
         };
+        if !ignored.is_empty() {
+            self.record(
+                "foreign windows ignored",
+                serde_json::json!({"opener": label, "windows": ignored.iter().map(Window::json).collect::<Vec<_>>()}),
+            );
+        }
         let Some(dialog) = dialog else {
-            let _ = self.shot(&format!("{title} no dialog"));
+            let _ = self.shot(&format!("{label} no dialog"));
             let host = self.desktop.dialog_host();
             self.record(
                 "file dialog missing",
-                serde_json::json!({"command": title, "dialog_host": format!("{host:?}")}),
+                serde_json::json!({"opener": label, "dialog_host": format!("{host:?}")}),
             );
-            let detail = format!("{title}: no file dialog appeared within 8 s");
+            let detail = format!("{label}: no file dialog appeared within 8 s");
             return Err(match (steps::seam_stand_in(&self.env.root, Service::Dialogs), host) {
                 (Some(true), _) => Stop::Fail(self.needs(Service::Dialogs, detail)),
                 (_, Err(why)) => Stop::Skip(format!(
-                    "{title} needs a native file dialog and this session cannot show one: {why}"
+                    "{label} needs a native file dialog and this session cannot show one: {why}"
                 )),
                 _ => Stop::Fail(Failure::product(format!("Native file dialog did not appear: {detail}"))),
             });
@@ -1069,7 +1149,7 @@ impl Run<'_> {
         // A portal file chooser (GTK and KDE alike) takes a typed location.
         self.record(
             "file dialog",
-            serde_json::json!({"window": dialog.json(), "target": target}),
+            serde_json::json!({"opener": label, "window": dialog.json(), "target": target}),
         );
         self.desktop.focus(&dialog)?;
         for chord in ["Primary+L", "Primary+A"] {
@@ -1125,6 +1205,64 @@ fn first_frame_event(stdout: &Path) -> Option<serde_json::Value> {
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
             .find(|value| value["event"] == "first_frame")
     })
+}
+
+/// What opens a native file chooser.
+#[derive(Clone, Copy)]
+enum Opener<'a> {
+    /// A command run by its exact title through the command palette.
+    Command(&'a str),
+    /// A key chord sent to the editor; `label` names it in the evidence.
+    Key { chord: &'a str, label: &'a str },
+}
+
+impl<'a> Opener<'a> {
+    fn label(self) -> &'a str {
+        match self {
+            Opener::Command(title) => title,
+            Opener::Key { label, .. } => label,
+        }
+    }
+}
+
+/// Split the windows `now` on the desktop that were not in `before` into the
+/// first one `owner` accepts (the dialog) and the rest, which belong to other
+/// applications and must never receive input.
+fn pick_dialog(before: &[Window], now: Vec<Window>, owner: impl Fn(&Window) -> bool) -> (Option<Window>, Vec<Window>) {
+    let (owned, foreign): (Vec<Window>, Vec<Window>) = now
+        .into_iter()
+        .filter(|window| !before.iter().any(|known| known.id == window.id))
+        .partition(owner);
+    (owned.into_iter().next(), foreign)
+}
+
+/// Whether `window` can be a chooser opened for the editor process `editor`:
+/// one of the editor's own windows (GTK and AppKit panels run in process), or
+/// one of a process that hosts choosers for other applications.
+fn dialog_owner(window: &Window, editor: u32) -> bool {
+    window
+        .pid
+        .is_some_and(|pid| pid == editor || process_name(pid).is_some_and(|name| is_chooser_host(&name)))
+}
+
+/// `ps -o comm=` of a process: Linux prints the name truncated to 15 bytes,
+/// macOS the executable's path.
+fn process_name(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The processes that show file choosers for other applications: the XDG
+/// desktop portal backends (xdg-desktop-portal-gtk, -gnome, -kde, ...) and
+/// the macOS open and save panel service.
+fn is_chooser_host(command: &str) -> bool {
+    let name = command.rsplit('/').next().unwrap_or(command);
+    name.starts_with("xdg-desktop-por") || name.contains("openAndSavePanelService")
 }
 
 /// The desktop session bus for the editor: the harness moves XDG_RUNTIME_DIR
@@ -1500,13 +1638,15 @@ fn regex_transform(run: &mut Run) -> Result<(), Failure> {
 
     run.step(
         "s2",
-        "Named and numbered captures replaced exactly two multiline matches in the open document; Save wrote the exact expected UTF-8/LF bytes.",
+        "Named and numbered captures replaced exactly two multiline matches through Replace All in Current Document (the Replace in Files preview was not exercised); Save wrote the exact expected UTF-8/LF bytes.",
         |run| {
             run.key("Tab")?;
             run.text(&replacement)?;
-            run.substituted(
+            // A different feature, not a different route: reported as reduced coverage.
+            run.gap(
                 "Replace in Files preview and Apply",
-                "the preview needs the folder chooser (dialogs service); Replace All in Current Document applied the same pattern and replacement to the open document",
+                GapKind::NotCovered(Service::Dialogs),
+                "the preview needs the folder chooser (dialogs service); Replace All in Current Document applied the same pattern and replacement to the open document instead",
             );
             run.command("Replace All in Current Document")?;
             run.key("Escape")?;
@@ -1695,7 +1835,7 @@ fn huge_log_tail(run: &mut Run) -> Result<(), Failure> {
                     .into());
             }
             let old = run.scratch.join("log-rotated.txt");
-            std::fs::rename(&saved, &old).map_err(|error| Failure::harness(error.to_string()))?;
+            std::fs::rename(&saved, old).map_err(|error| Failure::harness(error.to_string()))?;
             run.write(&saved, rotated.as_bytes())?;
             std::thread::sleep(Duration::from_secs(2));
             let before = run.capture()?;
@@ -1729,7 +1869,7 @@ fn workspace(run: &mut Run) -> Result<(), Failure> {
         |run| {
             run.launch(Launch::files(&[]))?;
             let before = run.shot("workspace empty")?;
-            run.choose_in_dialog("Open Workspace Folder\u{2026}", &root)?;
+            run.choose_in_dialog(Opener::Command("Open Workspace Folder\u{2026}"), &root)?;
             run.expect_change(&before, Region::Body, 0.002, "workspace tree shown")?;
             run.unobservable("exactly the two generated rows");
             Ok(())
@@ -1759,7 +1899,7 @@ fn udl(run: &mut Run) -> Result<(), Failure> {
         "The Notepad++ UDL import installed the validated definition durably under the isolated profile.",
         |run| {
             run.launch(Launch::files(&[]))?;
-            run.choose_in_dialog("Import User-defined Language\u{2026}", &xml)?;
+            run.choose_in_dialog(Opener::Command("Import User-defined Language\u{2026}"), &xml)?;
             let deadline = Instant::now() + Duration::from_secs(5);
             while !definition.is_file() {
                 if Instant::now() >= deadline {
@@ -1866,7 +2006,7 @@ fn macro_external(run: &mut Run) -> Result<(), Failure> {
             run.write(&toml, definition.as_str().unwrap_or_default().as_bytes())?;
             run.retain(&toml, "external-command.toml");
             run.record("external fixture", serde_json::json!({"python": python}));
-            run.choose_in_dialog("Load External Command Definition\u{2026}", &toml)?;
+            run.choose_in_dialog(Opener::Command("Load External Command Definition\u{2026}"), &toml)?;
             run.command(&format!("Run {}", Run::fixture_text(&fixture, "command_name")?))?;
             let receipt = run.scratch.join("external-receipt.json");
             let deadline = Instant::now() + Duration::from_secs(8);
@@ -2078,8 +2218,13 @@ fn portable(run: &mut Run) -> Result<(), Failure> {
             run.key("Primary+N")?;
             run.text(&Run::fixture_text(&fixture, "new_text")?)?;
             let target = run.scratch.join("relocated-new.txt");
-            run.key("Primary+Shift+S")?;
-            run.choose_in_dialog_after_key(&target)?;
+            run.choose_in_dialog(
+                Opener::Key {
+                    chord: "Primary+Shift+S",
+                    label: "Save As",
+                },
+                &target,
+            )?;
             let text = Run::fixture_text(&fixture, "new_text")?;
             let mut expected = vec![0xFE, 0xFF];
             expected.extend(text.encode_utf16().flat_map(u16::to_be_bytes));
@@ -2088,48 +2233,6 @@ fn portable(run: &mut Run) -> Result<(), Failure> {
         },
     );
     Ok(())
-}
-
-impl Run<'_> {
-    /// The dialog a key chord just opened (Save As), classified like
-    /// [`Run::choose_in_dialog`].
-    fn choose_in_dialog_after_key(&mut self, target: &Path) -> StepResult {
-        let editor = self.window()?;
-        let deadline = Instant::now() + Duration::from_secs(8);
-        let dialog = loop {
-            let windows = self.desktop.all_windows()?;
-            if let Some(window) = windows.into_iter().find(|window| window.id != editor.id) {
-                break Some(window);
-            }
-            if Instant::now() >= deadline {
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        };
-        let Some(dialog) = dialog else {
-            let _ = self.shot("save as no dialog");
-            let detail = "Save As: no file dialog appeared within 8 s".to_owned();
-            return Err(
-                match (
-                    steps::seam_stand_in(&self.env.root, Service::Dialogs),
-                    self.desktop.dialog_host(),
-                ) {
-                    (Some(true), _) => Stop::Fail(self.needs(Service::Dialogs, detail)),
-                    (_, Err(why)) => Stop::Skip(format!(
-                        "Save As needs a native file dialog and this session cannot show one: {why}"
-                    )),
-                    _ => Stop::Fail(Failure::product(format!("Native file dialog did not appear: {detail}"))),
-                },
-            );
-        };
-        self.desktop.focus(&dialog)?;
-        for chord in ["Primary+L", "Primary+A"] {
-            self.desktop.key(&dialog, chord)?;
-        }
-        self.desktop.text(&dialog, &target.to_string_lossy())?;
-        self.desktop.key(&dialog, "Return")?;
-        Ok(())
-    }
 }
 
 /// Close the previous step's editor: a clean Exit after a passing step, a kill
@@ -2215,14 +2318,14 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
             run.text(&Run::fixture_text(&fixture, "untitled")?)?;
             run.expect_dirty(&clean, true, "untitled dirty")?;
             let before = run.shot("untitled typed")?;
+            let editor = run.pid()?;
             let windows = run.desktop.all_windows()?;
             run.key("Primary+W")?;
             std::thread::sleep(Duration::from_secs(2));
-            let owned = run
-                .desktop
-                .all_windows()?
-                .iter()
-                .any(|window| !windows.iter().any(|known| known.id == window.id));
+            let (prompt, _) = pick_dialog(&windows, run.desktop.all_windows()?, |window| {
+                dialog_owner(window, editor)
+            });
+            let owned = prompt.is_some();
             let modal = run.capture().map(|image| {
                 let rect = run.rect(Region::Center, &image);
                 image.diff_fraction(&before, rect)
@@ -2376,4 +2479,101 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(id: &str, pid: u32) -> Window {
+        Window {
+            id: id.into(),
+            pid: Some(pid),
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 480,
+            title: None,
+        }
+    }
+
+    #[test]
+    fn only_a_new_window_of_the_editor_or_a_chooser_host_is_taken_for_the_dialog() {
+        // A terminal and the editor were on the desktop before the opener ran.
+        let before = [window("terminal", 50), window("editor", 100)];
+        let owner = |window: &Window| window.pid == Some(100) || window.pid == Some(200);
+        // Nothing new: no dialog, and the terminal is never a candidate.
+        let (dialog, foreign) = pick_dialog(&before, before.to_vec(), owner);
+        assert_eq!((dialog, foreign), (None, Vec::new()));
+        // A new window of another application appears first: refused.
+        let now = vec![
+            window("terminal", 50),
+            window("editor", 100),
+            window("notification", 60),
+        ];
+        let (dialog, foreign) = pick_dialog(&before, now, owner);
+        assert_eq!(dialog, None);
+        assert_eq!(foreign, [window("notification", 60)]);
+        // The portal's chooser appears: taken, the foreign window still refused.
+        let now = vec![
+            window("terminal", 50),
+            window("notification", 60),
+            window("chooser", 200),
+            window("editor", 100),
+        ];
+        let (dialog, foreign) = pick_dialog(&before, now, owner);
+        assert_eq!(dialog, Some(window("chooser", 200)));
+        assert_eq!(foreign, [window("notification", 60)]);
+    }
+
+    #[test]
+    fn chooser_hosts_are_the_portal_backends_and_the_macos_panel_service() {
+        // Linux truncates comm to 15 bytes.
+        assert!(is_chooser_host("xdg-desktop-por"));
+        assert!(is_chooser_host("xdg-desktop-portal-gtk"));
+        assert!(is_chooser_host(
+            "/System/Library/Frameworks/AppKit.framework/XPCServices/OpenAndSave.xpc/Contents/MacOS/\
+             com.apple.appkit.xpc.openAndSavePanelService"
+        ));
+        for other in [
+            "bash",
+            "Terminal",
+            "/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            "Finder",
+            "",
+        ] {
+            assert!(!is_chooser_host(other), "{other}");
+        }
+        let unowned = Window {
+            pid: None,
+            ..window("xt", 1)
+        };
+        assert!(
+            !dialog_owner(&unowned, 1),
+            "a window without an owner never takes input"
+        );
+        assert!(dialog_owner(&window("editor", std::process::id()), std::process::id()));
+    }
+
+    #[test]
+    fn a_tool_that_does_not_answer_is_killed_at_its_deadline() {
+        let started = Instant::now();
+        let failure = output_within(Command::new("sleep").arg("30"), "sleep", Duration::from_millis(200)).unwrap_err();
+        assert_eq!(failure.class.name(), "timeout");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let missing = output_within(
+            &mut Command::new("bareline-no-such-tool"),
+            "probe",
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert_eq!(missing.class.name(), "environment");
+        let output = output_within(
+            Command::new("sh").args(["-c", "echo ok"]),
+            "sh",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    }
 }

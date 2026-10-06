@@ -165,6 +165,10 @@ pub(super) enum GapKind {
     /// The Windows route needs a native dialog; an equivalent command-line or
     /// session route ran instead.
     Substituted,
+    /// Part of the step's feature was not exercised because it needs the
+    /// service; a narrower check ran in its place. The journey's coverage is
+    /// reduced, and the summary says so next to its result.
+    NotCovered(Service),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,6 +266,7 @@ impl StepRecord {
                     GapKind::Unobservable(service) => ("unobservable", Some(service.name())),
                     GapKind::WindowsOnly => ("windows_only", None),
                     GapKind::Substituted => ("substituted", None),
+                    GapKind::NotCovered(service) => ("not_covered", Some(service.name())),
                 };
                 serde_json::json!({"check": gap.check, "kind": kind, "service": service, "note": gap.note})
             })
@@ -279,6 +284,15 @@ impl StepRecord {
 
 /// The report one attempt of one journey leaves: `result.json` in its evidence
 /// directory and the entry in the run evidence.
+///
+/// The fields the Windows runner writes (tests/e2e/runner.py) keep its
+/// meaning, so tests/e2e/journey_matrix.py scores these attempts as it scores
+/// Windows ones: `journey`, `status` (`PASS` only when every step passed,
+/// otherwise `FAIL`), `error` for a failure outside the product, and `steps`
+/// with `id`, `status` and `observed` (plus `SKIPPED`, which Windows has no
+/// use for). `outcome` is the port's own reading, which the summary uses: a
+/// journey whose steps passed or were skipped with a reason has `passed`, one
+/// with a failing step `failed`, and one where nothing passed `skipped`.
 pub(super) fn report(
     journey: &str,
     attempt: usize,
@@ -291,23 +305,31 @@ pub(super) fn report(
         _ => None,
     });
     let passed = steps.iter().any(|step| step.status == StepStatus::Pass);
-    let status = if failed.is_some() {
+    let outcome = if failed.is_some() {
         "failed"
     } else if passed {
         "passed"
     } else {
         "skipped"
     };
+    let every_step_passed = !steps.is_empty() && steps.iter().all(|step| step.status == StepStatus::Pass);
     let skipped = steps.iter().find_map(|step| match &step.status {
         StepStatus::Skipped(reason) => Some(format!("{}: {reason}", step.id)),
         _ => None,
     });
+    // The Windows runner's `error` marks a result the product did not cause.
+    let error = failed
+        .filter(|(_, failure)| matches!(failure.class, Class::Harness | Class::Environment))
+        .map(|(id, failure)| format!("{id}: {}: {}", failure.class.name(), failure.detail));
     serde_json::json!({
         "schema_version": 1,
         "kind": "port-journey-result",
+        "journey": journey,
         "name": journey,
         "attempt": attempt,
-        "status": status,
+        "status": if every_step_passed { "PASS" } else { "FAIL" },
+        "outcome": outcome,
+        "error": error,
         "classification": failed.map(|(_, failure)| failure.class.name()),
         "service": failed.and_then(|(_, failure)| failure.class.service().map(Service::name)),
         "failing_step": failed.map(|(id, _)| id),
@@ -321,7 +343,7 @@ pub(super) fn report(
 /// One console line for a report: `PASS name`, `FAIL name — s2 ...`, `SKIP name — ...`.
 pub(super) fn outcome_line(report: &serde_json::Value) -> String {
     let name = report["name"].as_str().unwrap_or("?");
-    match report["status"].as_str() {
+    match report["outcome"].as_str() {
         Some("passed") => format!("PASS {name}"),
         Some("failed") => format!(
             "FAIL {name} — {} {}{}: {}",
@@ -376,7 +398,7 @@ fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
     for name in names {
         let mut attempts: Vec<&serde_json::Value> = reports.iter().filter(|report| report["name"] == name).collect();
         attempts.sort_by_key(|report| report["attempt"].as_u64().unwrap_or(0));
-        let count = |status: &str| attempts.iter().filter(|report| report["status"] == status).count();
+        let count = |outcome: &str| attempts.iter().filter(|report| report["outcome"] == outcome).count();
         let (passed, failed, skipped) = (count("passed"), count("failed"), count("skipped"));
         let classification = if failed == 0 && passed > 0 {
             "pass"
@@ -389,7 +411,7 @@ fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
         };
         let failures: Vec<_> = attempts
             .iter()
-            .filter(|report| report["status"] == "failed")
+            .filter(|report| report["outcome"] == "failed")
             .map(|report| {
                 serde_json::json!({
                     "attempt": report["attempt"],
@@ -402,11 +424,24 @@ fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
             })
             .collect();
         let mut gaps: Vec<serde_json::Value> = Vec::new();
+        // What a result does not cover: features not exercised and steps
+        // skipped with a reason, so a pass never overstates the coverage.
+        let mut reduced: Vec<serde_json::Value> = Vec::new();
         for report in &attempts {
             for step in report["steps"].as_array().into_iter().flatten() {
+                if step["status"] == "SKIPPED" {
+                    let entry = serde_json::json!({"step": step["id"], "check": "the whole step", "kind": "skipped",
+                        "service": null, "note": step["observed"]});
+                    if !reduced.contains(&entry) {
+                        reduced.push(entry);
+                    }
+                }
                 for gap in step["gaps"].as_array().into_iter().flatten() {
                     let entry = serde_json::json!({"step": step["id"], "check": gap["check"], "kind": gap["kind"],
                         "service": gap["service"], "note": gap["note"]});
+                    if gap["kind"] == "not_covered" && !reduced.contains(&entry) {
+                        reduced.push(entry.clone());
+                    }
                     if !gaps.contains(&entry) {
                         gaps.push(entry);
                     }
@@ -415,7 +450,7 @@ fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
         }
         if classification != "pass" {
             // The latest non-passing attempt names the step to fix.
-            if let Some(last) = attempts.iter().rev().find(|report| report["status"] != "passed") {
+            if let Some(last) = attempts.iter().rev().find(|report| report["outcome"] != "passed") {
                 // Every failing step is an issue: independent steps (the
                 // regression procedure) can fail on their own.
                 let failing: Vec<&serde_json::Value> = last["steps"]
@@ -454,6 +489,7 @@ fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
                 "skipped": skipped,
                 "classification": classification,
                 "failures": failures,
+                "reduced_coverage": reduced,
                 "gaps": gaps,
         }));
     }
@@ -492,13 +528,19 @@ fn summary_markdown(summary: &serde_json::Value) -> String {
                 .unwrap_or_default()
                 .to_owned()
         };
+        let mut result = row["classification"].as_str().unwrap_or("?").to_owned();
+        if row["reduced_coverage"]
+            .as_array()
+            .is_some_and(|reduced| !reduced.is_empty())
+        {
+            result.push_str(", reduced coverage");
+        }
         lines.push(format!(
-            "| {name} | {}/{} | {} | {} | {} | {} | {} | {} |",
+            "| {name} | {}/{} | {} | {} | {result} | {} | {} | {} |",
             row["passed"],
             row["attempts"],
             row["failed"],
             row["skipped"],
-            row["classification"].as_str().unwrap_or("?"),
             field("step"),
             field("class"),
             field("service"),
@@ -517,6 +559,37 @@ fn summary_markdown(summary: &serde_json::Value) -> String {
                 detail.replace('|', "/")
             ));
         }
+        lines.push(String::new());
+    }
+    let reduced: Vec<String> = summary["journeys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|row| {
+            let name = row["name"].as_str().unwrap_or("?").to_owned();
+            row["reduced_coverage"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |entry| {
+                    let service = entry["service"]
+                        .as_str()
+                        .map(|service| format!(" ({service})"))
+                        .unwrap_or_default();
+                    let note: String = entry["note"].as_str().unwrap_or("").chars().take(240).collect();
+                    format!(
+                        "- {name} {}: {} not exercised{service} — {}",
+                        entry["step"].as_str().unwrap_or("-"),
+                        entry["check"].as_str().unwrap_or("?"),
+                        note.replace('|', "/")
+                    )
+                })
+        })
+        .collect();
+    if !reduced.is_empty() {
+        lines.push("Reduced coverage (not exercised on this platform, whatever the result):".to_owned());
+        lines.extend(reduced);
         lines.push(String::new());
     }
     let gaps: usize = summary["journeys"]
@@ -640,7 +713,14 @@ mod tests {
             step("s3", StepStatus::NotRun("Prerequisite step failed".into())),
         ];
         let report = report("workspace", 2, Path::new("/evidence/workspace-2"), platform(), &steps);
-        assert_eq!(report["status"], "failed");
+        assert_eq!(report["outcome"], "failed");
+        assert_eq!(report["status"], "FAIL");
+        assert_eq!(report["journey"], "workspace");
+        assert_eq!(
+            report["error"],
+            serde_json::Value::Null,
+            "a missing service is not a harness error"
+        );
         assert_eq!(report["classification"], "service_not_wired");
         assert_eq!(report["service"], "dialogs");
         assert_eq!(report["failing_step"], "s2");
@@ -674,7 +754,9 @@ mod tests {
                 gapped,
             ],
         );
-        assert_eq!(passed["status"], "passed");
+        assert_eq!(passed["outcome"], "passed");
+        // As on Windows, only a journey whose every step passed says PASS.
+        assert_eq!(passed["status"], "FAIL");
         assert_eq!(passed["classification"], serde_json::Value::Null);
         assert_eq!(passed["steps"][2]["gaps"][0]["kind"], "windows_only");
         assert_eq!(outcome_line(&passed), "PASS split_clone_sync");
@@ -689,7 +771,8 @@ mod tests {
                 step("s2", StepStatus::NotRun("Prerequisite step was skipped".into())),
             ],
         );
-        assert_eq!(skipped["status"], "skipped");
+        assert_eq!(skipped["outcome"], "skipped");
+        assert_eq!(skipped["status"], "FAIL");
         assert_eq!(skipped["detail"], "s1: no XDG desktop portal");
         assert_eq!(outcome_line(&skipped), "SKIP udl — s1: no XDG desktop portal");
     }
@@ -897,5 +980,129 @@ mod tests {
         assert_eq!(summary["journeys"].as_array().unwrap().len(), 1);
         assert!(output.join("summary.md").is_file());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pass_that_did_not_exercise_a_feature_says_so_beside_its_result() {
+        let mut replaced = step("s2", StepStatus::Pass);
+        replaced.gaps.push(Gap {
+            check: "Replace in Files preview and Apply".into(),
+            kind: GapKind::NotCovered(Service::Dialogs),
+            note: "Replace All in Current Document ran instead".into(),
+        });
+        let regex = report(
+            "regex_transform",
+            1,
+            Path::new("/e"),
+            platform(),
+            &[step("s1", StepStatus::Pass), replaced, step("s3", StepStatus::Pass)],
+        );
+        let gapped = report(
+            "workspace",
+            1,
+            Path::new("/e"),
+            platform(),
+            &[
+                step("s1", StepStatus::Pass),
+                step("s2", StepStatus::Skipped("needs the accessibility tree".into())),
+            ],
+        );
+        assert_eq!(regex["status"], "PASS");
+        assert_eq!(regex["steps"][1]["gaps"][0]["kind"], "not_covered");
+        assert_eq!(regex["steps"][1]["gaps"][0]["service"], "dialogs");
+        let summary = summarize(&[regex, gapped]);
+        assert_eq!(summary["journeys"][0]["classification"], "pass");
+        assert_eq!(summary["journeys"][0]["reduced_coverage"][0]["step"], "s2");
+        assert_eq!(summary["journeys"][1]["reduced_coverage"][0]["kind"], "skipped");
+        let markdown = summary_markdown(&summary);
+        assert!(markdown.contains("| regex_transform | 1/1 | 0 | 0 | pass, reduced coverage |"));
+        assert!(markdown.contains("| workspace | 1/1 | 0 | 0 | pass, reduced coverage |"));
+        assert!(markdown.contains(
+            "- regex_transform s2: Replace in Files preview and Apply not exercised (dialogs) — Replace All"
+        ));
+        assert!(markdown.contains("- workspace s2: the whole step not exercised — needs the accessibility tree"));
+    }
+
+    #[test]
+    fn a_failure_outside_the_product_carries_the_windows_runner_error_field() {
+        let failed = report(
+            "udl",
+            1,
+            Path::new("/e"),
+            platform(),
+            &[step(
+                "s1",
+                StepStatus::Fail(Failure::harness("python fixture unavailable")),
+            )],
+        );
+        assert_eq!(failed["status"], "FAIL");
+        assert_eq!(failed["error"], "s1: harness: python fixture unavailable");
+        let passed = report("udl", 1, Path::new("/e"), platform(), &[step("s1", StepStatus::Pass)]);
+        assert_eq!(passed["status"], "PASS");
+        assert_eq!(passed["outcome"], "passed");
+        assert_eq!(passed["error"], serde_json::Value::Null);
+    }
+
+    /// tests/e2e/journey_matrix.py, which scores the Windows attempts, reads
+    /// these result.json files the same way.
+    #[test]
+    fn the_windows_journey_matrix_scores_port_results() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-port-journey-matrix-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let write = |journey: &str, steps: &[StepRecord]| {
+            let directory = root.join(format!("{journey}-1"));
+            std::fs::create_dir_all(&directory).unwrap();
+            let value = report(journey, 1, &directory, platform(), steps);
+            std::fs::write(directory.join("result.json"), serde_json::to_vec(&value).unwrap()).unwrap();
+        };
+        write(
+            "plain_text",
+            &[step("s1", StepStatus::Pass), step("s2", StepStatus::Pass)],
+        );
+        write(
+            "udl",
+            &[step(
+                "s1",
+                StepStatus::Fail(Failure::harness("python fixture unavailable")),
+            )],
+        );
+        write(
+            "workspace",
+            &[
+                step(
+                    "s1",
+                    StepStatus::Fail(Failure::not_wired(Service::Dialogs, "no folder chooser")),
+                ),
+                step("s2", StepStatus::NotRun("Prerequisite step failed".into())),
+            ],
+        );
+        let script = "import json, pathlib, sys\nsys.path.insert(0, sys.argv[1])\nimport journey_matrix\n\
+                      root = pathlib.Path(sys.argv[2])\n\
+                      print(json.dumps({d.name: journey_matrix.attempt_status(d) for d in sorted(root.iterdir())}))";
+        let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-c", script])
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/e2e"))
+            .arg(&root)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let scored: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(scored["plain_text-1"], serde_json::json!(["PASS", "", null]));
+        assert_eq!(scored["udl-1"][0], "FAIL");
+        assert_eq!(scored["udl-1"][2], "harness");
+        assert_eq!(scored["workspace-1"][0], "FAIL");
+        // The matrix has no service class; the step's text still names it.
+        assert_eq!(
+            scored["workspace-1"][1],
+            "s1: service not wired (dialogs): no folder chooser"
+        );
     }
 }

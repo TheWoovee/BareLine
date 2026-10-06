@@ -3,21 +3,43 @@
 //! hosted runner. tests/e2e/macos_desktop.py reads the Quartz window list and
 //! posts keyboard events to the editor's process (CGEventPostToPid, which
 //! needs the Accessibility permission but no keyboard focus); `screencapture
-//! -l` captures one window and `sips` converts it to BMP for the pixel checks.
+//! -l` captures one window (the Screen Recording permission) and `sips`
+//! converts it to BMP for the pixel checks; System Events brings the editor to
+//! the front when the Automation permission allows it. Every tool runs with a
+//! deadline, so a permission prompt nobody answers ends as a timeout.
 //! Nothing here has run on a Mac yet: the first macos-latest run qualifies it.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+use std::time::Duration;
 
 use super::Image;
-use super::ordinary::{Desktop, Window};
+use super::ordinary::{Desktop, Window, output_within};
 use super::steps::Failure;
 
+/// The window list and event posting answer at once.
+const HELPER_DEADLINE: Duration = Duration::from_secs(20);
+const TOOL_DEADLINE: Duration = Duration::from_secs(30);
+/// An Automation prompt nobody answers blocks osascript for about 120 s.
+const AUTOMATION_DEADLINE: Duration = Duration::from_secs(15);
+/// The shell's key handling. While it reads the keymap's `Ctrl` from the
+/// Control key, the neutral `Primary` is posted as Control; once the Command
+/// mapping of crates/platform-macos (keys.rs) is wired in, this phrase is gone
+/// and `Primary` is Command, the macOS convention.
+const SHELL_KEYS: &str = "apps/bareline/src/shell/settings.rs";
+const CONTROL_IS_PRIMARY: &str = "ctrl: modifiers.control_key(),";
+
 pub(super) fn desktop() -> Result<Box<dyn Desktop>, Failure> {
-    let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/e2e/macos_desktop.py");
-    let desktop = Quartz {
-        helper,
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let (primary, primary_source) = primary_modifier(&root);
+    let mut desktop = Quartz {
+        helper: root.join("tests/e2e/macos_desktop.py"),
         scratch: std::env::temp_dir().join(format!("bareline-journey-capture-{}", std::process::id())),
+        primary,
+        primary_source,
+        automation: Ok(()),
+        focus_refused: Cell::new(false),
     };
     std::fs::create_dir_all(&desktop.scratch).map_err(|error| Failure::harness(error.to_string()))?;
     let trusted = desktop.helper(&["trusted"])?;
@@ -27,29 +49,88 @@ pub(super) fn desktop() -> Result<Box<dyn Desktop>, Failure> {
              (System Settings > Privacy & Security > Accessibility); AXIsProcessTrusted is false",
         ));
     }
+    let capture = desktop.helper(&["capture-allowed"])?;
+    if String::from_utf8_lossy(&capture.stdout).trim() != "true" {
+        return Err(Failure::environment(
+            "Window captures and titles need the Screen Recording permission for the runner process \
+             (System Settings > Privacy & Security > Screen Recording); CGPreflightScreenCaptureAccess is false",
+        ));
+    }
+    // Ask once: without the Automation permission focus is skipped (events
+    // still reach the editor's process) instead of waiting at every launch.
+    desktop.automation = desktop
+        .osascript("tell application \"System Events\" to count processes")
+        .map(|_| ());
     Ok(Box::new(desktop))
+}
+
+/// `("control" | "command", why)`; BARELINE_QA_MAC_PRIMARY overrides the probe.
+fn primary_modifier(root: &Path) -> (&'static str, String) {
+    match std::env::var("BARELINE_QA_MAC_PRIMARY").as_deref() {
+        Ok("command") => ("command", "BARELINE_QA_MAC_PRIMARY=command".into()),
+        Ok("control") => ("control", "BARELINE_QA_MAC_PRIMARY=control".into()),
+        _ => match std::fs::read_to_string(root.join(SHELL_KEYS)) {
+            Ok(source) if source.contains(CONTROL_IS_PRIMARY) => (
+                "control",
+                format!("{SHELL_KEYS} reads the keymap's Ctrl from the Control key (Command mapping not wired)"),
+            ),
+            Ok(_) => (
+                "command",
+                format!("{SHELL_KEYS} no longer reads Ctrl from the Control key"),
+            ),
+            Err(error) => (
+                "command",
+                format!("{SHELL_KEYS} unreadable ({error}); macOS convention"),
+            ),
+        },
+    }
 }
 
 struct Quartz {
     helper: PathBuf,
     scratch: PathBuf,
+    /// The modifier `Primary` is posted with, and why.
+    primary: &'static str,
+    primary_source: String,
+    /// Whether System Events answered this process (the Automation permission).
+    automation: Result<(), Failure>,
+    /// A focus request was refused once; later ones are skipped.
+    focus_refused: Cell<bool>,
 }
 
 impl Quartz {
     fn helper(&self, arguments: &[&str]) -> Result<Output, Failure> {
         let python = std::env::var_os("BARELINE_QA_PYTHON").unwrap_or_else(|| "python3".into());
-        let output = Command::new(python)
-            .arg(&self.helper)
-            .args(arguments)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| Failure::environment(format!("python3 is not available: {error}")))?;
+        let output = output_within(
+            Command::new(python)
+                .arg(&self.helper)
+                .args(arguments)
+                .env("BARELINE_QA_MAC_PRIMARY", self.primary),
+            "macOS desktop helper",
+            HELPER_DEADLINE,
+        )?;
         if output.status.success() {
             Ok(output)
         } else {
             Err(Failure::environment(format!(
                 "macOS desktop helper {}: {}",
                 arguments.first().copied().unwrap_or(""),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+    }
+
+    fn osascript(&self, script: &str) -> Result<Output, Failure> {
+        let output = output_within(
+            Command::new("osascript").args(["-e", script]),
+            "osascript",
+            AUTOMATION_DEADLINE,
+        )?;
+        if output.status.success() {
+            Ok(output)
+        } else {
+            Err(Failure::environment(format!(
+                "System Events refused (Automation permission): {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )))
         }
@@ -82,11 +163,11 @@ impl Quartz {
     }
 
     fn tool(&self, arguments: &[&str]) -> Result<(), Failure> {
-        let output = Command::new(arguments[0])
-            .args(&arguments[1..])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| Failure::environment(format!("{} is not available: {error}", arguments[0])))?;
+        let output = output_within(
+            Command::new(arguments[0]).args(&arguments[1..]),
+            arguments[0],
+            TOOL_DEADLINE,
+        )?;
         if output.status.success() {
             Ok(())
         } else {
@@ -150,6 +231,12 @@ impl Desktop for Quartz {
             "kind": "quartz",
             "helper": self.helper,
             "input": "CGEventPostToPid through tests/e2e/macos_desktop.py",
+            "primary_modifier": self.primary,
+            "primary_modifier_source": self.primary_source,
+            "automation": match &self.automation {
+                Ok(()) => "System Events answered".to_owned(),
+                Err(failure) => format!("{}: {}", failure.class.name(), failure.detail),
+            },
             "capture": "screencapture -l, sips",
         })
     }
@@ -164,17 +251,18 @@ impl Desktop for Quartz {
 
     fn focus(&self, window: &Window) -> Result<(), Failure> {
         // Events are posted to the process, so focus only keeps the window in
-        // front for the captures; a refusal (no Automation permission) is fine.
+        // front for the captures. Without the Automation permission, or after
+        // one refusal, it is skipped rather than waiting on System Events.
+        if self.automation.is_err() || self.focus_refused.get() {
+            return Ok(());
+        }
         let script = format!(
             "tell application \"System Events\" to set frontmost of (first process whose unix id is {}) to true",
             Self::pid(window)?
         );
-        let _ = Command::new("osascript")
-            .args(["-e", &script])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        if self.osascript(&script).is_err() {
+            self.focus_refused.set(true);
+        }
         Ok(())
     }
 
@@ -242,5 +330,24 @@ mod tests {
             }
         }
         assert!(parse_bmp(b"BMtruncated").is_err());
+    }
+
+    #[test]
+    fn primary_is_control_while_the_shell_reads_ctrl_from_the_control_key() {
+        let root = std::env::temp_dir().join(format!("bareline-journey-primary-{}", std::process::id()));
+        let keys = root.join(SHELL_KEYS);
+        std::fs::create_dir_all(keys.parent().unwrap()).unwrap();
+        std::fs::write(&keys, "KeyPress { ctrl: modifiers.control_key(), shift }").unwrap();
+        let unwired = primary_modifier(&root);
+        std::fs::write(&keys, "KeyPress { ctrl: primary_key(modifiers), shift }").unwrap();
+        let wired = primary_modifier(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        if std::env::var_os("BARELINE_QA_MAC_PRIMARY").is_none() {
+            assert_eq!(unwired.0, "control");
+            assert_eq!(wired.0, "command");
+        }
+        // The probe reads a file that exists in this checkout.
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(SHELL_KEYS);
+        assert!(checkout.is_file(), "{} moved; update SHELL_KEYS", checkout.display());
     }
 }

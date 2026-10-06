@@ -155,13 +155,13 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 String::new()
             };
-            eprintln!("journey {} â€” {} â€¦{label}", journey.name, journey.summary);
+            eprintln!("journey {} — {} …{label}", journey.name, journey.summary);
             let outcome = (journey.run)(&env);
             if let Some(report) = env.report.borrow_mut().take() {
                 // A step journey reports every step and its own classification.
                 let line = steps::outcome_line(&report);
                 println!("{line}");
-                if report["status"] == "failed" {
+                if report["outcome"] == "failed" {
                     failures.push(journey.name);
                 }
                 results.push(report);
@@ -172,7 +172,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         results.push(serde_json::json!({"name": journey.name, "status": "passed"}));
                     }
                     Err(reason) => {
-                        println!("FAIL {} â€” {reason}", journey.name);
+                        println!("FAIL {} — {reason}", journey.name);
                         failures.push(journey.name);
                         results.push(serde_json::json!({
                             "name": journey.name,
@@ -187,7 +187,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let passed = results.iter().filter(|result| result["status"] == "passed").count();
+    let passed = results
+        .iter()
+        .filter(|result| top_level_status(result) == "passed")
+        .count();
     eprintln!(
         "journey: top_level_passed={passed} top_level_failed={} top_level_total={total}",
         failures.len(),
@@ -216,7 +219,8 @@ fn run_identity(
     let (head, working_tree_dirty, source_manifest_sha256, source_identity_error) = match source_identity(root) {
         Ok((head, dirty, manifest)) => (head, Some(dirty), Some(manifest), None),
         // A copy of the sources without git metadata (the WSL helper syncs the
-        // worktree without .git) can still name the commit it was taken from.
+        // worktree without .git) can still name the commit it was taken from;
+        // the identity then says the name was not checked.
         Err(error) => match commit {
             Some(commit) => (commit.to_owned(), None, None, Some(error.to_string())),
             None => return Err(error),
@@ -234,6 +238,7 @@ fn run_identity(
     });
     if let Some(error) = source_identity_error {
         identity["source_identity_error"] = serde_json::json!(error);
+        identity["commit_unverified"] = serde_json::json!(true);
     }
     if let Some(commit) = commit
         && commit != head
@@ -314,6 +319,7 @@ fn classify_failure(reason: &str) -> &'static str {
     } else if reason.contains("access is denied") || reason.contains("blocked environment") {
         "blocked_environment"
     } else if reason.contains("spawn failed")
+        || reason.contains("evidence directory")
         || reason.contains("capture")
         || reason.contains("getwindow")
         || reason.contains("no window")
@@ -326,6 +332,12 @@ fn classify_failure(reason: &str) -> &'static str {
     }
 }
 
+/// `passed`, `failed` or `skipped`: a step journey's report keeps the Windows
+/// runner's `PASS`/`FAIL` in `status` and its own reading in `outcome`.
+fn top_level_status(result: &serde_json::Value) -> &serde_json::Value {
+    result.get("outcome").unwrap_or(&result["status"])
+}
+
 fn persist_run_evidence(
     path: &Path,
     identity: &serde_json::Value,
@@ -335,9 +347,13 @@ fn persist_run_evidence(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let passed = results.iter().filter(|result| result["status"] == "passed").count();
-    let failed = results.iter().filter(|result| result["status"] == "failed").count();
-    let skipped = results.iter().filter(|result| result["status"] == "skipped").count();
+    let count = |status: &str| {
+        results
+            .iter()
+            .filter(|result| top_level_status(result) == status)
+            .count()
+    };
+    let (passed, failed, skipped) = (count("passed"), count("failed"), count("skipped"));
     let document = serde_json::json!({
         "identity": identity,
         "top_level_total": top_level_total,
@@ -573,5 +589,48 @@ mod evidence_tests {
         assert_eq!(evidence["top_level_failed"], 1);
         assert_eq!(evidence["top_level_skipped"], 0);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn step_reports_count_by_outcome_and_a_reused_evidence_folder_is_a_setup_refusal() {
+        let path = std::env::temp_dir().join(format!(
+            "bareline-journey-outcome-{}-{}.json",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let results = [
+            serde_json::json!({"name": "udl", "status": "FAIL", "outcome": "passed"}),
+            serde_json::json!({"name": "workspace", "status": "FAIL", "outcome": "skipped"}),
+            serde_json::json!({"name": "smoke", "status": "failed"}),
+        ];
+        persist_run_evidence(&path, &serde_json::json!({}), 3, &results).unwrap();
+        let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(evidence["top_level_passed"], 1);
+        assert_eq!(evidence["top_level_skipped"], 1);
+        assert_eq!(evidence["top_level_failed"], 1);
+        assert_eq!(
+            classify_failure("evidence directory /out/udl-1 already exists; pass a new --output"),
+            "harness_setup"
+        );
+    }
+
+    #[test]
+    fn a_commit_named_without_git_metadata_is_recorded_as_unverified() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-journey-identity-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let exe = root.join("bareline");
+        std::fs::write(&exe, b"editor").unwrap();
+        let identity = run_identity(&root, &exe, None, Some("0123abcd")).unwrap();
+        assert!(run_identity(&root, &exe, None, None).is_err(), "no git and no --commit");
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(identity["head"], "0123abcd");
+        assert_eq!(identity["commit_unverified"], true);
+        assert_eq!(identity["source_manifest_sha256"], serde_json::Value::Null);
+        assert!(identity["source_identity_error"].is_string());
     }
 }

@@ -11,7 +11,10 @@ class MacDesktopTests(unittest.TestCase):
         self.assertEqual(macos_desktop.chord("Alt+Shift+Down"), (125, 0x80000 | 0x20000))
         self.assertEqual(macos_desktop.chord("Return"), (36, 0))
         self.assertEqual(macos_desktop.chord("Primary+End"), (119, 0x100000))
-        for bad in ("Hyper+S", "Primary+Insert", "F13"):
+        # While the shell reads Ctrl from the Control key, Primary is Control.
+        self.assertEqual(macos_desktop.chord("Primary+Shift+P", "control"), (35, 0x40000 | 0x20000))
+        self.assertEqual(macos_desktop.chord("Primary+S", "command"), (1, 0x100000))
+        for bad in ("Hyper+S", "Primary+Insert", "F13", "Control+F13"):
             with self.subTest(chord=bad), self.assertRaises(ValueError):
                 macos_desktop.chord(bad)
 

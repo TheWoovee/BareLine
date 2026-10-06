@@ -286,13 +286,25 @@ gh run download <run-id> --name port-smoke-macos --dir port-smoke/macos
 
 When `packaging/macos/bundle.sh` exists, the macOS job also uploads the `.app` zip and `.dmg` as `port-smoke-macos-bundle`.
 
-**Journeys workflow.** [`port-journeys.yml`](.github/workflows/port-journeys.yml) runs the 11 ordinary journeys of `tests/e2e/journeys.json` on the same triggers, under Xvfb on `ubuntu-latest` and in the GUI session of `macos-latest`, with an `attempts` input on manual dispatch. `cargo xtask journey <name|ordinary>` drives the release editor: xdotool and ImageMagick on X11, Quartz events and `screencapture` on macOS. Where the Windows procedure reads text through UI Automation, the Linux one checks the bytes the editor saves, the tab's modified marker and visible changes, and lists the reads it could not make. Each step passes, fails with a class (`service_not_wired` names the service the shell has not wired yet), or is skipped with a reason; the summary job collects the failing steps per platform. Locally, from a Linux checkout with a release build:
+**Journeys workflow.** [`port-journeys.yml`](.github/workflows/port-journeys.yml) runs the 11 ordinary journeys of `tests/e2e/journeys.json` on the same triggers, under Xvfb on `ubuntu-latest` and in the GUI session of `macos-latest`, with an `attempts` input on manual dispatch. `cargo xtask journey <name|ordinary>` drives the release editor: xdotool and ImageMagick on X11, Quartz events and `screencapture` on macOS. Where the Windows procedure reads text through UI Automation, the Linux one checks the bytes the editor saves, the tab's modified marker and visible changes, and lists the reads it could not make. Each step passes, fails with a class (`service_not_wired` names the service the shell has not wired yet), or is skipped with a reason; the summary job collects the failing steps per platform. Locally, from a Linux checkout with a release build (each run writes to its own timestamped folder, so the same command can be repeated, for example after a service is wired):
 
 ```bash
-env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' cargo run -p xtask -- journey ordinary --executable=target/release/bareline --output=target/port-journeys --no-fail
+env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' cargo run -p xtask -- journey ordinary --executable=target/release/bareline --output=target/port-journeys/$(date -u +%Y%m%dT%H%M%SZ) --no-fail
 ```
 
-The macOS run needs the Accessibility permission for the runner's Python (synthetic input); without it every journey fails with the `environment` class.
+The runner never reuses an existing `<journey>-<attempt>` folder: pointing `--output` at an earlier run's folder fails each journey as a `harness_setup` refusal. A passing journey that did not exercise part of its feature (for example the Replace in Files preview, which needs the folder chooser) is reported as `pass, reduced coverage`, and the missing part is listed under the summary table.
+
+The macOS run needs three privacy permissions for the process that runs the journeys (on a hosted runner, the runner's shell and its Python; locally, the terminal):
+
+| Permission | Used for | When it is missing |
+| --- | --- | --- |
+| Accessibility | posting keystrokes to the editor (`CGEventPostToPid`) | every journey fails its first step with the `environment` class (`AXIsProcessTrusted is false`) |
+| Screen Recording | `screencapture -l` window captures and window titles | every journey fails its first step with the `environment` class (`CGPreflightScreenCaptureAccess is false`) |
+| Automation (System Events) | bringing the editor to the front | not fatal: the first refusal or unanswered prompt (15 s) is recorded under `platform.desktop.automation` and later focus requests are skipped; keystrokes still go to the editor's process |
+
+Every macOS tool call has a deadline, so a permission prompt nobody answers ends as a `timeout` instead of a hang. The shell still reads its keymap's `Ctrl` from the Control key (the Command mapping in `crates/platform-macos` is not wired yet), so the harness posts the neutral `Primary` as Control. It switches to Command by itself once `apps/bareline/src/shell/settings.rs` stops reading `control_key()` for `Ctrl`; `BARELINE_QA_MAC_PRIMARY=command|control` overrides the choice, which is recorded under `platform.desktop.primary_modifier`.
+
+Each attempt's `result.json` keeps the Windows runner's fields (`journey`, `status` that is `PASS` only when every step passed, `error` for a failure outside the product, and `steps` with `id`, `status` and `observed`), so `tests/e2e/journey_matrix.py` scores it as it scores Windows attempts. The port's own reading is in `outcome` (`passed`, `failed` or `skipped`), each step's `class` and `service`, and the gaps.
 
 ## Repository layout
 

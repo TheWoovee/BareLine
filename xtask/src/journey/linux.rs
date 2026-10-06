@@ -5,11 +5,11 @@
 //! with WAYLAND_DISPLAY unset, so winit uses X11 where these tools see it.
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use super::Image;
-use super::ordinary::{Desktop, Window};
+use super::ordinary::{Desktop, Window, output_within};
 use super::steps::Failure;
 
 const TOOL_DEADLINE: Duration = Duration::from_secs(20);
@@ -39,29 +39,11 @@ struct X11;
 impl X11 {
     /// Run a tool with a deadline; a missing tool is an environment failure.
     fn tool(&self, arguments: &[&str]) -> Result<Output, Failure> {
-        let child = Command::new(arguments[0])
-            .args(&arguments[1..])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| Failure::environment(format!("{} is not available: {error}", arguments[0])))?;
-        let pid = child.id();
-        // Drain the pipes on a thread: a capture writes megabytes to stdout.
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = sender.send(child.wait_with_output());
-        });
-        match receiver.recv_timeout(TOOL_DEADLINE) {
-            Ok(output) => output.map_err(|error| Failure::harness(format!("{}: {error}", arguments[0]))),
-            Err(_) => {
-                let _ = Command::new("kill")
-                    .args(["-KILL", &pid.to_string()])
-                    .stderr(Stdio::null())
-                    .status();
-                Err(Failure::timeout(format!("{} did not answer within 20 s", arguments[0])))
-            }
-        }
+        output_within(
+            Command::new(arguments[0]).args(&arguments[1..]),
+            arguments[0],
+            TOOL_DEADLINE,
+        )
     }
 
     fn checked(&self, arguments: &[&str]) -> Result<String, Failure> {
