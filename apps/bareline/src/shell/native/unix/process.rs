@@ -55,7 +55,10 @@ pub mod alive {
         id == std::process::id() || !matches!(process::start(id), Ok(None | Some(Start::Exited)))
     }
     /// Start time of the running process with this id, in Unix nanoseconds by
-    /// the system clock; `None` when it is gone or cannot be queried.
+    /// the system clock; `None` when it is gone or cannot be queried. On Linux
+    /// a wall-clock step after the owner started moves this value (see
+    /// `bareline_platform_posix::process::started_unix_nanos`), so a large
+    /// forward step can make a live owner look newer than its journal.
     pub fn started(id: u32) -> Option<u128> {
         process::started_unix_nanos(id).ok().flatten()
     }

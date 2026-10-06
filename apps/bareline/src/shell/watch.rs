@@ -1596,8 +1596,8 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
-    /// UNC prefixes exist only in Windows paths; elsewhere a share is a mount
-    /// with an ordinary path, which the capability report classifies instead.
+    /// UNC prefixes exist only in Windows paths. Elsewhere a share is a mount with an ordinary
+    /// path that nothing classifies yet (follow-up: `FileSystem.report` storage == Network).
     #[test]
     fn network_path_classification_is_lexical() {
         if cfg!(windows) {

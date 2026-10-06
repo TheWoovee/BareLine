@@ -58,6 +58,15 @@ pub fn start(pid: u32) -> io::Result<Option<Start>> {
 /// When the running process with this id started, in nanoseconds since the
 /// Unix epoch by the system clock, so it compares with times the clock wrote
 /// elsewhere (journal names). `None` when no running process has the id.
+///
+/// Limitation on Linux: the value is the boot time (`btime` in `/proc/stat`,
+/// itself derived from the current wall clock) plus the start ticks, so a
+/// wall-clock step after the process started (an NTP correction, or a VM or
+/// WSL2 host resuming from sleep) moves it by the same amount. A forward step
+/// of more than the callers' one-second tolerance makes a live owner look
+/// younger than a journal it named. Windows and macOS record a fixed creation
+/// time. Follow-up: compare boot-relative stamps ([`start`]) recorded with the
+/// journal instead of wall-clock times.
 pub fn started_unix_nanos(pid: u32) -> io::Result<Option<u128>> {
     platform::started_unix_nanos(pid)
 }
@@ -102,8 +111,10 @@ pub fn monotonic_nanos() -> Option<u128> {
 mod platform {
     //! `/proc/<pid>/stat` field 22 is the start time in clock ticks since boot.
     //! Stamps combine it with a hash of this boot's id, so a record from an
-    //! earlier boot never matches; wall-clock adjustments do not move either
-    //! value. Wall-clock start times add the boot time from `/proc/stat`.
+    //! earlier boot never matches; wall-clock adjustments do not move stamps.
+    //! Wall-clock start times add the boot time from `/proc/stat`, which the
+    //! kernel derives from the current wall clock, so a clock step does move
+    //! them (see [`super::started_unix_nanos`]).
     use super::Start;
     use std::io;
 
