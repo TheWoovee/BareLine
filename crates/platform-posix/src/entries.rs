@@ -17,7 +17,7 @@ use std::{
 
 /// The pinned parent of `path` and its final name. Every ancestor is opened
 /// without following links, so a linked folder on the way is refused.
-fn parent<'a>(fs: &dyn LocalFileSystem, path: &'a Path) -> io::Result<(DirectoryGuard, &'a OsStr)> {
+pub(crate) fn parent<'a>(fs: &dyn LocalFileSystem, path: &'a Path) -> io::Result<(DirectoryGuard, &'a OsStr)> {
     if !path.is_absolute()
         || path
             .components()
@@ -50,7 +50,7 @@ pub(crate) fn create(fs: &dyn LocalFileSystem, path: &Path, directory: bool) -> 
     sys::sync_directory(&parent.directory)
 }
 
-fn unlinked_entry(parent: &DirectoryGuard, name: &OsStr) -> io::Result<FileType> {
+pub(crate) fn unlinked_entry(parent: &DirectoryGuard, name: &OsStr) -> io::Result<FileType> {
     let kind = sys::stat_name(parent, name)?.kind;
     if kind == FileType::Symlink {
         return Err(denied("linked entries require separate authorization"));

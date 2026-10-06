@@ -9,12 +9,30 @@
 //! `files/<name>`, so file managers can list and restore it. macOS moves the
 //! entry into `~/.Trash` under a free name.
 //!
-//! The entry itself moves, never a link's target. A rename keeps it as it was;
-//! from another file system it is copied (links stay links) and the original
-//! is removed only once the copy is complete. Per-volume trash folders
-//! (`$topdir/.Trash-$uid`, `/Volumes/<name>/.Trashes`) are not used yet.
-use crate::{paths::Layout, sys};
-use rustix::io::Errno;
+//! The entry is checked under the explorer policy that rename and delete use
+//! (`entries`): an absolute normalized path that the file system accepts as a
+//! target, every ancestor opened without following links, and an entry that is
+//! not itself a link ("linked entries require separate authorization", as on
+//! Windows). It then moves from that pinned parent folder. A rename keeps it
+//! as it was; from another file system it is copied descriptor by descriptor
+//! (links inside a folder stay links) and the original is removed only once
+//! the copy is complete. Per-volume trash folders (`$topdir/.Trash-$uid`,
+//! `/Volumes/<name>/.Trashes`) are not used yet.
+//!
+//! macOS privacy protection keeps applications without Full Disk Access out of
+//! `~/.Trash`; that refusal is reported in plain words. Moving items through
+//! `NSFileManager` (which also records Put Back) is a follow-up for the macOS
+//! adapter.
+use crate::{
+    entries,
+    paths::Layout,
+    sys::{self, CREATE, DIRECTORY, Node, READ},
+};
+use bareline_platform::LocalFileSystem;
+use rustix::{
+    fs::{AtFlags, FileType, Mode, OFlags},
+    io::Errno,
+};
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
@@ -82,32 +100,37 @@ impl Trash {
         }
     }
 
-    /// Move the entry at `path` (a file, a folder with its contents, or a
-    /// link) into the trash and return its new location.
-    pub fn put(&self, path: &Path) -> io::Result<PathBuf> {
+    /// Move the entry at `path` (a file, or a folder with its contents) into
+    /// the trash and return its new location. `fs` applies the explorer policy
+    /// that rename and delete use: a link entry, a linked folder on the way, a
+    /// path that spells `.` or `..`, or a target `fs` refuses is not moved.
+    pub fn put(&self, fs: &dyn LocalFileSystem, path: &Path) -> io::Result<PathBuf> {
         let invalid = |message: &'static str| io::Error::new(io::ErrorKind::InvalidInput, message);
         if !path.is_absolute() {
             return Err(invalid("only absolute paths can be moved to the trash"));
         }
-        let name = path
-            .file_name()
-            .ok_or_else(|| invalid("this location cannot be moved to the trash"))?;
-        // The entry itself, never a link's target, and it must exist.
-        let entry = fs::symlink_metadata(path)?;
+        if path.file_name().is_none() {
+            return Err(invalid("this location cannot be moved to the trash"));
+        }
         if path.starts_with(&self.root) {
             return Err(invalid("this item is already in the trash"));
         }
         if self.root.starts_with(path) {
             return Err(invalid("the folder that holds the trash cannot be moved to it"));
         }
+        // The pinned parent and an entry that exists and is not a link; nothing
+        // in the trash is touched before these checks pass.
+        let (parent, name) = entries::parent(fs, path)?;
+        entries::unlinked_entry(&parent, name)?;
         let files = self.files();
-        private_folder(&files)?;
+        private_folder(&files).map_err(|error| self.explain(error))?;
         if self.layout == Layout::Xdg {
             private_folder(&self.root.join("info"))?;
         }
-        let (destination, record) = self.reserve(name, path, &files)?;
-        match relocate(path, &destination, entry.is_dir(), true) {
-            Ok(()) => Ok(destination),
+        let target = File::open(&files).map_err(|error| self.explain(error))?;
+        let (candidate, record) = self.reserve(name, path, &files).map_err(|error| self.explain(error))?;
+        match relocate(&parent.directory, name, &target, &candidate, true) {
+            Ok(()) => Ok(files.join(candidate)),
             Err(Relocation::Untouched(error)) => {
                 if let Some(record) = record {
                     let _ = fs::remove_file(record);
@@ -122,18 +145,32 @@ impl Trash {
         }
     }
 
+    /// macOS privacy protection answers EPERM inside `~/.Trash` for
+    /// applications without Full Disk Access; say why instead of the bare code.
+    fn explain(&self, error: io::Error) -> io::Error {
+        if self.layout == Layout::MacOs && sys::is_errno(&error, Errno::PERM) {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "macOS did not let Bareline use the Trash folder. Allow Bareline Full Disk Access in \
+                 System Settings > Privacy & Security, or delete the item in Finder.",
+            )
+        } else {
+            error
+        }
+    }
+
     /// A free name in the trash and, on Linux, the record that reserves it.
-    fn reserve(&self, name: &OsStr, original: &Path, files: &Path) -> io::Result<(PathBuf, Option<PathBuf>)> {
+    fn reserve(&self, name: &OsStr, original: &Path, files: &Path) -> io::Result<(OsString, Option<PathBuf>)> {
         for attempt in 1..=MAX_NAMES {
             let candidate = numbered(name, attempt);
             let destination = files.join(&candidate);
             if self.layout == Layout::MacOs {
                 if !exists(&destination)? {
-                    return Ok((destination, None));
+                    return Ok((candidate, None));
                 }
                 continue;
             }
-            let mut record_name = candidate;
+            let mut record_name = candidate.clone();
             record_name.push(".trashinfo");
             let record = self.root.join("info").join(record_name);
             let mut file = match OpenOptions::new()
@@ -160,7 +197,7 @@ impl Trash {
                 let _ = fs::remove_file(&record);
                 return Err(error);
             }
-            return Ok((destination, Some(record)));
+            return Ok((candidate, Some(record)));
         }
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -169,9 +206,10 @@ impl Trash {
     }
 }
 
-/// Move `path` to the current user's trash; see [`Trash::put`].
-pub fn trash(path: &Path) -> io::Result<PathBuf> {
-    Trash::for_current_user()?.put(path)
+/// Move `path` to the current user's trash under `fs`'s explorer policy; see
+/// [`Trash::put`].
+pub fn trash(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<PathBuf> {
+    Trash::for_current_user()?.put(fs, path)
 }
 
 /// Why an entry did not move.
@@ -182,81 +220,109 @@ enum Relocation {
     OriginalKept(io::Error),
 }
 
-/// Rename `source` onto the free name `destination`, or copy it there when it
-/// is on another file system (or when `rename` is false, which tests use) and
-/// then remove the original.
-fn relocate(source: &Path, destination: &Path, directory: bool, rename: bool) -> Result<(), Relocation> {
+/// Rename the entry `name` of the folder `from` onto the free name `to_name`
+/// in the folder `to`, or copy it there when it is on another file system (or
+/// when `rename` is false, which tests use) and then remove the original. Both
+/// ends are folder descriptors, so the entry that moves is the one checked in
+/// the pinned folder even if a name on the way is replaced meanwhile.
+fn relocate(from: &File, name: &OsStr, to: &File, to_name: &OsStr, rename: bool) -> Result<(), Relocation> {
     if rename {
-        match rename_entry(source, destination) {
-            Ok(()) => return Ok(()),
+        match sys::rename_no_replace(from, name, to, to_name) {
+            Ok(()) => {
+                // The rename has happened; failing to make it durable is not worth undoing it.
+                let _ = sys::sync_directory(from);
+                let _ = sys::sync_directory(to);
+                return Ok(());
+            }
             Err(error) if sys::is_errno(&error, Errno::XDEV) => {}
             Err(error) => return Err(Relocation::Untouched(error)),
         }
     }
-    if let Err(error) = copy_tree(source, destination) {
-        let _ = remove_tree(destination);
+    if let Err(error) = copy_at(from, name, to, to_name) {
+        // An entry already on the name is someone else's; anything else is
+        // this copy's partial work.
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            let _ = remove_at(to, to_name);
+        }
         return Err(Relocation::Untouched(error));
     }
-    let removed = if directory {
-        fs::remove_dir_all(source)
-    } else {
-        fs::remove_file(source)
-    };
-    removed.map_err(Relocation::OriginalKept)
-}
-
-fn rename_entry(source: &Path, destination: &Path) -> io::Result<()> {
-    let (from_parent, from_name) = sys::split(source)?;
-    let (to_parent, to_name) = sys::split(destination)?;
-    let (from, to) = (File::open(from_parent)?, File::open(to_parent)?);
-    sys::rename_no_replace(&from, from_name, &to, to_name)?;
-    // The rename has happened; failing to make it durable is not worth undoing it.
-    let _ = sys::sync_directory(&from);
-    let _ = sys::sync_directory(&to);
+    let _ = sys::sync_directory(to);
+    remove_at(from, name).map_err(Relocation::OriginalKept)?;
+    let _ = sys::sync_directory(from);
     Ok(())
 }
 
-/// Copy an entry without following links: folders recursively, links as links
-/// and regular files with their permissions. Other kinds are refused.
-fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(source)?;
-    let kind = metadata.file_type();
-    if kind.is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(source)?, destination)
-    } else if kind.is_file() {
-        let mut from = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(source)?;
-        let mut to = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(destination)?;
-        io::copy(&mut from, &mut to)?;
-        to.set_permissions(metadata.permissions())?;
-        to.sync_all()
-    } else if kind.is_dir() {
-        fs::DirBuilder::new().mode(0o700).create(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            copy_tree(&entry.path(), &destination.join(entry.file_name()))?;
+/// Copy the entry `name` of `from` to the new name `to_name` in `to` without
+/// following links: folders recursively, links as links and regular files
+/// with their permissions. Other kinds are refused.
+fn copy_at(from: &File, name: &OsStr, to: &File, to_name: &OsStr) -> io::Result<()> {
+    let entry = sys::stat_name(from, name)?;
+    match entry.kind {
+        FileType::Symlink => {
+            let target = rustix::fs::readlinkat(from, name, Vec::new())?;
+            rustix::fs::symlinkat(target.as_c_str(), to, to_name).map_err(io::Error::from)
         }
-        fs::set_permissions(destination, metadata.permissions())
-    } else {
-        Err(io::Error::new(
+        FileType::RegularFile => {
+            let mut source = opened(from, name, READ, entry.node)?;
+            let mut copy = sys::open_at(to, to_name, CREATE)?;
+            io::copy(&mut source, &mut copy)?;
+            copy.set_permissions(source.metadata()?.permissions())?;
+            copy.sync_all()
+        }
+        FileType::Directory => {
+            let source = opened(from, name, DIRECTORY, entry.node)?;
+            rustix::fs::mkdirat(to, to_name, Mode::from_bits_truncate(0o700))?;
+            let copy = sys::open_at(to, to_name, DIRECTORY)?;
+            for child in children(&source)? {
+                copy_at(&source, &child, &copy, &child)?;
+            }
+            copy.set_permissions(source.metadata()?.permissions())?;
+            sys::sync_directory(&copy)
+        }
+        _ => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "special files cannot be moved to the trash from another drive",
-        ))
+        )),
     }
 }
 
-fn remove_tree(path: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(path)?.is_dir() {
-        fs::remove_dir_all(path)
+/// Remove the entry `name` of `directory`, a folder with everything in it,
+/// without following links.
+fn remove_at(directory: &File, name: &OsStr) -> io::Result<()> {
+    let entry = sys::stat_name(directory, name)?;
+    if entry.kind == FileType::Directory {
+        let folder = opened(directory, name, DIRECTORY, entry.node)?;
+        for child in children(&folder)? {
+            remove_at(&folder, &child)?;
+        }
+        rustix::fs::unlinkat(directory, name, AtFlags::REMOVEDIR)?;
     } else {
-        fs::remove_file(path)
+        rustix::fs::unlinkat(directory, name, AtFlags::empty())?;
     }
+    Ok(())
+}
+
+/// The entry `name` of `directory` opened with `flags`, only while it is still
+/// the object `node` that was examined.
+fn opened(directory: &File, name: &OsStr, flags: OFlags, node: Node) -> io::Result<File> {
+    let file = sys::open_at(directory, name, flags).map_err(sys::no_follow)?;
+    if Node::of(&file)? != node {
+        return Err(sys::changed());
+    }
+    Ok(file)
+}
+
+/// The names in a folder, without `.` and `..`.
+fn children(directory: &File) -> io::Result<Vec<OsString>> {
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(directory)? {
+        let entry = entry?;
+        let name = OsStr::from_bytes(entry.file_name().to_bytes());
+        if name != "." && name != ".." {
+            names.push(name.to_os_string());
+        }
+    }
+    Ok(names)
 }
 
 fn exists(path: &Path) -> io::Result<bool> {
@@ -392,12 +458,17 @@ fn recorded_path(record: &[u8]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PosixFileSystem;
     use std::collections::HashMap;
 
     struct Scratch(PathBuf);
     impl Scratch {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("bareline-trash-{name}-{}", std::process::id()));
+            // Canonical: macOS reaches the temporary folder through the /var
+            // link, and the explorer policy refuses linked folders on the way.
+            let root = fs::canonicalize(std::env::temp_dir())
+                .unwrap()
+                .join(format!("bareline-trash-{name}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&root);
             fs::create_dir_all(root.join("work")).unwrap();
             Self(root)
@@ -407,6 +478,9 @@ mod tests {
         }
         fn trash(&self, layout: Layout) -> Trash {
             Trash::at(self.0.join("Trash"), layout)
+        }
+        fn folder(&self, path: &Path) -> File {
+            File::open(path).unwrap()
         }
     }
     impl Drop for Scratch {
@@ -421,7 +495,7 @@ mod tests {
         let trash = scratch.trash(Layout::Xdg);
         let original = scratch.work().join("notes.txt");
         fs::write(&original, "keep me").unwrap();
-        let trashed = trash.put(&original).unwrap();
+        let trashed = trash.put(&PosixFileSystem, &original).unwrap();
         assert_eq!(trashed, trash.root().join("files/notes.txt"));
         assert!(!original.exists());
         assert_eq!(fs::read_to_string(&trashed).unwrap(), "keep me");
@@ -445,7 +519,7 @@ mod tests {
         let original = scratch.work().join("notes.txt");
         for (expected, contents) in [("notes.txt", "one"), ("notes.2.txt", "two"), ("notes.3.txt", "three")] {
             fs::write(&original, contents).unwrap();
-            let trashed = trash.put(&original).unwrap();
+            let trashed = trash.put(&PosixFileSystem, &original).unwrap();
             assert_eq!(trashed, trash.root().join("files").join(expected));
             assert_eq!(fs::read_to_string(trashed).unwrap(), contents);
             assert!(trash.root().join(format!("info/{expected}.trashinfo")).is_file());
@@ -455,23 +529,39 @@ mod tests {
         // A stray entry without a record also keeps its name.
         fs::write(trash.root().join("files/stray"), "").unwrap();
         fs::write(scratch.work().join("stray"), "new").unwrap();
-        let trashed = trash.put(&scratch.work().join("stray")).unwrap();
+        let trashed = trash.put(&PosixFileSystem, &scratch.work().join("stray")).unwrap();
         assert_eq!(trashed, trash.root().join("files/stray.2"));
         assert!(!trash.root().join("info/stray.trashinfo").exists());
     }
 
     #[test]
-    fn links_move_as_links_and_their_targets_stay() {
+    fn linked_entries_linked_folders_and_parent_steps_are_refused_as_for_rename() {
         let scratch = Scratch::new("link");
         let trash = scratch.trash(Layout::Xdg);
-        let target = scratch.work().join("target.txt");
+        let real = scratch.work().join("real");
+        fs::create_dir_all(&real).unwrap();
+        let target = real.join("target.txt");
         fs::write(&target, "target").unwrap();
         let link = scratch.work().join("link.txt");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let trashed = trash.put(&link).unwrap();
-        assert!(fs::symlink_metadata(&trashed).unwrap().file_type().is_symlink());
+        let via = scratch.work().join("via");
+        std::os::unix::fs::symlink(&real, &via).unwrap();
+        let refused = |path: &Path| trash.put(&PosixFileSystem, path).unwrap_err();
+        // The link entry itself needs separate authorization, as on Windows.
+        assert_eq!(refused(&link).kind(), io::ErrorKind::PermissionDenied);
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        // A file reached through a linked folder is not moved either.
+        let through = refused(&via.join("target.txt")).kind();
+        assert!(
+            matches!(through, io::ErrorKind::PermissionDenied | io::ErrorKind::NotADirectory),
+            "{through:?}"
+        );
+        // Parent steps are refused before anything is resolved.
+        let stepped = real.join("..").join("real").join("target.txt");
+        assert_eq!(refused(&stepped).kind(), io::ErrorKind::InvalidInput);
         assert_eq!(fs::read_to_string(&target).unwrap(), "target");
-        assert!(fs::symlink_metadata(&link).is_err());
+        // The trash was not even created.
+        assert!(!trash.root().exists());
     }
 
     #[test]
@@ -487,7 +577,8 @@ mod tests {
         std::os::unix::fs::symlink(&outside, folder.join("link")).unwrap();
         let destination = scratch.0.join("copied");
         // Forced copy: the path a rename across file systems takes.
-        assert!(relocate(&folder, &destination, true, false).is_ok());
+        let (from, to) = (scratch.folder(&scratch.work()), scratch.folder(&scratch.0));
+        assert!(relocate(&from, OsStr::new("folder"), &to, OsStr::new("copied"), false).is_ok());
         assert!(!folder.exists());
         assert_eq!(fs::read(destination.join("nested/data.bin")).unwrap(), [0, 1, 2]);
         let mode = fs::metadata(destination.join("nested/data.bin"))
@@ -514,7 +605,8 @@ mod tests {
             .unwrap();
         assert!(made.success());
         let destination = scratch.0.join("copied");
-        match relocate(&folder, &destination, true, false) {
+        let (from, to) = (scratch.folder(&scratch.work()), scratch.folder(&scratch.0));
+        match relocate(&from, OsStr::new("folder"), &to, OsStr::new("copied"), false) {
             Err(Relocation::Untouched(error)) => assert_eq!(error.kind(), io::ErrorKind::Unsupported),
             _ => panic!("the copy must fail before the original is touched"),
         }
@@ -529,9 +621,15 @@ mod tests {
         let folder = scratch.work().join("Project");
         fs::create_dir_all(folder.join("src")).unwrap();
         fs::write(folder.join("src/main.rs"), "fn main() {}").unwrap();
-        assert_eq!(trash.put(&folder).unwrap(), trash.root().join("Project"));
+        assert_eq!(
+            trash.put(&PosixFileSystem, &folder).unwrap(),
+            trash.root().join("Project")
+        );
         fs::create_dir_all(&folder).unwrap();
-        assert_eq!(trash.put(&folder).unwrap(), trash.root().join("Project.2"));
+        assert_eq!(
+            trash.put(&PosixFileSystem, &folder).unwrap(),
+            trash.root().join("Project.2")
+        );
         assert!(trash.root().join("Project/src/main.rs").is_file());
         assert!(!trash.root().join("info").exists());
     }
@@ -540,7 +638,7 @@ mod tests {
     fn invalid_or_missing_entries_and_the_trash_itself_are_refused() {
         let scratch = Scratch::new("refused");
         let trash = scratch.trash(Layout::Xdg);
-        let kind = |path: &Path| trash.put(path).unwrap_err().kind();
+        let kind = |path: &Path| trash.put(&PosixFileSystem, path).unwrap_err().kind();
         assert_eq!(kind(Path::new("relative.txt")), io::ErrorKind::InvalidInput);
         assert_eq!(kind(Path::new("/")), io::ErrorKind::InvalidInput);
         assert_eq!(kind(&scratch.work().join("missing.txt")), io::ErrorKind::NotFound);
@@ -549,6 +647,17 @@ mod tests {
         assert_eq!(kind(&trash.root().join("files/old.txt")), io::ErrorKind::InvalidInput);
         assert_eq!(kind(&scratch.0), io::ErrorKind::InvalidInput);
         assert!(scratch.0.exists());
+    }
+
+    #[test]
+    fn a_macos_privacy_refusal_is_explained_in_plain_words() {
+        let denied = || io::Error::from_raw_os_error(Errno::PERM.raw_os_error());
+        let explained = Trash::at(PathBuf::from("/Users/ada/.Trash"), Layout::MacOs).explain(denied());
+        assert_eq!(explained.kind(), io::ErrorKind::PermissionDenied);
+        assert!(explained.to_string().contains("Full Disk Access"));
+        // Linux keeps the system's own error.
+        let kept = Trash::at(PathBuf::from("/home/ada/.local/share/Trash"), Layout::Xdg).explain(denied());
+        assert_eq!(kept.raw_os_error(), Some(Errno::PERM.raw_os_error()));
     }
 
     #[test]

@@ -17,10 +17,12 @@ pub use bareline_platform_posix::{
 };
 
 /// Moves a file or folder to the user's trash, where file managers can restore
-/// it (the freedesktop.org trash on Linux, `~/.Trash` on macOS). A link moves
-/// as itself; its target stays.
-pub fn recycle_entry(_fs: &dyn LocalFileSystem, path: &Path, _owner: RawWindow) -> io::Result<()> {
-    bareline_platform_posix::trash::trash(path).map(|_| ())
+/// it (the freedesktop.org trash on Linux, `~/.Trash` on macOS). The explorer
+/// policy of rename and delete applies first, as on Windows: an absolute
+/// normalized path, `fs.validate_target`, no linked folder on the way and no
+/// link as the entry ("linked entries require separate authorization").
+pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path, _owner: RawWindow) -> io::Result<()> {
+    bareline_platform_posix::trash::trash(fs, path).map(|_| ())
 }
 
 #[cfg(test)]
@@ -77,5 +79,45 @@ mod tests {
             recycle_entry(&fs, &missing, 0).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn recycling_refuses_what_rename_refuses_before_the_trash_is_touched() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let fs = FileSystem;
+        let scratch = Scratch::new("recycle-policy");
+        let folder = scratch.0.join("real");
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("notes.txt");
+        std::fs::write(&file, "text").unwrap();
+        let link = scratch.0.join("link.txt");
+        symlink(&file, &link).unwrap();
+        let linked_folder = scratch.0.join("via");
+        symlink(&folder, &linked_folder).unwrap();
+        let read_only = folder.join("read-only.txt");
+        std::fs::write(&read_only, "kept").unwrap();
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let stepped = folder.join("..").join("real").join("notes.txt");
+        // Each refusal comes from the explorer policy before anything in the
+        // user's trash is created or moved, so this test never changes it.
+        // The linked folder fails its no-follow open (a refusal, or "not a
+        // folder" where the system reports the link that way).
+        let linked = [io::ErrorKind::PermissionDenied, io::ErrorKind::NotADirectory];
+        let denied = [io::ErrorKind::PermissionDenied];
+        let invalid = [io::ErrorKind::InvalidInput];
+        for (path, kinds) in [
+            (&link, &denied[..]),
+            (&linked_folder.join("notes.txt"), &linked[..]),
+            (&read_only, &denied[..]),
+            (&stepped, &invalid[..]),
+        ] {
+            let recycled = recycle_entry(&fs, path, 0).unwrap_err();
+            assert!(kinds.contains(&recycled.kind()), "{}: {recycled}", path.display());
+            let renamed = fs.rename_entry(path, &scratch.0.join("renamed.txt")).unwrap_err();
+            assert_eq!(renamed.kind(), recycled.kind(), "{}: {renamed}", path.display());
+        }
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "text");
+        assert_eq!(std::fs::read_to_string(&read_only).unwrap(), "kept");
     }
 }
