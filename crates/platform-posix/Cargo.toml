@@ -10,7 +10,11 @@ bareline-platform = { path = "../platform" }
 
 # The crate is an empty unit off Unix; the system bindings are Unix-only.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.4", features = ["fs", "process"] }
+rustix = { version = "=1.1.4", features = ["event", "fs", "net", "process"] }
+sha2 = "=0.10.9"
+bareline-distribution = { path = "../distribution" }
+bareline-extensions-protocol = { path = "../extensions-protocol" }
+bareline-macros = { path = "../macros" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"

@@ -10,6 +10,17 @@ bareline-platform = { path = "../platform" }
 # Empty off Unix; the Linux and macOS adapters share its filesystem services.
 bareline-platform-posix = { path = "../platform-posix" }
 
+# PR-031 services. All pure Rust: x11rb speaks the X11 protocol itself,
+# wl-clipboard-rs the Wayland one, zbus D-Bus (for the desktop portal).
+[target.'cfg(target_os = "linux")'.dependencies]
+bareline-extensions-protocol = { path = "../extensions-protocol" }
+bareline-macros = { path = "../macros" }
+libc = "=0.2.189"
+rustix = { version = "=1.1.4", features = ["event", "fs", "process", "thread"] }
+wl-clipboard-rs = { version = "=0.9.4", default-features = false }
+x11rb = { version = "=0.13.2", default-features = false }
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+
 [dev-dependencies]
 winit.workspace = true
 bareline-renderer = { path = "../renderer" }
