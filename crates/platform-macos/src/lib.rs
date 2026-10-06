@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Compile-complete unsupported native adapter; this is not a product port.
 use bareline_platform::{Capability, PlatformReadiness, PlatformServices, Unsupported};
+/// Filesystem, path trust, capability and data-folder services (PR-030) are
+/// real; the rest of this adapter still reports Unsupported.
+#[cfg(unix)]
+pub use bareline_platform_posix::{
+    DirectoryGuard, PosixFileSystem, PosixFilesystemCapability, PosixPathTrustProvider, PosixSessionPathTrustProvider,
+    paths,
+};
 use std::path::PathBuf;
 #[derive(Default)]
 pub struct NativePlatform;
