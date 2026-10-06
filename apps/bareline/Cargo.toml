@@ -47,8 +47,10 @@ windows = { workspace = true, features = [
 ] }
 
 [target.'cfg(not(windows))'.dependencies]
-# Stand-in renderer until the portable software renderer lands (PR-029).
-bareline-renderer-recording = { path = "../../crates/renderer-recording" }
+# The portable software renderer (PR-029) and the POSIX file system, process
+# identity, trash and data folders (PR-030).
+bareline-renderer-soft = { path = "../../crates/renderer-soft" }
+bareline-platform-posix = { path = "../../crates/platform-posix" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bareline-platform-linux = { path = "../../crates/platform-linux" }

@@ -3,7 +3,12 @@
 //! neutral names the shell uses, plus the few Win32 calls the shell made itself.
 //! Nothing here changes behaviour; each item is the code the shell called before.
 use bareline_app::task::Wake;
-use std::{cell::Cell, path::Path, rc::Rc, sync::mpsc::Sender};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::mpsc::Sender,
+};
 use winit::{
     event_loop::EventLoopBuilder,
     platform::windows::EventLoopBuilderExtWindows,
@@ -73,6 +78,37 @@ pub fn install_message_hook(
         }
         false
     });
+}
+
+/// The window a native menu command was sent to, for the command trace.
+pub fn command_window(message: &CommandMessage) -> RawWindow {
+    message.hwnd
+}
+
+/// Where an installed Bareline keeps its profile.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InstalledFolders {
+    /// `%APPDATA%\Bareline`, the roaming profile of earlier releases, which the
+    /// profile migration moves into `local`.
+    pub roaming: Option<PathBuf>,
+    /// `%LOCALAPPDATA%\Bareline`: settings, session, recovery journals,
+    /// extensions and macros.
+    pub local: Option<PathBuf>,
+    /// Diagnostics live in the profile folder on Windows.
+    pub logs: Option<PathBuf>,
+}
+/// The installed profile folders, from the environment.
+pub fn installed_folders() -> InstalledFolders {
+    InstalledFolders {
+        roaming: std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline")),
+        local: std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Bareline")),
+        logs: None,
+    }
+}
+
+/// The user's profile folder (`%USERPROFILE%`).
+pub fn user_home() -> Option<std::ffi::OsString> {
+    std::env::var_os("USERPROFILE")
 }
 
 /// The same limits the instance handoff enforces for every forwarded path.

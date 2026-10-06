@@ -661,13 +661,8 @@ impl Shell {
     pub(super) fn hide_to_tray(&mut self) -> Result<(), String> {
         let window = self.window.as_ref().ok_or("Window unavailable")?;
         if self.shell_integration.tray.is_none() {
-            let handle = window.window_handle().map_err(|e| e.to_string())?;
-            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-                return Err("Windows handle unavailable".into());
-            };
-            self.shell_integration.tray = Some(crate::shell::native::shell_integration::TrayIcon::new(
-                handle.hwnd.get(),
-            )?);
+            let handle = crate::shell::native::raw_window(window)?;
+            self.shell_integration.tray = Some(crate::shell::native::shell_integration::TrayIcon::new(handle)?);
         }
         window.set_visible(false);
         Ok(())
@@ -1276,13 +1271,9 @@ fn run_portable_probe(root: &std::path::Path, fallback: Option<PathBuf>) -> Port
 /// A local profile folder for recovery journals of a read-only portable copy,
 /// one per portable data folder so separate copies never share journals.
 fn portable_fallback_root(portable: &std::path::Path) -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(|root| {
-            PathBuf::from(root)
-                .join("Bareline")
-                .join("portable-recovery")
-                .join(portable_recovery_key(portable))
-        })
+    crate::shell::native::installed_folders()
+        .local
+        .map(|root| root.join("portable-recovery").join(portable_recovery_key(portable)))
         .filter(|root| root.is_absolute())
 }
 /// FNV-1a over the case-folded folder path: stable across runs and Rust
@@ -1416,14 +1407,17 @@ mod tests {
     }
     #[test]
     fn copy_path_commands_copy_the_path_name_and_directory() {
-        let path = PathBuf::from("C:\\docs\\notes\\todo.txt");
+        // `C:\docs\notes\todo.txt` on Windows, `/docs/notes/todo.txt` elsewhere.
+        let (root, separator) = if cfg!(windows) { ("C:\\", "\\") } else { ("/", "/") };
+        let path = PathBuf::from(root).join("docs").join("notes").join("todo.txt");
         let copied = |id| super::copied_path_text(id, &path);
-        assert_eq!(copied("file.copyPath").as_deref(), Some("C:\\docs\\notes\\todo.txt"));
+        let directory = format!("{root}docs{separator}notes");
+        assert_eq!(copied("file.copyPath"), Some(format!("{directory}{separator}todo.txt")));
         assert_eq!(copied("file.copyName").as_deref(), Some("todo.txt"));
-        assert_eq!(copied("file.copyDirectory").as_deref(), Some("C:\\docs\\notes"));
+        assert_eq!(copied("file.copyDirectory"), Some(directory));
         assert_eq!(copied("file.reveal"), None);
         // A bare root has no file name to copy.
-        assert_eq!(super::copied_path_text("file.copyName", &PathBuf::from("C:\\")), None);
+        assert_eq!(super::copied_path_text("file.copyName", &PathBuf::from(root)), None);
     }
     #[test]
     fn rename_keeps_one_writable_tab_bound_to_the_new_path() {
@@ -1774,9 +1768,14 @@ mod tests {
     fn recent_slot_right_click_pins_and_removes_that_entry() {
         use bareline_commands::{CommandContext, CommandId};
         let mut shell = super::super::accessibility::tests::headless_shell();
-        let (a, b) = (PathBuf::from("C:\\a.txt"), PathBuf::from("D:\\work"));
+        // Recent lists keep absolute paths only: drive paths on Windows, rooted ones elsewhere.
+        let absolute = |windows: &str, unix: &str| PathBuf::from(if cfg!(windows) { windows } else { unix });
+        let (a, b) = (absolute("C:\\a.txt", "/a.txt"), absolute("D:\\work", "/work"));
         shell.shell_integration.recent_files.apply(std::slice::from_ref(&a));
-        shell.shell_integration.recent_files.record(&PathBuf::from("C:\\b.txt"));
+        shell
+            .shell_integration
+            .recent_files
+            .record(&absolute("C:\\b.txt", "/b.txt"));
         shell.shell_integration.recent_folders.record(&b);
         let fallback = |_: &str, fallback: &str| fallback.to_owned();
         let actions = shell.shell_integration.recent_item_actions(0, fallback).to_vec();
@@ -1794,7 +1793,7 @@ mod tests {
         let label = |id| context.states.get(&CommandId(id)).and_then(|state| state.label.clone());
         assert_eq!(label("file.recent.0").as_deref(), Some("&1  a.txt  (pinned)"));
         assert_eq!(label("file.recent.1").as_deref(), Some("&2  b.txt"));
-        assert_eq!(label("file.recent.folder.0").as_deref(), Some("&1  D:\\work"));
+        assert_eq!(label("file.recent.folder.0"), Some(format!("&1  {}", b.display())));
         assert!(context.states[&CommandId("file.recent.2")].hidden);
         assert!(!context.states.contains_key(&CommandId("file.recent.clearUnpinned")));
         shell.shell_recent_item_action("file.recent.folder.0", RECENT_ACTION_REMOVE);

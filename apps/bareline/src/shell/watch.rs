@@ -1596,10 +1596,17 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+    /// UNC prefixes exist only in Windows paths; elsewhere a share is a mount
+    /// with an ordinary path, which the capability report classifies instead.
     #[test]
     fn network_path_classification_is_lexical() {
-        assert!(is_network_path(std::path::Path::new(r"\\untrusted.example\share\log")));
-        assert!(!is_network_path(std::path::Path::new(r"C:\local\log")));
+        if cfg!(windows) {
+            assert!(is_network_path(std::path::Path::new(r"\\untrusted.example\share\log")));
+            assert!(!is_network_path(std::path::Path::new(r"C:\local\log")));
+        } else {
+            assert!(!is_network_path(std::path::Path::new("//untrusted.example/share/log")));
+            assert!(!is_network_path(std::path::Path::new("/mnt/share/log")));
+        }
     }
     #[test]
     fn verified_reopen_retires_a_persistent_dirty_period_conflict() {

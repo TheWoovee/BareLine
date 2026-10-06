@@ -667,11 +667,17 @@ mod request_tests {
         assert_eq!(launch.requests.last().unwrap().id, 257);
     }
 
+    /// An absolute dropped path on every system: `C:\drop\<name>` on Windows,
+    /// `/drop/<name>` elsewhere.
+    fn dropped(name: &str) -> PathBuf {
+        PathBuf::from(if cfg!(windows) { r"C:\drop" } else { "/drop" }).join(name)
+    }
+
     #[test]
     fn one_drop_becomes_one_deduplicated_batch() {
-        let first = PathBuf::from(r"C:\drop\a.txt");
-        let second = PathBuf::from(r"C:\drop\b.txt");
-        let folder = PathBuf::from(r"C:\drop\project");
+        let first = dropped("a.txt");
+        let second = dropped("b.txt");
+        let folder = dropped("project");
         let batch = classify_drop(
             vec![
                 first.clone(),
@@ -711,25 +717,19 @@ mod request_tests {
         let mut drops = DropQueue::default();
         assert_eq!(drops.flush(), None);
         // winit reports one drop of two files as two events; one flush takes both.
-        drops.push(PathBuf::from(r"C:\drop\a.txt"));
-        drops.push(PathBuf::from(r"C:\drop\b.txt"));
+        drops.push(dropped("a.txt"));
+        drops.push(dropped("b.txt"));
         let burst = drops.flush().unwrap();
-        assert_eq!(
-            burst,
-            vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]
-        );
+        assert_eq!(burst, vec![dropped("a.txt"), dropped("b.txt")]);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         drops.sorting = Some(rx);
         // A second drop while the first is being sorted waits for it.
-        drops.push(PathBuf::from(r"C:\drop\c.txt"));
+        drops.push(dropped("c.txt"));
         assert_eq!(drops.sorted(), None);
         assert_eq!(drops.flush(), None);
         tx.send(classify_drop(burst, |_| false)).unwrap();
-        assert_eq!(
-            drops.sorted().unwrap().files,
-            vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]
-        );
-        assert_eq!(drops.flush(), Some(vec![PathBuf::from(r"C:\drop\c.txt")]));
+        assert_eq!(drops.sorted().unwrap().files, vec![dropped("a.txt"), dropped("b.txt")]);
+        assert_eq!(drops.flush(), Some(vec![dropped("c.txt")]));
         assert_eq!(drops.flush(), None);
         // A sorter that died still ends its sort, with a notice.
         let (tx, rx) = std::sync::mpsc::sync_channel::<DropBatch>(1);
@@ -1525,14 +1525,12 @@ pub(super) fn prepare(
         .transpose()?;
     // Settings, session, recovery journals and macros are machine-local data.
     // Installed locations are not even discovered for an isolated launch.
-    let (roaming, local) = if mode == LaunchMode::Installed {
-        (
-            std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline")),
-            std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Bareline")),
-        )
+    let installed_folders = if mode == LaunchMode::Installed {
+        crate::shell::native::installed_folders()
     } else {
-        (None, None)
+        Default::default()
     };
+    let (roaming, local) = (installed_folders.roaming, installed_folders.local);
     let installed = local.clone().or_else(|| roaming.clone());
     let root = match mode {
         LaunchMode::Performance => performance.as_ref().map(|config| config.root.clone()),
@@ -1560,7 +1558,9 @@ pub(super) fn prepare(
         legacy_recovery_path: legacy.as_ref().map(|p| p.join("recovery")),
         extensions_path: root.as_ref().map(|p| p.join("extensions")),
         legacy_extensions_path: legacy.as_ref().map(|p| p.join("extensions")),
-        diagnostics_path: root.as_ref().map(|path| path.join("diagnostics")),
+        diagnostics_path: installed_folders
+            .logs
+            .or_else(|| root.as_ref().map(|path| path.join("diagnostics"))),
         paths,
         rejected_paths,
         stdin,
@@ -2017,6 +2017,13 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// An absolute launch directory on every system.
+    fn work() -> PathBuf {
+        PathBuf::from(if cfg!(windows) { r"D:\work" } else { "/work" })
+    }
+
+    /// Drive-relative arguments exist only on Windows.
+    #[cfg(windows)]
     #[test]
     fn launch_paths_resolve_drive_relative_arguments() {
         let cwd = PathBuf::from(r"D:\work");
@@ -2033,6 +2040,25 @@ mod tests {
         let resolved = resolve_launch_path(&cwd, Path::new("C:foo.txt")).unwrap();
         assert!(resolved.is_absolute(), "{}", resolved.display());
         assert!(resolved.starts_with(r"C:\") && resolved.ends_with("foo.txt"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn launch_paths_resolve_relative_arguments_and_keep_absolute_ones() {
+        let cwd = work();
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new("notes.txt")).unwrap(),
+            PathBuf::from("/work/notes.txt")
+        );
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new("/elsewhere/abs.txt")).unwrap(),
+            PathBuf::from("/elsewhere/abs.txt")
+        );
+        // A name the instance handoff could not forward is refused with a reason.
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new("bad\0name.txt")).unwrap_err(),
+            "not a valid file path"
+        );
     }
 
     #[test]
@@ -2116,10 +2142,10 @@ mod tests {
         // More than 16 paths used to refuse the whole launch without a word (APP-09).
         let parsed = parse(&args, &mut ledger).unwrap();
         assert_eq!(parsed.mode(), LaunchMode::Installed);
-        let (paths, rejected) = launch_paths(Path::new(r"D:\work"), parsed.options.paths);
+        let (paths, rejected) = launch_paths(&work(), parsed.options.paths);
         assert_eq!(paths.len(), 16);
-        assert_eq!(paths[0], PathBuf::from(r"D:\work\file-0.txt"));
-        assert_eq!(paths[15], PathBuf::from(r"D:\work\file-15.txt"));
+        assert_eq!(paths[0], work().join("file-0.txt"));
+        assert_eq!(paths[15], work().join("file-15.txt"));
         assert_eq!(rejected.len(), 4);
         assert!(rejected[0].starts_with("file-16.txt: "), "{rejected:?}");
         assert!(rejected.iter().all(|line| line.contains("first 16 files")));

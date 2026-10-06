@@ -1211,13 +1211,15 @@ mod tests {
 
     #[test]
     fn save_as_keeps_existing_names_and_offers_text_only_for_new_documents() {
-        let makefile = std::path::Path::new(r"C:\src\Makefile");
+        // `C:\src\<name>` on Windows, `/src/<name>` elsewhere.
+        let src = |name: &str| std::path::Path::new(if cfg!(windows) { r"C:\src" } else { "/src" }).join(name);
+        let makefile = src("Makefile");
         assert_eq!(
-            document_save_name(Some(makefile), "Makefile \u{2022}"),
+            document_save_name(Some(makefile.as_path()), "Makefile \u{2022}"),
             (SaveFileKind::Named, "Makefile".to_owned())
         );
         assert_eq!(
-            document_save_name(Some(std::path::Path::new(r"C:\src\notes.md")), "notes.md"),
+            document_save_name(Some(src("notes.md").as_path()), "notes.md"),
             (SaveFileKind::Named, "notes.md".to_owned())
         );
         assert_eq!(

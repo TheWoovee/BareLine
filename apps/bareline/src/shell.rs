@@ -62,7 +62,6 @@ use winit::{
     event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key, ModifiersState, NamedKey},
-    raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{Window, WindowId},
 };
 
@@ -107,7 +106,7 @@ impl QaCommandTrace {
         stage: &'static str,
         detail: &'static str,
         command_id: usize,
-        hwnd: isize,
+        window: isize,
         code: i32,
     ) {
         if self.emitted >= Self::LIMIT {
@@ -116,7 +115,7 @@ impl QaCommandTrace {
         let Some(file) = &mut self.file else { return };
         let _ = writeln!(
             file,
-            "{{\"event\":\"qa_close_command\",\"ticket\":{ticket},\"stage\":\"{stage}\",\"detail\":\"{detail}\",\"command_id\":{command_id},\"hwnd\":{hwnd},\"code\":{code}}}"
+            "{{\"event\":\"qa_close_command\",\"ticket\":{ticket},\"stage\":\"{stage}\",\"detail\":\"{detail}\",\"command_id\":{command_id},\"hwnd\":{window},\"code\":{code}}}"
         );
         let _ = file.flush();
         self.emitted += 1;
@@ -2108,13 +2107,15 @@ impl Shell {
     }
     fn trace_command_received(&mut self, message: crate::shell::native::CommandMessage) -> u64 {
         let ticket = self.allocate_trace_ticket();
+        let window = native::command_window(&message);
         self.qa_command_trace
-            .record(ticket, "ingress-received", "wm-command", message.id, message.hwnd, 0);
+            .record(ticket, "ingress-received", "wm-command", message.id, window, 0);
         ticket
     }
     fn trace_command_accepted(&mut self, ticket: u64, message: crate::shell::native::CommandMessage) {
+        let window = native::command_window(&message);
         self.qa_command_trace
-            .record(ticket, "ingress-owner", "accepted", message.id, message.hwnd, 0);
+            .record(ticket, "ingress-owner", "accepted", message.id, window, 0);
     }
     fn trace_command_rejected(
         &mut self,
@@ -2122,8 +2123,9 @@ impl Shell {
         message: crate::shell::native::CommandMessage,
         reason: &'static str,
     ) {
+        let window = native::command_window(&message);
         self.qa_command_trace
-            .record(ticket, "ingress-rejected", reason, message.id, message.hwnd, 0);
+            .record(ticket, "ingress-rejected", reason, message.id, window, 0);
     }
     fn trace_command_resolved(
         &mut self,
@@ -2137,10 +2139,11 @@ impl Shell {
             Action::Quit => "quit",
             _ => "other",
         };
+        let window = native::command_window(&message);
         self.qa_command_trace
-            .record(ticket, "resolved-command", command.0, message.id, message.hwnd, 0);
+            .record(ticket, "resolved-command", command.0, message.id, window, 0);
         self.qa_command_trace
-            .record(ticket, "resolved-action", action_detail, message.id, message.hwnd, 0);
+            .record(ticket, "resolved-action", action_detail, message.id, window, 0);
         if matches!(action, Action::Close | Action::Quit) {
             self.dispatch_trace_ticket = Some(ticket);
         }
