@@ -312,10 +312,15 @@ impl ExtensionsRuntime {
             16.0,
             self.ui.theme.text,
         ));
+        // Where the host's confinement can be missing (a Linux kernel without
+        // Landlock), the page says how it would run, or why it will not.
         ops.push(text(
             x + 20.0,
             337.0,
-            "Bareline project · verified offline runtime",
+            match crate::shell::native::extension_transport::isolation() {
+                Some(isolation) => format!("Bareline project · verified offline runtime · {isolation}"),
+                None => "Bareline project · verified offline runtime".to_owned(),
+            },
             13.0,
             self.ui.theme.muted,
         ));

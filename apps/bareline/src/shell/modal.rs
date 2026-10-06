@@ -26,6 +26,8 @@ pub(super) enum ModalSurface {
     CompareOptions,
     Recovery,
     NotificationDetails,
+    /// A question the shell draws for the platform (`prompt`).
+    Prompt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +106,17 @@ impl ModalDescriptor {
                     primary: toast::DETAILS_CLOSE_ID,
                     submit: toast::DETAILS_CLOSE_ID,
                     cancel: toast::DETAILS_CLOSE_ID,
+                },
+                None,
+                OutsideDismissal::Block,
+            ),
+            // A question must be answered, as a native modal dialog must.
+            ModalSurface::Prompt => (
+                ModalSemanticIds {
+                    group: prompt::PROMPT_GROUP_ID,
+                    primary: prompt::PROMPT_BUTTON_ID,
+                    submit: prompt::PROMPT_BUTTON_ID,
+                    cancel: prompt::PROMPT_BUTTON_ID,
                 },
                 None,
                 OutsideDismissal::Block,
@@ -239,6 +252,7 @@ impl Shell {
                 self.recovery.dismiss();
             }
             ModalSurface::NotificationDetails => self.toasts.close_details(),
+            ModalSurface::Prompt => self.prompt_dismissed(),
         }
         if let Some(renderer) = &mut self.renderer {
             match modal.surface {
@@ -247,6 +261,7 @@ impl Shell {
                 ModalSurface::CompareOptions => self.compare.color_field.release(renderer),
                 ModalSurface::Recovery => {}
                 ModalSurface::NotificationDetails => {}
+                ModalSurface::Prompt => {}
             }
         }
         self.ui_focus.close_layer();
@@ -388,6 +403,7 @@ impl Shell {
                 ModalSurface::CompareOptions => true,
                 ModalSurface::Recovery => true,
                 ModalSurface::NotificationDetails => self.toasts.details_contains(self.pointer),
+                ModalSurface::Prompt => self.prompt_contains(self.pointer),
             };
             if !inside {
                 if modal.outside_dismissal == OutsideDismissal::Dismiss {
@@ -401,6 +417,7 @@ impl Shell {
             ModalSurface::Goto => self.goto_event(el, event),
             ModalSurface::CompareOptions => self.compare_event(el, event),
             ModalSurface::Recovery => self.recovery_event(el, event),
+            ModalSurface::Prompt => self.prompt_event(event),
             ModalSurface::NotificationDetails => {
                 match event {
                     WindowEvent::KeyboardInput { event, .. }

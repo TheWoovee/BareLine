@@ -735,6 +735,10 @@ impl Shell {
         true
     }
     pub(super) fn lifecycle_pump(&mut self, _el: &ActiveEventLoop) {
+        // Save All may ask for a destination that answers later (Linux); the
+        // pump then runs again and receives it.
+        let _interaction =
+            crate::shell::native::interaction_scope(self.platform.as_ref(), || super::prompt::Replay::Lifecycle);
         self.lifecycle_pump_inner();
     }
     #[allow(clippy::too_many_lines)]
@@ -1130,6 +1134,12 @@ impl Shell {
                     let options = self.save_dialog_options(index);
                     let path = match self.platform.as_ref().map(|p| p.save_file_with(&options)) {
                         Some(Ok(Some(path))) => path,
+                        Some(Ok(None)) if crate::shell::native::interaction_waiting(self.platform.as_ref()) => {
+                            // The dialog answers later (Linux): this document
+                            // waits at the head of the queue until it does.
+                            self.lifecycle.queue.push_front(identity);
+                            return;
+                        }
                         Some(Ok(None)) => {
                             self.lifecycle.skipped += 1;
                             continue;
