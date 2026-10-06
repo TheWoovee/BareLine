@@ -35,6 +35,10 @@
 /apps/bareline/src/shell/instance.rs                    @TheWoovee
 /apps/extension-host/                                   @TheWoovee
 
+# The shell's native seam (high risk: its only door to the operating system,
+# holding the file system, path trust, trash and process identity on every OS).
+/apps/bareline/src/shell/native/                        @TheWoovee
+
 # CI workflows, repository automation and community policy files.
 /.github/                                               @TheWoovee
 
