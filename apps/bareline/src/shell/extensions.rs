@@ -1,0 +1,2349 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Lazy native host lifecycle. One bounded invocation worker, no idle host/thread.
+use bareline_app::extensions::manager::{InstalledState, ManagerIndex};
+use bareline_app::extensions::{InvocationBroker, InvocationOutput};
+use bareline_document::DocumentSnapshot;
+use bareline_extensions_protocol::{Invocation, broker::ExtensionSession};
+mod authority;
+// Hex View reads original bytes through the same bounded readers (BIZ-04).
+pub(super) mod readers;
+mod ui;
+#[cfg(test)]
+pub(super) fn accessibility_test_cases() -> Vec<(
+    &'static str,
+    Vec<bareline_platform::accessibility::AccessibilityNode>,
+    Option<u64>,
+)> {
+    ui::accessibility_test_cases()
+}
+use crate::shell::native::extension_transport::{HostLaunch, HostLifecycle, run_verified_host_observed};
+use bareline_platform::{
+    PlatformServices,
+    executor::{BoundedExecutor, SubmitError, WorkKind},
+};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+};
+
+#[derive(Clone)]
+pub struct VerifiedRuntime {
+    pub executable: PathBuf,
+    pub executable_sha256: [u8; 32],
+    pub signer: bareline_distribution::update::PublisherPin,
+}
+pub struct InvocationJob {
+    pub runtime: VerifiedRuntime,
+    pub component: PathBuf,
+    pub component_sha256: [u8; 32],
+    pub invocation: Invocation,
+    pub budget: bareline_extensions_protocol::ExecutionBudget,
+    pub source: DocumentSnapshot,
+    pub original: Option<bareline_app::workspace::extensions::OriginalSource>,
+    pub paged: Option<bareline_editor_surface::paged_view::PagedReadHandle>,
+    pub session: ExtensionSession,
+    pub panels: Vec<String>,
+    /// Set by the document owner only after retained original-byte provenance is
+    /// known safe for replacement. Read-only invocations do not need this flag.
+    pub edits_preserve_original: bool,
+}
+struct Pending {
+    cancel: Arc<AtomicBool>,
+    result: mpsc::Receiver<Result<InvocationOutput, String>>,
+}
+
+const EXTENSION_WORKERS: usize = 4;
+const EXTENSION_QUEUE_DEPTH: usize = 32;
+static WORKER: std::sync::OnceLock<BoundedExecutor> = std::sync::OnceLock::new();
+
+pub(super) fn worker_stats() -> Option<bareline_platform::executor::ExecutorStats> {
+    WORKER.get().map(BoundedExecutor::stats)
+}
+
+pub(super) fn extension_worker() -> &'static BoundedExecutor {
+    WORKER.get_or_init(|| BoundedExecutor::new(EXTENSION_WORKERS, EXTENSION_QUEUE_DEPTH, "bareline-extension"))
+}
+
+fn admission_error(error: SubmitError) -> String {
+    match error {
+        SubmitError::Busy => "Extension worker queue is full; retry".into(),
+        SubmitError::Closed => "Extension workers are unavailable".into(),
+    }
+}
+
+struct CompletionWake(Option<Arc<dyn Fn() + Send + Sync>>);
+
+struct TemporaryArtifact {
+    path: PathBuf,
+    published: bool,
+}
+
+impl TemporaryArtifact {
+    fn create(path: PathBuf) -> std::io::Result<(Self, std::fs::File)> {
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        Ok((Self { path, published: false }, file))
+    }
+
+    fn publish(&mut self) {
+        self.published = true;
+    }
+}
+
+impl Drop for TemporaryArtifact {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+impl CompletionWake {
+    fn new(notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self(Some(notify))
+    }
+
+    fn fire(&mut self) {
+        if let Some(notify) = self.0.take() {
+            // Unwind builds (tests) only; release panics abort via the fatal panic hook.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
+        }
+    }
+}
+
+impl Drop for CompletionWake {
+    fn drop(&mut self) {
+        self.fire();
+    }
+}
+
+pub(super) struct WorkerCompletion<T> {
+    sender: Option<mpsc::SyncSender<Result<T, String>>>,
+    failure: &'static str,
+    wake: CompletionWake,
+}
+
+impl<T> WorkerCompletion<T> {
+    pub(super) fn new(
+        sender: mpsc::SyncSender<Result<T, String>>,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        failure: &'static str,
+    ) -> Self {
+        Self {
+            sender: Some(sender),
+            failure,
+            wake: CompletionWake::new(notify),
+        }
+    }
+
+    pub(super) fn complete(mut self, result: Result<T, String>) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(result);
+        }
+        self.wake.fire();
+    }
+}
+
+impl<T> Drop for WorkerCompletion<T> {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(Err(self.failure.into()));
+        }
+        self.wake.fire();
+    }
+}
+
+struct InvocationCompletion {
+    broker: Option<InvocationBroker>,
+    sender: Option<mpsc::SyncSender<Result<InvocationOutput, String>>>,
+    lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
+    wake: CompletionWake,
+}
+
+impl InvocationCompletion {
+    fn new(
+        broker: InvocationBroker,
+        sender: mpsc::SyncSender<Result<InvocationOutput, String>>,
+        lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        Self {
+            broker: Some(broker),
+            sender: Some(sender),
+            lifecycle,
+            wake: CompletionWake::new(notify),
+        }
+    }
+
+    fn broker(&mut self) -> &mut InvocationBroker {
+        self.broker.as_mut().expect("invocation broker owner")
+    }
+
+    fn complete(mut self, child: Result<(), String>) {
+        let result = self.broker.take().expect("invocation broker owner").finish(child);
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(result);
+        }
+        self.wake.fire();
+    }
+}
+
+impl Drop for InvocationCompletion {
+    fn drop(&mut self) {
+        if let Ok(mut receipt) = self.lifecycle.lock()
+            && receipt.phase != ExtensionLifecyclePhase::Drained
+        {
+            receipt.phase = ExtensionLifecyclePhase::Rejected;
+            receipt.succeeded = Some(false);
+        }
+        let result = self
+            .broker
+            .take()
+            .map(|broker| {
+                // Unwind builds (tests) only; release panics abort via the fatal panic hook.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    broker.finish(Err("Extension worker stopped; document unchanged".into()))
+                }))
+                .unwrap_or_else(|_| Err("Extension worker stopped; document unchanged".into()))
+            })
+            .unwrap_or_else(|| Err("Extension worker stopped; document unchanged".into()));
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(result);
+        }
+        self.wake.fire();
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExtensionLifecyclePhase {
+    #[default]
+    Idle,
+    Requested,
+    Started,
+    Authenticated,
+    Drained,
+    Rejected,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExtensionLifecycleReceipt {
+    pub generation: u64,
+    pub phase: ExtensionLifecyclePhase,
+    pub pid: Option<u32>,
+    /// Set only when the UI drains broker.finish's outcome and rechecks cancel.
+    /// Drained alone describes process cleanup, including failed invocations.
+    pub succeeded: Option<bool>,
+}
+pub struct ExtensionsRuntime {
+    lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
+    pending: Option<Pending>,
+    enabled: bool,
+    root: Option<PathBuf>,
+    inventory_root: Option<PathBuf>,
+    pub message: Option<String>,
+    pub open: bool,
+    tab: usize,
+    bounds: bareline_renderer::Rect,
+    panel_output: String,
+    trust: Option<OwnerTrust>,
+    catalog: Option<CatalogSelection>,
+    manager_pending: Option<mpsc::Receiver<Result<ManagerResult, String>>>,
+    manager_cancel: Arc<AtomicBool>,
+    installed: Vec<InstalledRow>,
+    runtime_package: Option<crate::shell::native::update::InstalledRuntime>,
+    selected: usize,
+    index: ManagerIndex,
+    restore_pending: bool,
+    inventory_restored: bool,
+    inventory_error: Option<String>,
+    storage_reconciled: bool,
+    inventory_mutable: bool,
+    inventory_target_local: bool,
+    permission_review: Option<usize>,
+    deferred_disabled: std::collections::BTreeSet<String>,
+    command_selection: usize,
+    ui: ui::ManagerUi,
+    /// Generation stamp of the last contribution set copied into the command
+    /// registry, so `sync_contributions` can skip the rebuild when nothing that
+    /// feeds `contributions()` has changed (ARCH-16).
+    synced_contribution_generation: Option<u64>,
+}
+impl Default for ExtensionsRuntime {
+    fn default() -> Self {
+        Self {
+            lifecycle: Arc::new(std::sync::Mutex::new(ExtensionLifecycleReceipt::default())),
+            pending: None,
+            enabled: true,
+            root: None,
+            inventory_root: None,
+            message: None,
+            open: false,
+            tab: 0,
+            bounds: Default::default(),
+            panel_output: String::new(),
+            trust: None,
+            catalog: None,
+            manager_pending: None,
+            manager_cancel: Arc::new(AtomicBool::new(false)),
+            installed: vec![],
+            runtime_package: None,
+            selected: 0,
+            index: ManagerIndex::default(),
+            restore_pending: false,
+            inventory_restored: false,
+            inventory_error: None,
+            storage_reconciled: true,
+            inventory_mutable: true,
+            inventory_target_local: false,
+            permission_review: None,
+            deferred_disabled: std::collections::BTreeSet::new(),
+            command_selection: 0,
+            ui: ui::ManagerUi::default(),
+            synced_contribution_generation: None,
+        }
+    }
+}
+impl ExtensionsRuntime {
+    /// A cheap generation stamp over the state `contributions()` reads. It only
+    /// changes when the contributed command set could change, so callers avoid
+    /// rebuilding (and cloning every command record) when it is unchanged.
+    pub fn contribution_generation(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.enabled.hash(&mut hasher);
+        self.runtime_package.is_some().hash(&mut hasher);
+        self.valid_contribution_budget().hash(&mut hasher);
+        for row in &self.installed {
+            row.package.id.hash(&mut hasher);
+            row.state.generation.hash(&mut hasher);
+            row.state.enabled.hash(&mut hasher);
+            row.package.manifest.commands.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+    pub fn synced_contribution_generation(&self) -> Option<u64> {
+        self.synced_contribution_generation
+    }
+    pub fn mark_contributions_synced(&mut self, generation: u64) {
+        self.synced_contribution_generation = Some(generation);
+    }
+    pub fn command_inventory_ready(&self) -> Result<bool, String> {
+        if !self.enabled {
+            return Ok(true);
+        }
+        if let Some(error) = &self.inventory_error {
+            return Err(error.clone());
+        }
+        if self.restore_pending || self.manager_pending.is_some() || !self.inventory_restored {
+            return Ok(false);
+        }
+        if !self.valid_contribution_budget() {
+            return Err("Verified extension contribution limit exceeded".into());
+        }
+        Ok(true)
+    }
+    pub fn lifecycle_receipt(&self) -> Option<ExtensionLifecycleReceipt> {
+        self.lifecycle.try_lock().ok().map(|receipt| *receipt)
+    }
+    pub fn configure(&mut self, root: Option<PathBuf>, enabled: bool) {
+        self.storage_reconciled = root.is_some();
+        self.inventory_mutable = root.is_some();
+        self.inventory_target_local = root.is_some();
+        self.inventory_root = root.clone();
+        self.root = root;
+        self.trust = compiled_trust();
+        self.restore_pending = enabled;
+        self.inventory_restored = !enabled;
+        self.inventory_error = None;
+        self.enabled = enabled;
+        if !enabled {
+            self.cancel();
+            self.message = Some("Extensions disabled for this session (--no-extensions)".into());
+        }
+    }
+    pub(super) fn set_profile_root_before_restore(&mut self, root: Option<PathBuf>, local: bool) {
+        self.inventory_root = root;
+        self.inventory_mutable = false;
+        self.inventory_target_local = local;
+        self.inventory_error = None;
+        self.storage_reconciled = false;
+        self.inventory_restored = false;
+        self.restore_pending = self.enabled && self.inventory_root.is_some();
+        if !self.enabled {
+            self.inventory_mutable = self.inventory_target_local && self.inventory_root == self.root;
+        }
+    }
+    pub fn running(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub(super) fn operation_active(&self) -> bool {
+        self.pending.is_some() || self.manager_pending.is_some()
+    }
+    pub fn cancel(&mut self) {
+        self.manager_cancel.store(true, Ordering::Release);
+        if let Some(pending) = &self.pending {
+            pending.cancel.store(true, Ordering::Release);
+        }
+    }
+    fn mutation_root(&self) -> Result<PathBuf, String> {
+        if !self.inventory_mutable || self.inventory_root != self.root {
+            return Err("Extension inventory is read-only until local profile reconciliation completes".into());
+        }
+        self.root.clone().ok_or("Extension storage unavailable".into())
+    }
+    pub fn start(&mut self, job: InvocationJob, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        self.start_on(extension_worker(), job, notify)
+    }
+
+    fn start_on(
+        &mut self,
+        executor: &BoundedExecutor,
+        job: InvocationJob,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
+        if !self.enabled {
+            return Err("Extensions disabled for this session".into());
+        }
+        if !self.storage_reconciled {
+            return Err("Extension storage read authority is unavailable".into());
+        }
+        if self.running() {
+            return Err("An extension is running; cancel it before starting another".into());
+        }
+        let authority_check = authority::InvocationCheck::new(self, &job)?;
+        let broker = if job.paged.is_some() {
+            InvocationBroker::new_paged(job.invocation.clone(), job.source, job.session, job.panels)?
+        } else {
+            InvocationBroker::new(job.invocation.clone(), job.source, job.session, job.panels)?
+        };
+        let (send, receive) = mpsc::sync_channel(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let lifecycle = self.lifecycle.clone();
+        {
+            let mut receipt = lifecycle.lock().map_err(|_| "Extension lifecycle unavailable")?;
+            receipt.generation = receipt
+                .generation
+                .checked_add(1)
+                .ok_or("Extension lifecycle generation exhausted")?;
+            receipt.phase = ExtensionLifecyclePhase::Requested;
+            receipt.pid = None;
+            receipt.succeeded = None;
+        }
+        let completion = InvocationCompletion::new(broker, send, lifecycle.clone(), notify);
+        let submitted = executor.submit(
+            WorkKind::General,
+            Box::new(move || {
+                let mut completion = completion;
+                if worker_cancel.load(Ordering::Acquire) {
+                    if let Ok(mut receipt) = lifecycle.lock() {
+                        receipt.phase = ExtensionLifecyclePhase::Rejected;
+                    }
+                    completion.complete(Err("Extension cancelled; document unchanged".into()));
+                    return;
+                }
+                let signer = match authority_check {
+                    Some(check) => match check.verify(&worker_cancel) {
+                        Ok(signer) => signer,
+                        Err(error) => {
+                            if let Ok(mut receipt) = lifecycle.lock() {
+                                receipt.phase = ExtensionLifecyclePhase::Rejected;
+                            }
+                            completion.complete(Err(error));
+                            return;
+                        }
+                    },
+                    None => job.runtime.signer.clone(),
+                };
+                let readers = std::cell::RefCell::new(readers::Readers::new(
+                    job.original,
+                    job.paged,
+                    worker_cancel.clone(),
+                    std::time::Instant::now() + std::time::Duration::from_millis(job.budget.timeout_ms()),
+                ));
+                let outcome = run_verified_host_observed(
+                    HostLaunch {
+                        executable: &job.runtime.executable,
+                        executable_sha256: job.runtime.executable_sha256,
+                        signer: &signer,
+                        component: &job.component,
+                        component_sha256: job.component_sha256,
+                        invocation: &job.invocation,
+                        budget: job.budget,
+                    },
+                    worker_cancel.clone(),
+                    |event| {
+                        if let Ok(mut receipt) = lifecycle.lock() {
+                            let (phase, pid) = match event {
+                                HostLifecycle::Started(pid) => (ExtensionLifecyclePhase::Started, pid),
+                                HostLifecycle::Authenticated(pid) => (ExtensionLifecyclePhase::Authenticated, pid),
+                                HostLifecycle::Drained(pid) => (ExtensionLifecyclePhase::Drained, pid),
+                            };
+                            receipt.phase = phase;
+                            receipt.pid = Some(pid);
+                        }
+                    },
+                    |message| {
+                        if !job.edits_preserve_original
+                            && matches!(
+                                message.request,
+                                bareline_extensions_protocol::Request::ApplyEdits { .. }
+                                    | bareline_extensions_protocol::Request::BeginEdits { .. }
+                            )
+                        {
+                            return bareline_extensions_protocol::BrokerResponse {
+                                request_id: message.request_id,
+                                result: Err(
+                                    "Formatting is unavailable while original undecodable bytes require preservation"
+                                        .into(),
+                                ),
+                            };
+                        }
+                        completion.broker().request_with_text(
+                            message,
+                            |_, range| readers.borrow_mut().raw(range),
+                            |range| readers.borrow_mut().text(range),
+                        )
+                    },
+                )
+                .map_err(|e| e.to_string());
+                if let Ok(mut receipt) = lifecycle.lock()
+                    && receipt.phase == ExtensionLifecyclePhase::Requested
+                {
+                    receipt.phase = ExtensionLifecyclePhase::Rejected;
+                }
+                let outcome = if worker_cancel.load(Ordering::Acquire) {
+                    Err("Extension cancelled; document unchanged".into())
+                } else {
+                    outcome
+                };
+                completion.complete(outcome);
+            }),
+        );
+        if let Err(error) = submitted {
+            if let Ok(mut receipt) = self.lifecycle.lock() {
+                receipt.phase = ExtensionLifecyclePhase::Rejected;
+                receipt.succeeded = Some(false);
+            }
+            return Err(admission_error(error));
+        }
+        self.pending = Some(Pending {
+            cancel,
+            result: receive,
+        });
+        self.message = Some("Extension running in a separate process".into());
+        Ok(())
+    }
+    /// Main-loop caller applies the returned transaction with apply_prepared;
+    /// stale identity/revision, IME and read-only restrictions remain actor-owned.
+    pub fn pump(&mut self) -> Option<Result<InvocationOutput, String>> {
+        let pending = self.pending.as_ref()?;
+        let mut result = match pending.result.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => Err("Extension worker stopped; document unchanged".into()),
+        };
+        if pending.cancel.load(Ordering::Acquire) {
+            result = Err("Extension cancelled; document unchanged".into());
+        }
+        if let Ok(mut receipt) = self.lifecycle.lock() {
+            receipt.succeeded = Some(result.is_ok());
+        }
+        self.message = Some(match &result {
+            Ok(_) => "Extension completed; host stopped".into(),
+            Err(error) => error.clone(),
+        });
+        self.pending = None;
+        Some(result)
+    }
+}
+
+#[cfg(all(test, windows, feature = "fixture-release"))]
+mod release_delivery_fixture {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use blake2::{Blake2b512, Digest as _};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sha2::Sha256;
+    use std::{fs, path::Path, sync::atomic::AtomicBool};
+
+    fn sign(bytes: &[u8], seed: [u8; 32], id: [u8; 8]) -> (String, String) {
+        let key = SigningKey::from_bytes(&seed);
+        let mut public = b"Ed".to_vec();
+        public.extend_from_slice(&id);
+        public.extend_from_slice(key.verifying_key().as_bytes());
+        let signature = key.sign(&Blake2b512::digest(bytes)).to_bytes();
+        let mut body = b"ED".to_vec();
+        body.extend_from_slice(&id);
+        body.extend_from_slice(&signature);
+        let comment = b"NONSHIPPING connected release fixture";
+        let mut global = signature.to_vec();
+        global.extend_from_slice(comment);
+        (
+            STANDARD.encode(public),
+            format!(
+                "untrusted comment: fixture only\n{}\ntrusted comment: {}\n{}",
+                STANDARD.encode(body),
+                std::str::from_utf8(comment).unwrap(),
+                STANDARD.encode(key.sign(&global).to_bytes())
+            ),
+        )
+    }
+
+    #[test]
+    fn fixture_config_drives_catalog_runtime_and_three_component_install_with_tamper_rejection() {
+        use bareline_extensions_protocol::{
+            Capability, Catalog, CatalogEntry, CatalogPolicy, OfflinePackageSource, PackageRequest,
+            VerifiedPackageSource,
+        };
+        let trust = compiled_trust().expect("fixture-release must compile fixture trust");
+        assert_eq!(env!("BARELINE_BUILD_MODE"), "fixture");
+        let metadata_floor = env!("BARELINE_METADATA_FLOOR").parse::<u64>().unwrap();
+        let package_root =
+            PathBuf::from(std::env::var_os("BARELINE_RELEASE_FIXTURE_PACKAGE_DIR").expect("fixture package directory"));
+        let runtime_source =
+            PathBuf::from(std::env::var_os("BARELINE_RELEASE_FIXTURE_RUNTIME").expect("fixture runtime"));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let evidence_root =
+            PathBuf::from(std::env::var_os("BARELINE_RELEASE_FIXTURE_OUTPUT").expect("fixture evidence output"));
+        fs::create_dir(&evidence_root).unwrap();
+        let source = evidence_root.join("catalog-source");
+        let installed_root = evidence_root.join("installation");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir(&installed_root).unwrap();
+        let specifications = [
+            (
+                "org.bareline.json-tools",
+                "json-tools.blex",
+                vec![Capability::DocumentRead, Capability::DocumentEdit, Capability::UiPanel],
+            ),
+            (
+                "org.bareline.xml-tools",
+                "xml-tools.blex",
+                vec![Capability::DocumentRead, Capability::DocumentEdit, Capability::UiPanel],
+            ),
+            (
+                "org.bareline.hex-view",
+                "hex-view.blex",
+                vec![Capability::DocumentRead, Capability::UiPanel],
+            ),
+        ];
+        let mut entries = Vec::new();
+        for (id, file, capabilities) in &specifications {
+            let bytes = fs::read(package_root.join(file)).unwrap();
+            let sha256 = format!("{:x}", Sha256::digest(&bytes));
+            fs::write(source.join(format!("{sha256}.blex")), &bytes).unwrap();
+            entries.push(CatalogEntry {
+                id: (*id).into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                publisher: trust.publisher.clone(),
+                artifact_type: "extension".into(),
+                platform: "windows-x64".into(),
+                channel: trust.channel.clone(),
+                length: bytes.len() as u64,
+                sha256,
+                minimum_protocol: 1,
+                maximum_protocol: 1,
+                capabilities: capabilities.clone(),
+            });
+        }
+        let catalog = serde_json::to_vec(&Catalog {
+            schema_version: 1,
+            metadata_version: metadata_floor,
+            expires_unix: now + 3600,
+            entries,
+        })
+        .unwrap();
+        let (catalog_key, catalog_signature) = sign(&catalog, [42; 32], [7; 8]);
+        assert_eq!(catalog_key, trust.catalog_public_key);
+        fs::write(evidence_root.join("catalog.json"), &catalog).unwrap();
+        fs::write(evidence_root.join("catalog.minisig"), &catalog_signature).unwrap();
+        let policy = CatalogPolicy {
+            public_key: &trust.catalog_public_key,
+            publisher: &trust.publisher,
+            channel: &trust.channel,
+            platform: "windows-x64",
+            artifact_type: "extension",
+            highest_metadata_version: metadata_floor,
+            now_unix: now,
+        };
+        let catalog_source = OfflinePackageSource::open(source.clone(), &catalog, &catalog_signature, &policy).unwrap();
+        let mut index = ManagerIndex::default();
+        let mut installed = Vec::new();
+        for (id, _, _) in &specifications {
+            let package = catalog_source
+                .fetch(&PackageRequest {
+                    id: (*id).into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                })
+                .unwrap();
+            let (next, package) =
+                bareline_app::extensions::manager::install(&installed_root, &package, &index, &AtomicBool::new(false))
+                    .unwrap();
+            let component = fs::read(package.directory().join(&package.manifest.entry_component)).unwrap();
+            assert_eq!(&component[..8], b"\0asm\x0d\0\x01\0");
+            assert_eq!(<[u8; 32]>::from(Sha256::digest(&component)), package.component_sha256);
+            index = next;
+            installed.push(package);
+        }
+        assert_eq!(installed.len(), 3);
+        let mut bad_catalog_signature = catalog_signature.clone().into_bytes();
+        bad_catalog_signature[50] ^= 1;
+        assert!(
+            OfflinePackageSource::open(
+                source.clone(),
+                &catalog,
+                std::str::from_utf8(&bad_catalog_signature).unwrap(),
+                &policy
+            )
+            .is_err()
+        );
+        let corrupt_digest = catalog_source.entries()[0].sha256.clone();
+        fs::write(source.join(format!("{corrupt_digest}.blex")), b"tampered package").unwrap();
+        assert!(
+            catalog_source
+                .fetch(&PackageRequest {
+                    id: specifications[0].0.into(),
+                    version: env!("CARGO_PKG_VERSION").into()
+                })
+                .is_err()
+        );
+
+        let runtime_bytes = fs::read(&runtime_source).unwrap();
+        let runtime_sha = format!("{:x}", Sha256::digest(&runtime_bytes));
+        let runtime_metadata = serde_json::to_vec(&serde_json::json!({
+            "artifact_type":"bareline-exthost-x64", "channel":trust.channel.clone(), "expires_unix":now + 3600,
+            "length":runtime_bytes.len(), "metadata_version":metadata_floor, "minimum_protocol":1, "platform":"windows-x64",
+            "publisher":trust.publisher.clone(), "schema_version":1, "sha256":runtime_sha, "version":env!("CARGO_PKG_VERSION")
+        })).unwrap();
+        let (release_key, runtime_signature) = sign(
+            &runtime_metadata,
+            std::array::from_fn(|index| index as u8),
+            *b"TESTONLY",
+        );
+        assert_eq!(release_key, trust.release_public_key);
+        let runtime_policy = bareline_distribution::update::TrustPolicy {
+            release_public_key: &trust.release_public_key,
+            channel: &trust.channel,
+            artifact_type: "bareline-exthost-x64",
+            platform: "windows-x64",
+            publisher: &trust.publisher,
+            protocol: 1,
+            highest_metadata_version: metadata_floor,
+            maximum_package_bytes: 256 * 1024 * 1024,
+        };
+        let runtime = crate::shell::native::update::install_verified_runtime_nonshipping_fixture(
+            &runtime_source,
+            &runtime_metadata,
+            &runtime_signature,
+            &runtime_policy,
+            now,
+            &trust.signer,
+            &installed_root,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&runtime.executable).unwrap(), runtime_bytes);
+        let corrupt_runtime = evidence_root.join("corrupt-runtime.exe");
+        fs::write(&corrupt_runtime, [&runtime_bytes[..], b"tamper"].concat()).unwrap();
+        let corrupt_root = evidence_root.join("corrupt-installation");
+        fs::create_dir(&corrupt_root).unwrap();
+        assert!(
+            crate::shell::native::update::install_verified_runtime_nonshipping_fixture(
+                &corrupt_runtime,
+                &runtime_metadata,
+                &runtime_signature,
+                &runtime_policy,
+                now,
+                &trust.signer,
+                &corrupt_root,
+                &AtomicBool::new(false),
+            )
+            .is_err()
+        );
+        let identity = |path: &Path| {
+            let bytes = fs::read(path).unwrap();
+            serde_json::json!({
+                "path": path.canonicalize().unwrap(),
+                "sha256": format!("{:x}", Sha256::digest(&bytes)),
+                "bytes": bytes.len()
+            })
+        };
+        let installed_artifacts = serde_json::json!({
+            "schema_version": 1,
+            "nonshipping": true,
+            "artifacts": {
+                "host": identity(&runtime.executable),
+                "json": identity(&installed[0].directory().join(&installed[0].manifest.entry_component)),
+                "xml": identity(&installed[1].directory().join(&installed[1].manifest.entry_component)),
+                "hex": identity(&installed[2].directory().join(&installed[2].manifest.entry_component))
+            }
+        });
+        let report = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(evidence_root.join("installed-artifacts.json"))
+            .unwrap();
+        serde_json::to_writer_pretty(report, &installed_artifacts).unwrap();
+    }
+}
+impl Drop for ExtensionsRuntime {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+pub fn register(registry: &mut bareline_commands::CommandRegistry) {
+    use bareline_commands::{Action, CommandId, CommandSpec};
+    for (id, title) in [
+        ("extensions.manage", "Manage Extensions"),
+        ("extensions.cancel", "Cancel Extension"),
+        ("extensions.close", "Close Extensions"),
+        ("extensions.catalog", "Open Signed Offline Extension Catalog"),
+        ("extensions.runtime_catalog", "Install Signed Offline Runtime"),
+        ("extensions.install", "Install Selected Package"),
+        ("extensions.run_selected", "Run Selected Extension Command"),
+        (
+            "extensions.run_background",
+            "Run Declared Background Command (120 seconds)",
+        ),
+        ("extensions.next_command", "Select Next Extension Command"),
+        ("extensions.permissions", "Review Selected Extension Permissions"),
+        ("extensions.approve", "Approve Reviewed Extension Permissions"),
+        ("extensions.disable", "Disable Selected Extension"),
+        ("extensions.remove", "Uninstall Selected Extension"),
+        ("extensions.remove_runtime", "Remove Runtime"),
+        ("ext.json.validate", "JSON: Validate"),
+        ("ext.json.format", "JSON: Format"),
+        ("ext.json.minify", "JSON: Minify"),
+        ("ext.json.tree", "JSON: Tree"),
+        ("ext.xml.validate", "XML: Validate"),
+        ("ext.xml.format", "XML: Format"),
+        ("ext.xml.xpath", "XML: XPath"),
+        ("ext.hex.open", "Hex: Original Bytes"),
+    ] {
+        registry
+            .register(CommandSpec {
+                id: CommandId(id),
+                title,
+                category: "Extensions",
+                shortcut: "",
+                action: Action::Contributed(CommandId(id)),
+            })
+            .expect("unique extension command");
+    }
+    // The panel surface invokes these by ID; they must not leak into menus as
+    // always-enabled rows. Only "Manage Extensions" and the ext.* features stay
+    // user-facing.
+    for id in [
+        "extensions.cancel",
+        "extensions.close",
+        "extensions.catalog",
+        "extensions.runtime_catalog",
+        "extensions.install",
+        "extensions.run_selected",
+        "extensions.run_background",
+        "extensions.next_command",
+        "extensions.permissions",
+        "extensions.approve",
+        "extensions.disable",
+        "extensions.remove",
+        "extensions.remove_runtime",
+    ] {
+        registry
+            .set_presentation(
+                CommandId(id),
+                bareline_commands::CommandPresentation {
+                    menu_path: "Tools > Extensions".into(),
+                    internal: true,
+                    ..Default::default()
+                },
+            )
+            .expect("registered extension command");
+    }
+    // Without an owner trust pin (the unsigned preview) no extension can be
+    // installed or run, so the user-facing commands are hidden too (UI-04).
+    if !trust_available() {
+        let hidden: Vec<CommandId> = registry
+            .entries()
+            .filter(|spec| spec.id.0 == "extensions.manage" || spec.id.0.starts_with("ext."))
+            .map(|spec| spec.id)
+            .collect();
+        for id in hidden {
+            let _ = registry.update_presentation(id, |meta| meta.internal = true);
+        }
+    }
+}
+impl ExtensionsRuntime {
+    pub fn draw(
+        &mut self,
+        _renderer: &mut super::Renderer,
+        width: f32,
+        height: f32,
+        top: f32,
+        theme: bareline_ui::theme::UiTheme,
+        ops: &mut Vec<bareline_renderer::DrawOp>,
+    ) {
+        self.ui.theme = theme;
+        self.draw_manager(_renderer, width, height, top, ops);
+    }
+}
+impl super::Shell {
+    pub(super) fn extensions_dispatch(&mut self, _el: &super::ActiveEventLoop, id: &str) -> bool {
+        if !self.profile.settled() && !matches!(id, "extensions.close" | "extensions.cancel") {
+            self.extensions.message = Some("Profile storage is still being reconciled".into());
+            return true;
+        }
+        let result: Result<(), String> = match id {
+            "extensions.manage" => {
+                // Pages are tabs: showing Extensions hides Settings, which keeps
+                // its tab in the strip (UI-05).
+                if self.settings.controller.open {
+                    self.settings.controller.dismiss();
+                    self.views.park_page(super::views::PageTab::Settings);
+                }
+                self.extensions.open = true;
+                Ok(())
+            }
+            "extensions.close" => {
+                self.extensions.open = false;
+                Ok(())
+            }
+            "extensions.cancel" => {
+                self.extensions.cancel();
+                Ok(())
+            }
+            "extensions.catalog" | "extensions.runtime_catalog" => (|| {
+                let path = self.platform.as_ref().ok_or("Window unavailable")?.open_file()?;
+                if let Some(path) = path {
+                    if id == "extensions.runtime_catalog" {
+                        self.extensions.install_runtime(path, self.notify.clone())?;
+                    } else {
+                        self.extensions.open_catalog(path, false, self.notify.clone())?;
+                    }
+                }
+                Ok(())
+            })(),
+            "extensions.install" => self.extensions.install_selected(self.notify.clone()),
+            "extensions.permissions" => {
+                if let Some(row) = self.extensions.installed.get(self.extensions.selected) {
+                    self.extensions.permission_review = Some(self.extensions.selected);
+                    self.extensions.message = Some(format!(
+                        "{} requests: {}. Choose Approve Reviewed Extension Permissions to enable.",
+                        row.package.id,
+                        row.package
+                            .manifest
+                            .capabilities
+                            .iter()
+                            .map(|c| c.name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                    Ok(())
+                } else {
+                    Err("Select an installed extension".into())
+                }
+            }
+            "extensions.approve" => {
+                if self.extensions.permission_review.take() == Some(self.extensions.selected) {
+                    self.extensions.save_permission(true, self.notify.clone())
+                } else {
+                    Err("Review the selected extension permissions first".into())
+                }
+            }
+            "extensions.disable" => self.extensions.save_permission(false, self.notify.clone()),
+            "extensions.remove" => self.extensions.remove_selected(self.notify.clone()),
+            "extensions.remove_runtime" => self.extensions.remove_runtime(self.notify.clone()),
+            "extensions.next_command" => {
+                if let Some(row) = self.extensions.installed.get(self.extensions.selected) {
+                    if !row.package.manifest.commands.is_empty() {
+                        self.extensions.command_selection =
+                            (self.extensions.command_selection + 1) % row.package.manifest.commands.len();
+                    }
+                }
+                Ok(())
+            }
+            "extensions.run_selected" | "extensions.run_background" => (|| {
+                let row = self
+                    .extensions
+                    .installed
+                    .get(self.extensions.selected)
+                    .ok_or("Select an installed extension")?;
+                let command = row
+                    .package
+                    .manifest
+                    .commands
+                    .get(self.extensions.command_selection)
+                    .ok_or("Select a command")?
+                    .clone();
+                let owner = row.package.id.clone();
+                self.start_owned_extension(
+                    Some(&owner),
+                    &command,
+                    if id == "extensions.run_background" {
+                        bareline_extensions_protocol::ExecutionBudget::Background
+                    } else {
+                        bareline_extensions_protocol::ExecutionBudget::Interactive
+                    },
+                )
+            })(),
+            command if command.starts_with("ext.") => self.start_selected_extension(command),
+            _ => return false,
+        };
+        if let Err(error) = result {
+            self.extensions.message = Some(error);
+            self.extensions.open = true;
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
+    pub(super) fn extensions_pump(&mut self, _el: &super::ActiveEventLoop) {
+        self.extensions.start_restore(self.notify.clone());
+        if self.extensions.pump_manager()
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
+        }
+        self.extensions.flush_disabled(self.notify.clone());
+        if let Some(result) = self.extensions.pump() {
+            match result {
+                Ok(output) => {
+                    if let Some(transaction) = output.transaction {
+                        let result = self
+                            .workspace
+                            .as_mut()
+                            .and_then(|workspace| {
+                                workspace
+                                    .editors
+                                    .iter_mut()
+                                    .find(|editor| editor.snapshot().same_document(&output.source))
+                            })
+                            .ok_or_else(|| "Document closed; extension edits discarded".to_string())
+                            .and_then(|editor| editor.apply_prepared(&output.source, transaction));
+                        if let Err(error) = result {
+                            self.extensions.message = Some(error.into());
+                        }
+                    }
+                    self.extensions.panel_output = output
+                        .panels
+                        .into_iter()
+                        .map(|(_, text)| text)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
+                Err(error) => self.extensions.message = Some(error),
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        // A profile retry may finish while an invocation is active. Keep that
+        // invocation's verified handles until it drains, then restore the newly
+        // authoritative inventory before accepting further mutations.
+        self.extensions.start_restore(self.notify.clone());
+    }
+    pub(super) fn extensions_event(&mut self, _el: &super::ActiveEventLoop, event: &super::WindowEvent) -> bool {
+        if !self.profile.settled() {
+            return false;
+        }
+        self.extensions_ui_event(_el, event)
+    }
+}
+
+fn text(
+    x: f32,
+    y: f32,
+    value: impl Into<String>,
+    size: f32,
+    color: bareline_renderer::Color,
+) -> bareline_renderer::DrawOp {
+    bareline_renderer::DrawOp::Text {
+        origin: bareline_renderer::Point { x, y },
+        text: value.into(),
+        size,
+        color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cancel_after_worker_completion_discards_queued_proposal() {
+        let document = bareline_document::Document::from_utf8(
+            "text",
+            bareline_document::Budget::new(4096),
+            bareline_document::Budget::new(4096),
+        )
+        .unwrap();
+        let (send, result) = mpsc::channel();
+        send.send(Ok(InvocationOutput {
+            source: document.snapshot(),
+            transaction: None,
+            panels: vec![("panel".into(), "late reply".into())],
+        }))
+        .unwrap();
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.pending = Some(Pending {
+            cancel: Arc::new(AtomicBool::new(false)),
+            result,
+        });
+        runtime.cancel();
+        assert!(runtime.pump().unwrap().is_err());
+        assert!(!runtime.running());
+    }
+    #[test]
+    fn panel_actions_are_internal_and_only_manage_stays_user_facing() {
+        let mut registry = bareline_commands::CommandRegistry::default();
+        register(&mut registry);
+        for id in [
+            "extensions.next_command",
+            "extensions.run_background",
+            "extensions.cancel",
+            "extensions.close",
+        ] {
+            assert!(
+                registry
+                    .presentation(bareline_commands::CommandId(id))
+                    .is_some_and(|meta| meta.internal),
+                "{id} must not leak into menus"
+            );
+        }
+        // Manage and the ext.* features are user-facing exactly when this build
+        // can run extensions.
+        for id in ["extensions.manage", "ext.json.format"] {
+            assert_eq!(
+                registry
+                    .presentation(bareline_commands::CommandId(id))
+                    .is_some_and(|meta| meta.internal),
+                !trust_available(),
+                "{id}"
+            );
+        }
+    }
+}
+
+/// Owner pins are supplied by release composition, never read from a selected
+/// package/catalog. None keeps a development build explicitly unavailable.
+#[derive(Clone)]
+pub struct OwnerTrust {
+    /// Core floor, passed through to the authority resolution only.
+    pub metadata_floor: u64,
+    /// Separate runtime and catalog floors from the signed authority (SEC-03).
+    pub runtime_floor: u64,
+    pub catalog_floor: u64,
+    pub catalog_public_key: String,
+    pub release_public_key: String,
+    pub publisher: String,
+    pub channel: String,
+    pub signer: bareline_distribution::update::PublisherPin,
+}
+struct CatalogSelection {
+    source: bareline_extensions_protocol::OfflinePackageSource,
+    entries: Vec<bareline_extensions_protocol::CatalogEntry>,
+}
+enum ManagerResult {
+    Catalog(CatalogSelection),
+    Installed(
+        bareline_extensions_protocol::InstalledPackage,
+        ManagerIndex,
+        Option<String>,
+    ),
+    Restored(
+        PathBuf,
+        ManagerIndex,
+        Vec<InstalledRow>,
+        Option<crate::shell::native::update::InstalledRuntime>,
+        Vec<String>,
+    ),
+    Permissions(ManagerIndex),
+    Removed(String, ManagerIndex),
+    RuntimeInstalled(crate::shell::native::update::InstalledRuntime, ManagerIndex),
+    RuntimeRemoved(ManagerIndex),
+}
+struct InstalledRow {
+    package: bareline_extensions_protocol::InstalledPackage,
+    state: InstalledState,
+}
+
+impl ExtensionsRuntime {
+    fn manager_work(
+        &mut self,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        work: impl FnOnce(Arc<AtomicBool>) -> Result<ManagerResult, String> + Send + 'static,
+    ) -> Result<(), String> {
+        self.manager_work_on(extension_worker(), notify, work)
+    }
+
+    fn manager_work_on(
+        &mut self,
+        executor: &BoundedExecutor,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        work: impl FnOnce(Arc<AtomicBool>) -> Result<ManagerResult, String> + Send + 'static,
+    ) -> Result<(), String> {
+        if !self.enabled {
+            return Err("Extensions disabled for this session".into());
+        }
+        if self.manager_pending.is_some() {
+            return Err("Wait for the current extension operation".into());
+        }
+        let (send, receive) = mpsc::sync_channel(1);
+        self.manager_cancel = Arc::new(AtomicBool::new(false));
+        let cancel = self.manager_cancel.clone();
+        let completion = WorkerCompletion::new(send, notify, "Package worker stopped");
+        if let Err(error) = executor.submit(
+            WorkKind::Bulk,
+            Box::new(move || {
+                if cancel.load(Ordering::Acquire) {
+                    completion.complete(Err("Operation cancelled".into()));
+                } else {
+                    completion.complete(work(cancel));
+                }
+            }),
+        ) {
+            self.manager_cancel.store(true, Ordering::Release);
+            return Err(admission_error(error));
+        }
+        self.manager_pending = Some(receive);
+        Ok(())
+    }
+    fn open_catalog(
+        &mut self,
+        path: PathBuf,
+        runtime: bool,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
+        let trust = self
+            .trust
+            .clone()
+            .ok_or("Owner trust policy is not configured in this build")?;
+        let storage = self.mutation_root()?;
+        self.manager_work(notify, move |cancel| {
+            if cancel.load(Ordering::Acquire) {
+                return Err("Operation cancelled".into());
+            }
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Required)?;
+            use bareline_extensions_protocol::OfflinePackageSource;
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)
+                .map_err(|e| e.to_string())?
+                .take(1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.len() > 1024 * 1024 {
+                return Err("Catalog size limit".into());
+            }
+            let mut signature = String::new();
+            let signature_path = path.with_file_name(format!(
+                "{}.minisig",
+                path.file_name().ok_or("Catalog filename")?.to_string_lossy()
+            ));
+            std::fs::File::open(signature_path)
+                .map_err(|e| e.to_string())?
+                .take(8193)
+                .read_to_string(&mut signature)
+                .map_err(|e| e.to_string())?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            let artifact_type = if runtime { "runtime" } else { "extension" };
+            std::fs::create_dir_all(&storage).map_err(|e| e.to_string())?;
+            let version_path = storage.join(format!("{artifact_type}-metadata-version"));
+            let highest = match std::fs::File::open(&version_path) {
+                Ok(file) => {
+                    let mut value = String::new();
+                    file.take(65).read_to_string(&mut value).map_err(|e| e.to_string())?;
+                    if value.len() > 64 {
+                        return Err("Metadata version record limit".into());
+                    }
+                    value
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "Invalid metadata version record")?
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(error.to_string()),
+            };
+            let source = OfflinePackageSource::open(
+                path.parent().ok_or("Catalog directory")?.to_path_buf(),
+                &bytes,
+                &signature,
+                &trust.catalog_policy(artifact_type, highest, now),
+            )
+            .map_err(|e| format!("The extension catalog could not be verified: {e}."))?;
+            if cancel.load(Ordering::Acquire) {
+                return Err("Operation cancelled".into());
+            }
+            let temporary = storage.join(format!("{artifact_type}-metadata-{}-{}.tmp", std::process::id(), now));
+            let (mut temporary_owner, mut file) =
+                TemporaryArtifact::create(temporary.clone()).map_err(|e| e.to_string())?;
+            use std::io::Write;
+            file.write_all(source.metadata_version().to_string().as_bytes())
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())?;
+            drop(file);
+            if cancel.load(Ordering::Acquire) {
+                return Err("Operation cancelled".into());
+            }
+            std::fs::rename(&temporary, &version_path).map_err(|error| error.to_string())?;
+            temporary_owner.publish();
+            let entries = source
+                .entries()
+                .iter()
+                .filter(|entry| entry.artifact_type == artifact_type)
+                .cloned()
+                .collect();
+            Ok(ManagerResult::Catalog(CatalogSelection { source, entries }))
+        })
+    }
+    fn install_selected(&mut self, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        use bareline_extensions_protocol::{PackageRequest, VerifiedPackageSource};
+        if self.manager_pending.is_some() || self.running() {
+            return Err("Wait for the current operation".into());
+        }
+        let root = self.mutation_root()?;
+        let trust = self.trust.clone().ok_or("Owner trust policy unavailable")?;
+        let catalog = self.catalog.take().ok_or("Open a verified offline catalog first")?;
+        let entry = catalog
+            .entries
+            .get(self.selected)
+            .cloned()
+            .ok_or("Select an available package")?;
+        if entry.artifact_type != "extension" {
+            return Err("Use the verified native runtime provider for runtime installation".into());
+        }
+        let mut index = self.index.clone();
+        // Persisted counts are hints. Reconcile against verified manifests before
+        // deciding whether an update fits the bounded contribution registry.
+        for row in &self.installed {
+            if let Some(entry) = index.entries.iter_mut().find(|entry| entry.id == row.package.id) {
+                entry.command_count = row.package.manifest.commands.len();
+            }
+        }
+        let previous = self
+            .installed
+            .iter()
+            .find(|row| row.package.id == entry.id)
+            .map(|row| row.package.clone());
+        self.manager_work(notify, move |cancel| {
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Required)?;
+            let source = catalog
+                .source
+                .revalidate(&trust.catalog_policy("extension", catalog.source.metadata_version(), authority::now()?))
+                .map_err(|error| format!("The extension catalog is no longer trusted: {error}."))?;
+            let package = source
+                .fetch(&PackageRequest {
+                    id: entry.id,
+                    version: entry.version,
+                })
+                .map_err(|e| format!("The extension package could not be verified: {e}."))?;
+            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+            let (index, installed) = bareline_app::extensions::manager::install(&root, &package, &index, &cancel)?;
+            let cleanup = previous
+                .filter(|old| old.directory() != installed.directory())
+                .and_then(|old| old.remove_cached().err())
+                .map(|error| format!("Update installed; the old version could not be removed: {error}."));
+            Ok(ManagerResult::Installed(installed, index, cleanup))
+        })
+    }
+    fn pump_manager(&mut self) -> bool {
+        let Some(receiver) = &self.manager_pending else {
+            return false;
+        };
+        let result = match receiver.try_recv() {
+            Ok(value) => value,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(_) => Err("Package worker stopped".into()),
+        };
+        self.manager_pending = None;
+        self.permission_review = None;
+        match result {
+            Ok(ManagerResult::Catalog(catalog)) => {
+                self.catalog = Some(catalog);
+                self.selected = 0;
+                self.tab = 1;
+                self.message = Some("Verified catalog loaded. Select a package, then Install Selected Package.".into());
+            }
+            Ok(ManagerResult::Installed(package, index, cleanup)) => {
+                let state = index
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == package.id)
+                    .expect("published installation record")
+                    .clone();
+                self.installed.retain(|row| row.package.id != package.id);
+                self.installed.push(InstalledRow { package, state });
+                self.index = index;
+                self.tab = 0;
+                self.selected = 0;
+                self.message = Some(cleanup.unwrap_or_else(|| "Installed. Review permissions before enabling.".into()));
+            }
+            Ok(ManagerResult::Restored(restored_root, index, rows, runtime, errors)) => {
+                if self.inventory_root.as_deref() != Some(restored_root.as_path()) {
+                    self.restore_pending = self.enabled && self.inventory_root.is_some();
+                    self.message =
+                        Some("Discarded a stale extension inventory restore after profile reconciliation".into());
+                    return true;
+                }
+                self.inventory_restored = true;
+                self.storage_reconciled = true;
+                self.inventory_mutable = self.inventory_target_local && self.inventory_root == self.root;
+                self.inventory_error = (!errors.is_empty()).then(|| errors.join("; "));
+                self.runtime_package = runtime;
+                self.index = index;
+                self.installed = rows;
+                self.message = Some(if errors.is_empty() {
+                    "Installed extensions restored and verified; host stopped".into()
+                } else {
+                    errors.join("; ")
+                });
+            }
+            Ok(ManagerResult::Permissions(index)) => {
+                for row in &mut self.installed {
+                    if let Some(state) = index.entries.iter().find(|entry| entry.id == row.package.id) {
+                        row.state = state.clone();
+                    }
+                }
+                self.index = index;
+                self.message = Some("Permissions saved".into());
+            }
+            Ok(ManagerResult::Removed(id, index)) => {
+                self.index = index;
+                self.installed.retain(|row| row.package.id != id);
+                self.message = Some("Removed installed package".into())
+            }
+            Ok(ManagerResult::RuntimeInstalled(runtime, index)) => {
+                self.runtime_package = Some(runtime);
+                self.index = index;
+                self.message = Some("Verified runtime installed; host stopped".into());
+            }
+            Ok(ManagerResult::RuntimeRemoved(index)) => {
+                self.runtime_package = None;
+                self.index = index;
+                self.message = Some("Runtime removed".into());
+            }
+            Err(error) => {
+                if !self.inventory_restored {
+                    self.inventory_error = Some(error.clone());
+                }
+                self.message = Some(error);
+            }
+        }
+        for row in &mut self.installed {
+            if self.deferred_disabled.contains(&row.package.id) {
+                row.state.enabled = false;
+            }
+        }
+        true
+    }
+}
+
+impl super::Shell {
+    fn start_selected_extension(&mut self, command: &str) -> Result<(), String> {
+        self.start_owned_extension(
+            None,
+            command,
+            bareline_extensions_protocol::ExecutionBudget::Interactive,
+        )
+    }
+    fn start_owned_extension(
+        &mut self,
+        owner: Option<&str>,
+        command: &str,
+        budget: bareline_extensions_protocol::ExecutionBudget,
+    ) -> Result<(), String> {
+        use bareline_extensions_protocol::{Capability, Scope, broker::Grant};
+        if !self.extensions.valid_contribution_budget() {
+            return Err("Verified extension contribution limit (1024) exceeded".into());
+        }
+        let runtime = self
+            .extensions
+            .runtime_package
+            .as_ref()
+            .ok_or("Runtime not installed")?;
+        let trust = self
+            .extensions
+            .trust
+            .as_ref()
+            .ok_or("Owner runtime trust policy unavailable")?;
+        let row = self
+            .extensions
+            .installed
+            .iter()
+            .find(|row| {
+                owner.is_none_or(|owner| row.package.id == owner)
+                    && row.state.enabled
+                    && row.package.manifest.commands.iter().any(|id| id == command)
+            })
+            .ok_or("Install and enable an extension contributing this command")?;
+        if budget == bareline_extensions_protocol::ExecutionBudget::Background
+            && !row.package.manifest.background_commands.iter().any(|id| id == command)
+        {
+            return Err("This signed command does not declare background execution".into());
+        }
+        let workspace = self.workspace.as_ref().ok_or("Open a document first")?;
+        let editor = workspace.editors.get(self.app.active).ok_or("Open a document first")?;
+        if editor.busy() {
+            return Err("Extension requires a complete available snapshot".into());
+        }
+        let original = workspace.raw_source_descriptor(self.app.active)?;
+        let raw_length = original.as_ref().map_or(0, |source| source.len());
+        let paged = match editor {
+            bareline_app::workspace::WorkspaceEditor::Paged(editor) => Some(editor.read_handle()),
+            _ => None,
+        };
+        let source = editor.snapshot().clone();
+        let mut session =
+            ExtensionSession::new_with_budget(row.package.id.clone(), budget).map_err(|e| e.to_string())?;
+        session.approve(
+            row.package
+                .manifest
+                .capabilities
+                .iter()
+                .map(|capability| Grant {
+                    capability: *capability,
+                    scope: if matches!(capability, Capability::DocumentRead | Capability::DocumentEdit) {
+                        Scope::Document(1)
+                    } else {
+                        Scope::Extension
+                    },
+                })
+                .collect(),
+        );
+        let invocation = Invocation {
+            extension_id: row.package.id.clone(),
+            command: command.into(),
+            arguments: self.extensions.argument_text()?,
+            document: 1,
+            revision: source.revision.0,
+            // Tokens are scoped to this single authenticated invocation; the
+            // original authority is immutable even while editor text is dirty.
+            source_generation: 1,
+            text_length: paged.as_ref().map_or(source.len(), |handle| handle.snapshot().len()) as u64,
+            raw_length,
+            grant_generation: session.generation(),
+        };
+        let job = InvocationJob {
+            runtime: VerifiedRuntime {
+                executable: runtime.executable.clone(),
+                executable_sha256: runtime.executable_sha256,
+                signer: trust.signer.clone(),
+            },
+            component: row.package.directory().join(&row.package.manifest.entry_component),
+            component_sha256: row.package.component_sha256,
+            invocation,
+            budget,
+            source,
+            original,
+            paged,
+            session,
+            panels: row.package.manifest.panels.clone(),
+            edits_preserve_original: workspace.extension_edits_preserve_original(self.app.active),
+        };
+        self.extensions.start(job, self.notify.clone())
+    }
+}
+
+// The shared build preparation derives these values from one validated public
+// configuration. Preview mode has no owner trust and remains fail closed.
+fn compiled_trust() -> Option<OwnerTrust> {
+    if !mode_carries_owner_trust(env!("BARELINE_BUILD_MODE"), cfg!(test)) {
+        return None;
+    }
+    let catalog_public_key = env!("BARELINE_CATALOG_PUBLIC_KEY").to_owned();
+    let release_public_key = env!("BARELINE_RELEASE_PUBLIC_KEY").to_owned();
+    let publisher = env!("BARELINE_PUBLISHER").to_owned();
+    let channel = env!("BARELINE_RELEASE_CHANNEL").to_owned();
+    let signer = bareline_distribution::update::PublisherPin::parse(
+        env!("BARELINE_AUTHENTICODE_SUBJECT"),
+        env!("BARELINE_AUTHENTICODE_ISSUERS"),
+    )
+    .ok()?;
+    Some(OwnerTrust {
+        // The compiled floor is the core release's; the runtime and catalogs keep
+        // their own ledgers (SEC-03).
+        metadata_floor: env!("BARELINE_METADATA_FLOOR").parse().ok()?,
+        runtime_floor: 0,
+        catalog_floor: 0,
+        catalog_public_key,
+        release_public_key,
+        publisher,
+        channel,
+        signer,
+    })
+}
+/// Fixture builds compile public private-seed keys: outside this crate's tests only a
+/// configured release carries owner trust (SEC-18).
+fn mode_carries_owner_trust(mode: &str, test: bool) -> bool {
+    mode == "configured" || (test && mode == "fixture")
+}
+/// Whether this build carries an owner trust pin. The panel shows an honest
+/// "requires a signed runtime" card when this is false (UX-52/ARCH-01).
+pub(super) fn trust_available() -> bool {
+    compiled_trust().is_some()
+}
+
+impl ExtensionsRuntime {
+    fn move_selection(&mut self, delta: isize) {
+        self.permission_review = None;
+        let indices: Vec<usize> = self.visible_rows().into_iter().map(|(index, _)| index).collect();
+        if indices.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        let position = indices.iter().position(|i| *i == self.selected).unwrap_or(0);
+        self.selected = indices[(position as isize + delta).rem_euclid(indices.len() as isize) as usize];
+    }
+}
+
+#[cfg(test)]
+mod manager_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn only_configured_builds_carry_owner_trust_outside_tests() {
+        assert!(mode_carries_owner_trust("configured", false));
+        assert!(!mode_carries_owner_trust("fixture", false));
+        assert!(!mode_carries_owner_trust("preview", false));
+        assert!(mode_carries_owner_trust("fixture", true));
+        assert!(!mode_carries_owner_trust("preview", true));
+    }
+
+    fn invocation_job() -> InvocationJob {
+        let document = bareline_document::Document::from_utf8(
+            "fixture",
+            bareline_document::Budget::new(4096),
+            bareline_document::Budget::new(4096),
+        )
+        .unwrap();
+        let source = document.snapshot();
+        let mut session = ExtensionSession::new("fixture.tools".into()).unwrap();
+        session.approve(vec![]);
+        InvocationJob {
+            runtime: VerifiedRuntime {
+                executable: PathBuf::from("unused-host.exe"),
+                executable_sha256: [0; 32],
+                signer: bareline_distribution::update::PublisherPin::parse("Unused Publisher", "Unused CA").unwrap(),
+            },
+            component: PathBuf::from("unused-component.wasm"),
+            component_sha256: [0; 32],
+            invocation: Invocation {
+                extension_id: "fixture.tools".into(),
+                command: "fixture.command".into(),
+                arguments: String::new(),
+                document: 1,
+                revision: source.revision.0,
+                source_generation: 1,
+                text_length: source.len() as u64,
+                raw_length: 0,
+                grant_generation: session.generation(),
+            },
+            budget: bareline_extensions_protocol::ExecutionBudget::Interactive,
+            source,
+            original: None,
+            paged: None,
+            session,
+            panels: vec![],
+            edits_preserve_original: true,
+        }
+    }
+
+    #[test]
+    fn failed_exclusive_create_preserves_preexisting_stage() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-manager-stage-owner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let stage = root.join("existing.tmp");
+        std::fs::write(&stage, b"other operation").unwrap();
+        assert!(TemporaryArtifact::create(stage.clone()).is_err());
+        assert_eq!(std::fs::read(&stage).unwrap(), b"other operation");
+        std::fs::remove_file(stage).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn invocation_rejection_revokes_owner_without_pending_state() {
+        let executor = BoundedExecutor::new(1, 1, "extension-invocation-reject-test");
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        executor
+            .submit(
+                WorkKind::General,
+                Box::new(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }),
+            )
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        executor.submit(WorkKind::General, Box::new(|| {})).unwrap();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
+        let mut runtime = ExtensionsRuntime::default();
+        let error = runtime
+            .start_on(
+                &executor,
+                invocation_job(),
+                Arc::new(move || {
+                    let _ = wake_tx.try_send(());
+                }),
+            )
+            .unwrap_err();
+        assert!(error.contains("queue is full"));
+        assert!(runtime.pending.is_none());
+        let receipt = runtime.lifecycle_receipt().unwrap();
+        assert_eq!(receipt.phase, ExtensionLifecyclePhase::Rejected);
+        assert_eq!(receipt.succeeded, Some(false));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(wake_rx.try_recv().is_err(), "rejected invocation woke more than once");
+        release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn manager_rejection_does_not_leave_pending_and_wakes_once() {
+        let executor = BoundedExecutor::new(1, 1, "extension-manager-reject-test");
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        executor
+            .submit(
+                WorkKind::Bulk,
+                Box::new(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }),
+            )
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        executor.submit(WorkKind::Bulk, Box::new(|| {})).unwrap();
+
+        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
+        let mut runtime = ExtensionsRuntime::default();
+        let error = runtime
+            .manager_work_on(
+                &executor,
+                Arc::new(move || {
+                    let _ = wake_tx.try_send(());
+                }),
+                |_| Err("must not run".into()),
+            )
+            .unwrap_err();
+        assert!(error.contains("queue is full"));
+        assert!(runtime.manager_pending.is_none());
+        assert!(runtime.manager_cancel.load(Ordering::Acquire));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(wake_rx.try_recv().is_err(), "rejected work woke more than once");
+        release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn queued_manager_cancel_is_terminal_and_blocks_overlap() {
+        let executor = BoundedExecutor::new(1, 2, "extension-manager-cancel-test");
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        executor
+            .submit(
+                WorkKind::Bulk,
+                Box::new(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }),
+            )
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
+        let mut runtime = ExtensionsRuntime::default();
+        runtime
+            .manager_work_on(
+                &executor,
+                Arc::new(move || {
+                    let _ = wake_tx.try_send(());
+                }),
+                |_| Err("work ignored cancellation".into()),
+            )
+            .unwrap();
+        assert!(
+            runtime
+                .manager_work_on(&executor, Arc::new(|| {}), |_| Err("overlap ran".into()))
+                .unwrap_err()
+                .contains("current extension operation")
+        );
+        runtime.cancel();
+        release_tx.send(()).unwrap();
+        let result = runtime
+            .manager_pending
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(result, Err(ref error) if error == "Operation cancelled"));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(wake_rx.try_recv().is_err(), "cancelled work woke more than once");
+    }
+
+    #[test]
+    fn cancellation_after_manager_publication_preserves_receipt() {
+        let executor = BoundedExecutor::new(1, 1, "extension-manager-receipt-test");
+        let mut runtime = ExtensionsRuntime::default();
+        runtime
+            .manager_work_on(&executor, Arc::new(|| {}), |cancel| {
+                // Model a cancellation racing after the durable operation has
+                // committed and produced its complete receipt.
+                cancel.store(true, Ordering::Release);
+                Ok(ManagerResult::Permissions(ManagerIndex::default()))
+            })
+            .unwrap();
+        let result = runtime
+            .manager_pending
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(result, Ok(ManagerResult::Permissions(_))));
+    }
+
+    #[test]
+    fn manager_unwind_publishes_terminal_failure() {
+        let executor = BoundedExecutor::new(1, 1, "extension-manager-unwind-test");
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        let mut runtime = ExtensionsRuntime::default();
+        runtime
+            .manager_work_on(
+                &executor,
+                Arc::new(move || {
+                    let _ = wake_tx.try_send(());
+                }),
+                |_| -> Result<ManagerResult, String> { panic!("controlled manager failure") },
+            )
+            .unwrap();
+        let result = runtime
+            .manager_pending
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(result, Err(ref error) if error == "Package worker stopped"));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn failed_result_send_still_wakes_exactly_once() {
+        let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+        drop(receiver);
+        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
+        WorkerCompletion::new(
+            sender,
+            Arc::new(move || {
+                let _ = wake_tx.try_send(());
+            }),
+            "worker stopped",
+        )
+        .complete(Ok(()));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(wake_rx.try_recv().is_err(), "failed send woke more than once");
+    }
+
+    #[test]
+    fn closing_runtime_cancels_owned_invocation() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (_sender, receiver) = mpsc::sync_channel::<Result<InvocationOutput, String>>(1);
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.pending = Some(Pending {
+            cancel: cancel.clone(),
+            result: receiver,
+        });
+        drop(runtime);
+        assert!(cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn legacy_inventory_never_becomes_extension_mutation_root() {
+        let local = PathBuf::from("local/extensions");
+        let legacy = PathBuf::from("legacy/extensions");
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.configure(Some(local.clone()), true);
+        runtime.set_profile_root_before_restore(Some(legacy.clone()), false);
+        assert_eq!(runtime.root, Some(local));
+        assert_eq!(runtime.inventory_root, Some(legacy));
+        assert!(!runtime.inventory_mutable);
+    }
+
+    #[test]
+    fn fallback_inventory_blocks_removal_and_permission_writes() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-extension-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let local = root.join("local");
+        let legacy = root.join("legacy");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        let legacy_index = legacy.join("manager-v1.json");
+        ManagerIndex::default().save(&legacy).unwrap();
+        let legacy_before = std::fs::read(&legacy_index).unwrap();
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.configure(Some(local.clone()), true);
+        runtime.set_profile_root_before_restore(Some(legacy.clone()), false);
+
+        let permission = runtime.save_permission(true, Arc::new(|| {})).unwrap_err();
+        let removal = runtime.remove_selected(Arc::new(|| {})).unwrap_err();
+        assert!(permission.contains("read-only"));
+        assert!(removal.contains("read-only"));
+        assert_eq!(std::fs::read(&legacy_index).unwrap(), legacy_before);
+        assert!(ManagerIndex::load(&legacy).is_ok());
+        assert!(!local.join("manager-v1.json").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loaded_fallback_switches_only_after_exact_local_restore_completes() {
+        let local = PathBuf::from("local/extensions");
+        let legacy = PathBuf::from("legacy/extensions");
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.configure(Some(local.clone()), true);
+        runtime.set_profile_root_before_restore(Some(legacy.clone()), false);
+        runtime.inventory_restored = true;
+        runtime.restore_pending = false;
+        runtime.storage_reconciled = true;
+
+        runtime.set_profile_root_before_restore(Some(local.clone()), true);
+        assert!(runtime.restore_pending);
+        assert!(!runtime.storage_reconciled);
+        assert!(!runtime.inventory_mutable);
+
+        let (_active_send, active_receive) = mpsc::sync_channel(1);
+        runtime.pending = Some(Pending {
+            cancel: Arc::new(AtomicBool::new(false)),
+            result: active_receive,
+        });
+        runtime.start_restore(Arc::new(|| {}));
+        assert!(runtime.manager_pending.is_none());
+        assert!(runtime.restore_pending);
+        runtime.pending = None;
+
+        let (send, receive) = mpsc::sync_channel(1);
+        send.send(Ok(ManagerResult::Restored(
+            legacy,
+            ManagerIndex::default(),
+            vec![],
+            None,
+            vec![],
+        )))
+        .unwrap();
+        runtime.manager_pending = Some(receive);
+        assert!(runtime.pump_manager());
+        assert!(runtime.restore_pending);
+        assert!(!runtime.inventory_restored);
+        assert!(!runtime.storage_reconciled);
+
+        runtime.set_profile_root_before_restore(Some(local.clone()), true);
+        assert!(runtime.restore_pending);
+        assert!(!runtime.inventory_restored);
+        assert!(!runtime.storage_reconciled);
+        assert!(!runtime.inventory_mutable);
+
+        let (send, receive) = mpsc::sync_channel(1);
+        send.send(Ok(ManagerResult::Restored(
+            local.clone(),
+            ManagerIndex::default(),
+            vec![],
+            None,
+            vec![],
+        )))
+        .unwrap();
+        runtime.manager_pending = Some(receive);
+        assert!(runtime.pump_manager());
+        assert_eq!(runtime.inventory_root, Some(local));
+        assert!(runtime.inventory_restored);
+        assert!(runtime.storage_reconciled);
+        assert!(runtime.inventory_mutable);
+    }
+    #[test]
+    fn deferred_disable_persists_against_latest_completed_manager_generation() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-deferred-disable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.configure(Some(root.clone()), true);
+        runtime.set_profile_root_before_restore(Some(root.clone()), true);
+        let (send, receive) = mpsc::sync_channel(1);
+        send.send(Ok(ManagerResult::Restored(
+            root.clone(),
+            ManagerIndex::default(),
+            vec![],
+            None,
+            vec![],
+        )))
+        .unwrap();
+        runtime.manager_pending = Some(receive);
+        assert!(runtime.pump_manager());
+        assert!(runtime.inventory_mutable);
+        let index = ManagerIndex {
+            generation: 8,
+            entries: vec![InstalledState {
+                id: "fixture.tools".into(),
+                digest: "a".repeat(64),
+                version: "2".into(),
+                approved: vec![bareline_extensions_protocol::Capability::DocumentRead],
+                enabled: true,
+                generation: 8,
+                command_count: 1,
+            }],
+            ..Default::default()
+        };
+        let (send, receive) = mpsc::sync_channel(1);
+        assert!(send.send(Ok(ManagerResult::Permissions(index))).is_ok());
+        runtime.manager_pending = Some(receive);
+        runtime.deferred_disabled.insert("fixture.tools".into());
+        assert!(runtime.pump_manager());
+        runtime.flush_disabled(Arc::new(|| {}));
+        let result = runtime
+            .manager_pending
+            .take()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        let (send, receive) = mpsc::sync_channel(1);
+        assert!(send.send(result).is_ok());
+        runtime.manager_pending = Some(receive);
+        assert!(runtime.pump_manager());
+        let saved = ManagerIndex::load(&root).unwrap();
+        assert!(!saved.entries[0].enabled);
+        assert_eq!(saved.entries[0].version, "2");
+        assert!(saved.generation > 8);
+        std::fs::remove_file(root.join("manager-v1.json")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn release_without_owner_pins_cannot_open_or_install_catalog() {
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.configure(Some(PathBuf::from("unused-extension-storage")), true);
+        let error = runtime
+            .open_catalog(PathBuf::from("never-opened-catalog.json"), false, Arc::new(|| {}))
+            .unwrap_err();
+        assert!(error.contains("Owner trust policy"));
+        assert!(runtime.manager_pending.is_none());
+        assert!(runtime.installed.is_empty());
+        runtime.permission_review = Some(0);
+        runtime.move_selection(1);
+        assert!(runtime.permission_review.is_none());
+    }
+}
+
+impl ExtensionsRuntime {
+    fn start_restore(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        if !self.restore_pending || self.manager_pending.is_some() || self.running() {
+            return;
+        }
+        self.restore_pending = false;
+        let Some(trust) = self.trust.clone() else {
+            self.message = Some("Owner trust policy unavailable; installed packages cannot be verified".into());
+            self.inventory_error = self.message.clone();
+            return;
+        };
+        let Some(root) = self.inventory_root.clone() else {
+            self.inventory_error = Some("Extension storage unavailable".into());
+            return;
+        };
+        let restored_root = root.clone();
+        if let Err(error) = self.manager_work(notify, move |cancel| {
+            let index = ManagerIndex::load(&root)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            // Installed packages were verified at acceptance; expiry never disables them (SEC-02).
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Installed)?;
+            let policy = trust.catalog_policy("extension", 0, now);
+            let mut rows = Vec::new();
+            let mut errors = Vec::new();
+            for entry in &index.entries {
+                if cancel.load(Ordering::Acquire) {
+                    return Err("Restore cancelled".into());
+                }
+                match bareline_extensions_protocol::restore_cached(&root, &entry.digest, &policy, &cancel) {
+                    Ok(package) if package.id == entry.id && package.version == entry.version => {
+                        let mut state = entry.clone();
+                        if package
+                            .manifest
+                            .capabilities
+                            .iter()
+                            .any(|cap| !state.approved.contains(cap))
+                        {
+                            state.enabled = false;
+                        }
+                        rows.push(InstalledRow { package, state });
+                    }
+                    Ok(_) => errors.push(format!("{}: installed identity mismatch", entry.id)),
+                    Err(error) => errors.push(format!("{}: could not be verified: {error}", entry.id)),
+                }
+            }
+            let runtime = if let Some(digest) = &index.runtime_digest {
+                match crate::shell::native::update::restore_verified_runtime(
+                    &root,
+                    digest,
+                    &trust.runtime_policy(index.runtime_metadata_version),
+                    now,
+                    &trust.signer,
+                ) {
+                    Ok(runtime) => Some(runtime),
+                    Err(error) => {
+                        errors.push(format!("Runtime verification: {error}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Ok(ManagerResult::Restored(restored_root, index, rows, runtime, errors))
+        }) {
+            self.message = Some(error);
+        }
+    }
+    fn save_permission(&mut self, approve: bool, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        let root = self.mutation_root()?;
+        let row = self
+            .installed
+            .get(self.selected)
+            .ok_or("Select an installed extension")?;
+        let id = row.package.id.clone();
+        let requested = row.package.manifest.capabilities.clone();
+        let mut index = self.index.clone();
+        index.set_permission(&id, &requested, approve)?;
+        if !approve {
+            self.cancel();
+            if let Some(row) = self.installed.get_mut(self.selected) {
+                row.state.enabled = false;
+                row.state.generation = index.generation;
+            }
+            if self.manager_pending.is_some() {
+                self.deferred_disabled.insert(id);
+                self.message = Some("Extension stopped; saving disabled state after current operation".into());
+                return Ok(());
+            }
+        }
+        self.manager_work(notify, move |cancel| {
+            if cancel.load(Ordering::Acquire) {
+                return Err("Operation cancelled".into());
+            }
+            index.save(&root)?;
+            Ok(ManagerResult::Permissions(index))
+        })
+    }
+    fn flush_disabled(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        if self.manager_pending.is_some() || self.deferred_disabled.is_empty() {
+            return;
+        }
+        let Ok(root) = self.mutation_root() else {
+            return;
+        };
+        let mut index = self.index.clone();
+        for id in &self.deferred_disabled {
+            if index.entries.iter().any(|entry| entry.id == *id)
+                && let Err(error) = index.set_permission(id, &[], false)
+            {
+                self.message = Some(error);
+                return;
+            }
+        }
+        if self
+            .manager_work(notify, move |cancel| {
+                if cancel.load(Ordering::Acquire) {
+                    return Err("Operation cancelled".into());
+                }
+                index.save(&root)?;
+                Ok(ManagerResult::Permissions(index))
+            })
+            .is_ok()
+        {
+            self.deferred_disabled.clear();
+        }
+    }
+    pub fn contributions(&self) -> Vec<bareline_commands::DynamicCommandRecord> {
+        if !self.valid_contribution_budget() {
+            return vec![];
+        }
+        self.installed
+            .iter()
+            .flat_map(|row| {
+                row.package.manifest.commands.iter().map(move |id| {
+                    let reason = if !self.enabled {
+                        Some("Extensions disabled for this session")
+                    } else if !row.state.enabled {
+                        Some("Extension permission not enabled")
+                    } else if self.runtime_package.is_none() {
+                        Some("Runtime not installed")
+                    } else {
+                        None
+                    };
+                    bareline_commands::DynamicCommandRecord {
+                        identity: bareline_commands::DynamicCommandIdentity {
+                            owner: row.package.id.clone(),
+                            id: id.clone(),
+                            generation: row.state.generation,
+                        },
+                        title: id.clone(),
+                        enabled: reason.is_none(),
+                        disabled_reason: reason.map(str::to_owned),
+                    }
+                })
+            })
+            .collect()
+    }
+    fn valid_contribution_budget(&self) -> bool {
+        self.installed
+            .iter()
+            .map(|row| row.package.manifest.commands.len())
+            .sum::<usize>()
+            <= 1024
+    }
+}
+impl super::Shell {
+    pub(super) fn extensions_invoke_contribution(
+        &mut self,
+        identity: bareline_commands::DynamicCommandIdentity,
+    ) -> Result<(), String> {
+        if !self.extensions.enabled
+            || !self.extensions.installed.iter().any(|row| {
+                row.package.id == identity.owner
+                    && row.state.enabled
+                    && row.state.generation == identity.generation
+                    && row.package.manifest.commands.contains(&identity.id)
+            })
+        {
+            return Err("Extension contribution was revoked or changed".into());
+        }
+        self.start_owned_extension(
+            Some(&identity.owner),
+            &identity.id,
+            bareline_extensions_protocol::ExecutionBudget::Interactive,
+        )
+    }
+}
+
+impl OwnerTrust {
+    fn runtime_policy(&self, highest: u64) -> bareline_distribution::update::TrustPolicy<'_> {
+        bareline_distribution::update::TrustPolicy {
+            release_public_key: &self.release_public_key,
+            channel: &self.channel,
+            artifact_type: "bareline-exthost-x64",
+            platform: "windows-x64",
+            publisher: &self.publisher,
+            protocol: 1,
+            highest_metadata_version: highest.max(self.runtime_floor),
+            maximum_package_bytes: 256 * 1024 * 1024,
+        }
+    }
+}
+impl ExtensionsRuntime {
+    fn install_runtime(&mut self, executable: PathBuf, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        let trust = self.trust.clone().ok_or("Owner runtime trust policy unavailable")?;
+        let root = self.mutation_root()?;
+        let mut index = self.index.clone();
+        self.manager_work(notify, move |cancel| {
+            let trust = trust.current(crate::shell::native::update::AuthorityFreshness::Required)?;
+            use std::io::Read;
+            let directory = executable.parent().ok_or("Runtime package directory")?;
+            let mut metadata = Vec::new();
+            std::fs::File::open(directory.join("runtime.json"))
+                .map_err(|e| e.to_string())?
+                .take(65537)
+                .read_to_end(&mut metadata)
+                .map_err(|e| e.to_string())?;
+            let mut signature = String::new();
+            std::fs::File::open(directory.join("runtime.minisig"))
+                .map_err(|e| e.to_string())?
+                .take(8193)
+                .read_to_string(&mut signature)
+                .map_err(|e| e.to_string())?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+            let runtime = crate::shell::native::update::install_verified_runtime(
+                &executable,
+                &metadata,
+                &signature,
+                &trust.runtime_policy(index.runtime_metadata_version),
+                now,
+                &trust.signer,
+                &root,
+                &cancel,
+            )
+            .map_err(|e| e.to_string())?;
+            index.runtime_digest = Some(runtime.executable_sha256.iter().map(|b| format!("{b:02x}")).collect());
+            index.runtime_metadata_version = index.runtime_metadata_version.max(runtime.metadata_version);
+            index.save(&root)?;
+            Ok(ManagerResult::RuntimeInstalled(runtime, index))
+        })
+    }
+    fn remove_runtime(&mut self, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        if self.running() {
+            self.cancel();
+            return Err("Runtime cancellation requested; remove again after the host stops".into());
+        }
+        let root = self.mutation_root()?;
+        let runtime = self.runtime_package.clone().ok_or("Runtime not installed")?;
+        let mut index = self.index.clone();
+        self.manager_work(notify, move |cancel| {
+            if cancel.load(Ordering::Acquire) {
+                return Err("Operation cancelled".into());
+            }
+            crate::shell::native::update::remove_verified_runtime(&runtime).map_err(|e| e.to_string())?;
+            index.runtime_digest = None;
+            index.save(&root)?;
+            Ok(ManagerResult::RuntimeRemoved(index))
+        })
+    }
+    fn remove_selected(&mut self, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        if self.running() {
+            self.cancel();
+            return Err("Cancellation requested; remove again after the host stops".into());
+        }
+        let root = self.mutation_root()?;
+        let row = self
+            .installed
+            .get_mut(self.selected)
+            .ok_or("Select an installed extension")?;
+        row.state.enabled = false;
+        let package = row.package.clone();
+        let id = package.id.clone();
+        let mut index = self.index.clone();
+        self.manager_work(notify, move |cancel| {
+            if cancel.load(Ordering::Acquire) {
+                return Err("Operation cancelled".into());
+            }
+            package
+                .remove_cached()
+                .map_err(|e| format!("The extension could not be removed: {e}."))?;
+            index.remove(&id)?;
+            index.save(&root)?;
+            Ok(ManagerResult::Removed(id, index))
+        })
+    }
+}
