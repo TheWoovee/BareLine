@@ -548,13 +548,21 @@ dependencies = [
 name = "bareline-platform-macos"
 version = "0.2.0"
 dependencies = [
+ "bareline-commands",
  "bareline-document",
+ "bareline-extensions-protocol",
  "bareline-file-io",
+ "bareline-macros",
  "bareline-platform",
  "bareline-platform-posix",
  "bareline-renderer",
  "bareline-renderer-recording",
  "bareline-ui",
+ "libc",
+ "objc2 0.5.2",
+ "objc2-app-kit",
+ "objc2-foundation 0.2.2",
+ "rustix 1.1.4",
  "winit",
 ]
 

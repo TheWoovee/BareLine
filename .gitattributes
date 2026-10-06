@@ -13,3 +13,5 @@ vendor/accesskit_windows-0.35.0/LICENSE* -text
 # The bundled font and raster goldens are compared byte for byte.
 crates/renderer-soft/fonts/*.ttf -text
 crates/renderer-soft/tests/golden/** -text
+# Shell scripts run on macOS and Linux, also from a Windows checkout.
+packaging/macos/*.sh text eol=lf
