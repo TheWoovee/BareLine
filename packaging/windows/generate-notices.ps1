@@ -73,6 +73,26 @@ foreach ($component in $native.Components) {
         $parts.Add([IO.File]::ReadAllText((Resolve-Path -LiteralPath $license).Path))
     }
 }
+# Data files that workspace crates embed with include_bytes! have no registry
+# license file either; each is listed once its embedding crate is packaged.
+$bundledData = @(
+    @{
+        Name = 'DejaVu Sans Mono 2.37 font'
+        License = 'Bitstream Vera and Arev Fonts licenses; DejaVu changes are in the public domain'
+        LicenseFile = 'crates/renderer-soft/fonts/LICENSE-DejaVu.txt'
+        CargoPackage = 'bareline-renderer-soft'
+    }
+)
+foreach ($data in $bundledData) {
+    if (-not ($metadata.packages | Where-Object name -eq $data.CargoPackage)) { throw "Unknown Cargo package for bundled $($data.Name): $($data.CargoPackage)" }
+    if (-not @($metadata.packages | Where-Object { $ids.Contains($_.id) -and $_.name -eq $data.CargoPackage }).Count) { continue }
+    $license = Join-Path $PSScriptRoot "../../$($data.LicenseFile)"
+    if (-not (Test-Path -LiteralPath $license -PathType Leaf)) { $missing.Add("bundled $($data.Name)"); continue }
+    $parts.Add("## Bundled $($data.Name)")
+    $parts.Add("Declared license: $($data.License). Embedded by $($data.CargoPackage).")
+    $parts.Add("### $(Split-Path -Leaf $data.LicenseFile)")
+    $parts.Add([IO.File]::ReadAllText((Resolve-Path -LiteralPath $license).Path))
+}
 if ($missing.Count) { throw ('Missing upstream license texts: ' + ($missing -join ', ')) }
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputFile), ($parts -join "`n`n"), [Text.UTF8Encoding]::new($false))
 Write-Output "Generated notices: $OutputFile"

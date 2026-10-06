@@ -6,12 +6,21 @@ targets = ["x86_64-pc-windows-msvc"]
 # yanked release was withdrawn by its publisher, so refuse it too.
 yanked = "deny"
 # Each exception needs its RUSTSEC ID and a reason naming why the affected code
-# is unreachable in Bareline and when the exception will be removed. None is
-# recorded. RUSTSEC-2026-0314, -0315 and -0316 (wasmtime/wasmtime-wasi 48.0.1)
-# were resolved by the update to 48.0.3, and RUSTSEC-2026-0321, -0325, -0326
-# and -0327 (wasmtime/wasmtime-wasi 48.0.3) by the update to 48.0.4, not
+# is unreachable in Bareline and when the exception will be removed. One is
+# recorded, below. RUSTSEC-2026-0314, -0315 and -0316 (wasmtime/wasmtime-wasi
+# 48.0.1) were resolved by the update to 48.0.3, and RUSTSEC-2026-0321, -0325,
+# -0326 and -0327 (wasmtime/wasmtime-wasi 48.0.3) by the update to 48.0.4, not
 # ignored.
-ignore = []
+ignore = [
+  # ttf-parser 0.25.1 is unmaintained; no vulnerability is reported against it.
+  # The portable renderer (PR-029, bareline-renderer-soft) reaches it only
+  # through cosmic-text's fontdb 0.23, which reads the family and style names of
+  # installed fonts and the bundled DejaVu face when the font list is built;
+  # shaping and rasterization go through skrifa, harfrust and swash. Every
+  # cosmic-text release depends on fontdb 0.23, so there is no update to take.
+  # Remove when cosmic-text moves to a font list without ttf-parser.
+  { id = "RUSTSEC-2026-0192", reason = "unmaintained notice only; fontdb face metadata parsing in the portable renderer; no maintained cosmic-text alternative" },
+]
 
 [licenses]
 allow = ["MPL-2.0", "MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
@@ -188,3 +197,12 @@ allow = ["Apache-2.0 WITH LLVM-exception"]
 name = "winx"
 version = "=0.36.4"
 allow = ["Apache-2.0 WITH LLVM-exception"]
+
+# PR-029 (bareline-renderer-soft): tiny-skia 0.11.4, the rasterizer ADR-A
+# selects (already locked for Linux through winit's sctk-adwaita), depends on
+# arrayref, licensed BSD-2-Clause only. BSD-2-Clause is BSD-3-Clause without the
+# endorsement clause, so it permits everything the allowed BSD-3-Clause does.
+[[licenses.exceptions]]
+name = "arrayref"
+version = "=0.3.9"
+allow = ["BSD-2-Clause"]
