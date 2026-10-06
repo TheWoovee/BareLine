@@ -61,12 +61,16 @@ pub enum PhysicalModifier {
     Shift,
     Super,
 }
+/// The key each semantic modifier is held with. On macOS the primary modifier is
+/// Command (`PhysicalModifier::Super`), so the Super role moves to Control and
+/// no two semantic modifiers share a key.
 pub fn map_modifier(modifier: SemanticModifier, platform: DesktopPlatform) -> PhysicalModifier {
     match modifier {
         SemanticModifier::Primary if platform == DesktopPlatform::MacOs => PhysicalModifier::Super,
         SemanticModifier::Primary => PhysicalModifier::Control,
         SemanticModifier::Alt => PhysicalModifier::Alt,
         SemanticModifier::Shift => PhysicalModifier::Shift,
+        SemanticModifier::Super if platform == DesktopPlatform::MacOs => PhysicalModifier::Control,
         SemanticModifier::Super => PhysicalModifier::Super,
     }
 }
@@ -84,7 +88,28 @@ mod tests {
                 map_modifier(SemanticModifier::Primary, platform),
                 PhysicalModifier::Control
             );
+            assert_eq!(map_modifier(SemanticModifier::Super, platform), PhysicalModifier::Super);
         }
+    }
+    #[test]
+    fn every_platform_gives_each_semantic_modifier_its_own_key() {
+        let semantic = [
+            SemanticModifier::Primary,
+            SemanticModifier::Alt,
+            SemanticModifier::Shift,
+            SemanticModifier::Super,
+        ];
+        for platform in [DesktopPlatform::Windows, DesktopPlatform::Linux, DesktopPlatform::MacOs] {
+            let keys: Vec<_> = semantic.iter().map(|m| map_modifier(*m, platform)).collect();
+            for (index, key) in keys.iter().enumerate() {
+                assert!(!keys[index + 1..].contains(key), "{platform:?} reuses {key:?}");
+            }
+        }
+        // Command is primary on macOS, so Super is held with Control there.
+        assert_eq!(
+            map_modifier(SemanticModifier::Super, DesktopPlatform::MacOs),
+            PhysicalModifier::Control
+        );
     }
     #[test]
     fn unsupported_names_the_feature_in_plain_language() {
