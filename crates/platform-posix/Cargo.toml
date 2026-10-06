@@ -1,0 +1,16 @@
+[package]
+name = "bareline-platform-posix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bareline-platform = { path = "../platform" }
+
+# The crate is an empty unit off Unix; the system bindings are Unix-only.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "=0.2.189"
