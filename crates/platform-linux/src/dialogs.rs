@@ -14,7 +14,14 @@
 //! stops answering is flagged "not responding" after a few seconds on GNOME).
 //! The synchronous [`PlatformServices`] methods wait on the same worker; they
 //! never stall the compositor or the portal, which run in other processes, but
-//! they do pause the calling thread, so the event loop should use `begin`.
+//! they do pause the calling thread until the user closes the dialog, so the
+//! event loop must use `begin` and poll the [`PendingDialog`], never them.
+//!
+//! Overwrite: the portal always asks before a Save replaces an existing file and
+//! has no option to leave that to the application, so with `app_confirms_overwrite`
+//! the user may be asked twice (by the portal for the typed name, then by the
+//! shell for the final path). The default extension is added only when that
+//! cannot skip a confirmation; see `with_default_extension`.
 use crate::portal::{ChooserMethod, ChooserOptions, DesktopPortal, FileChooser, Filter, PortalError, path_from_uri};
 use bareline_platform::{
     Capability, FileTypeFilter, PlatformServices, SaveDialogOptions, Unsupported,
@@ -23,7 +30,7 @@ use bareline_platform::{
 use std::{
     path::PathBuf,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, PoisonError,
         mpsc::{self, Receiver, TryRecvError},
     },
 };
@@ -95,13 +102,17 @@ impl Default for LinuxDialogs {
 impl LinuxDialogs {
     /// Dialogs through the session's portal. The bus connection is made on the
     /// first dialog's worker, never on the caller's thread, and then reused.
+    /// Only a connection is kept: when the session bus was not reachable, the
+    /// next dialog tries again rather than reporting `Unsupported` for good.
     pub fn new() -> Self {
-        let portal: Arc<OnceLock<Result<DesktopPortal, PortalError>>> = Arc::default();
+        let portal: Arc<Mutex<Option<DesktopPortal>>> = Arc::default();
         Self::with_chooser_source(Arc::new(move || {
-            portal
-                .get_or_init(DesktopPortal::session)
-                .clone()
-                .map(|portal| portal.file_chooser())
+            let mut cached = portal.lock().unwrap_or_else(PoisonError::into_inner);
+            let portal = match cached.as_ref() {
+                Some(portal) => portal.clone(),
+                None => cached.insert(DesktopPortal::session()?).clone(),
+            };
+            Ok(portal.file_chooser())
         }))
     }
     /// Dialogs through a given FileChooser (another bus, or a test double).
@@ -234,13 +245,30 @@ fn options_for(request: &DialogRequest) -> (ChooserMethod, &'static str, Chooser
 /// A typed name without an extension gets the kind's default one, as the
 /// Windows dialog's default extension does; `Makefile` saved as a named
 /// document keeps its name because that kind has none.
+///
+/// The portal confirmed an overwrite (if any) for the name the user typed, not
+/// for the extended one, unlike Windows, where the extension is added before
+/// the dialog's own overwrite prompt. So the extension is added only when that
+/// cannot replace a file nobody confirmed: when the shell confirms the final
+/// path itself (`app_confirms_overwrite`), or when nothing exists under the
+/// extended name. Otherwise the path is returned exactly as chosen. This runs on
+/// the dialog worker, so the `lstat` never touches the event loop.
 fn with_default_extension(path: PathBuf, options: &SaveDialogOptions) -> PathBuf {
     match options.default_extension() {
         Some(extension) if path.extension().is_none() && path.file_name().is_some() => {
             let mut name = path.file_name().unwrap_or_default().to_owned();
             name.push(".");
             name.push(extension);
-            path.with_file_name(name)
+            let extended = path.with_file_name(name);
+            let unclaimed = matches!(
+                std::fs::symlink_metadata(&extended),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            );
+            if options.app_confirms_overwrite || unclaimed {
+                extended
+            } else {
+                path
+            }
         }
         _ => path,
     }
@@ -285,7 +313,6 @@ fn run(source: &ChooserSource, parent: &str, request: &DialogRequest) -> DialogR
 mod tests {
     use super::*;
     use bareline_platform::SaveFileKind;
-    use std::sync::Mutex;
 
     /// Answers every request with a fixed response and records what was asked.
     struct Fake {
@@ -375,6 +402,27 @@ mod tests {
             LinuxDialogs::with_chooser(fake).save_file_with(&html).unwrap(),
             Some(PathBuf::from("/docs/page.htm"))
         );
+    }
+    #[test]
+    fn the_default_extension_never_replaces_a_file_nobody_confirmed() {
+        let folder = std::env::temp_dir().join(format!("bareline-dialogs-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let existing = folder.join("session.json");
+        std::fs::write(&existing, b"{}").unwrap();
+        let chosen = folder.join("session");
+        let uri = format!("file://{}", chosen.display());
+        let json = SaveDialogOptions::new(SaveFileKind::Json);
+        assert_eq!(json.default_extension(), Some("json"));
+        // The portal confirmed `session`; `session.json` exists, so it is not used.
+        let dialogs = LinuxDialogs::with_chooser(Fake::answering(0, &[uri.as_str()]));
+        assert_eq!(dialogs.save_file_with(&json).unwrap(), Some(chosen.clone()));
+        // When the shell confirms the final path itself, the extension is added.
+        let confirmed = json.clone().app_confirms_overwrite();
+        assert_eq!(dialogs.save_file_with(&confirmed).unwrap(), Some(existing.clone()));
+        // With nothing under the extended name, it is added as before.
+        std::fs::remove_file(&existing).unwrap();
+        assert_eq!(dialogs.save_file_with(&json).unwrap(), Some(existing));
+        std::fs::remove_dir_all(&folder).unwrap();
     }
     #[test]
     fn folder_picker_asks_for_a_directory() {
