@@ -252,6 +252,40 @@ The script builds an unsigned release of `bareline` and `bareline-update-helper`
 
 **Linux and macOS.** The application runs only on Windows. On Linux and macOS, `bareline` prints a message and exits. CI builds and tests the shared crates on `ubuntu-latest` and `macos-latest` to keep them platform-neutral. `crates/platform-linux` and `crates/platform-macos` are compile-only adapters, not ports.
 
+### Building on Linux and macOS (preview)
+
+This describes the port in progress on the `port-integration` branch, for contributors. It does not change which platforms the published builds support.
+
+**Linux.** On Ubuntu 24.04 (CI uses `ubuntu-latest`), install the build packages and the X11 runtime libraries, then build with Cargo as on Windows:
+
+```bash
+sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-x11-0 libxcursor1
+cargo build -p bareline --release --locked
+```
+
+The smoke run below also uses `xvfb xauth scrot xdotool x11-utils at-spi2-core fonts-dejavu-core fonts-noto-cjk`.
+
+**macOS.** Install the Xcode Command Line Tools (`xcode-select --install`) for the C and C++ parts, then run the same `cargo build`.
+
+**Cross type-check for Apple silicon.** From Windows or Linux, crates without a C or C++ build step can be checked for macOS:
+
+```bash
+rustup target add aarch64-apple-darwin
+cargo check --target aarch64-apple-darwin --locked -p bareline-platform-macos -p bareline-platform-posix -p bareline-renderer-soft
+```
+
+The whole editor cannot be checked this way: the Lexilla bridge and PCRE2 compile C and C++ and need the macOS SDK. The `macos-latest` runners build it instead.
+
+**Smoke workflow.** [`port-smoke.yml`](.github/workflows/port-smoke.yml) runs on every push to `port-integration` and on manual dispatch, on `ubuntu-latest` (under Xvfb) and `macos-latest`. It builds the release editor, renders `soft_probe --offscreen`, and launches the editor with a sample file. It waits for the editor's window, then records the launch-to-window time and resident memory and takes a screenshot. Finally it quits the editor with SIGTERM, checks that the exit was clean, and runs the tests of the port crates. [`scripts/port_smoke.py`](scripts/port_smoke.py) does the launch and the measurements, and also runs locally (for example `xvfb-run -a python3 scripts/port_smoke.py --label linux --executable target/debug/bareline --sample <file> --evidence evidence --profile <scratch folder>`). To download the evidence (screenshots, `<os>-metrics.json`, editor output and JUnit test logs) with the GitHub CLI:
+
+```bash
+gh run list --workflow port-smoke.yml --branch port-integration --limit 5
+gh run download <run-id> --name port-smoke-linux --dir port-smoke/linux
+gh run download <run-id> --name port-smoke-macos --dir port-smoke/macos
+```
+
+When `packaging/macos/bundle.sh` exists, the macOS job also uploads the `.app` zip and `.dmg` as `port-smoke-macos-bundle`.
+
 ## Repository layout
 
 | Path | Contents |
