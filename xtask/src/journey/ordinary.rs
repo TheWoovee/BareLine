@@ -740,6 +740,19 @@ impl Run<'_> {
         self.editor = Some(editor);
         self.desktop.focus(&window)?;
         std::thread::sleep(Duration::from_millis(600));
+        // The first-frame event can precede the first presented pixels: a
+        // reference captured from a still black window makes every later
+        // pixel check meaningless, so wait until the window shows its content.
+        let painted_after = Instant::now();
+        let deadline = painted_after + Duration::from_secs(10);
+        while !painted(&self.desktop.capture(&window)?) {
+            if Instant::now() >= deadline {
+                return Err(Failure::timeout(
+                    "Owned editor window was not ready before the startup deadline: it stayed one colour",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
         self.record(
             &format!("owned launch {number}"),
             serde_json::json!({
@@ -748,6 +761,7 @@ impl Run<'_> {
                 "arguments": arguments.iter().map(|value| value.to_string_lossy()).collect::<Vec<_>>(),
                 "window": window.json(),
                 "first_frame": frame,
+                "painted_wait_ms": painted_after.elapsed().as_millis(),
             }),
         );
         Ok(())
@@ -1190,6 +1204,13 @@ impl Run<'_> {
 }
 
 /// A stand-in reference for steps that never ran their capture.
+/// Whether a capture shows more than one colour (a window that has presented
+/// its content, not a still black or blank surface).
+fn painted(image: &Image) -> bool {
+    let mut pixels = image.pixels.chunks_exact(4).map(|pixel| &pixel[..3]);
+    pixels.next().is_some_and(|first| pixels.any(|pixel| pixel != first))
+}
+
 fn blank() -> Image {
     Image {
         width: 0,
@@ -2553,6 +2574,20 @@ mod tests {
             "a window without an owner never takes input"
         );
         assert!(dialog_owner(&window("editor", std::process::id()), std::process::id()));
+    }
+
+    #[test]
+    fn a_black_or_empty_capture_is_not_a_painted_window() {
+        let image = |pixels: Vec<u8>| Image {
+            width: i32::try_from(pixels.len() / 4).unwrap(),
+            height: 1,
+            pixels,
+        };
+        assert!(!painted(&image(Vec::new())));
+        assert!(!painted(&image(vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255])));
+        // Alpha alone does not count; one differing channel does.
+        assert!(!painted(&image(vec![30, 30, 30, 255, 30, 30, 30, 0])));
+        assert!(painted(&image(vec![30, 30, 30, 255, 30, 31, 30, 255])));
     }
 
     #[test]
