@@ -1168,6 +1168,13 @@ impl ApplicationHandler<Wake> for Handler {
             event,
             WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. }
         );
+        // Input that arrives while a question is open or its answer waits for
+        // its run (Linux) comes after both, as it does after a Windows modal
+        // dialog: the answered run goes first, and an open question's modal is
+        // up before the input reaches the editor.
+        if input && native::interaction_waiting(self.shell.platform.as_ref()) {
+            self.shell.interactions_poll(el);
+        }
         let before = input.then(|| self.shell.active_document());
         // A key or click the shell handles itself may ask a question that
         // answers later (Linux); the same input then runs again.
@@ -1180,6 +1187,7 @@ impl ApplicationHandler<Wake> for Handler {
                 pointer,
                 modifiers,
                 modal,
+                context: self.shell.replay_context(),
             })
         });
         self.shell.window_event(el, id, event);
@@ -3120,7 +3128,10 @@ impl Shell {
     fn dispatch(&mut self, el: &ActiveEventLoop, action: Action) {
         // A command may ask a question that answers later (Linux); it then runs
         // again and receives the answer where it asked.
-        let _interaction = native::interaction_scope(self.platform.as_ref(), || prompt::Replay::Action(action));
+        let _interaction = native::interaction_scope(self.platform.as_ref(), || prompt::Replay::Action {
+            action,
+            context: self.replay_context(),
+        });
         if self.session.closing() {
             return;
         }

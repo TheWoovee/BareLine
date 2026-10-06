@@ -27,23 +27,40 @@ const BUTTON_GAP: f32 = 8.0;
 /// What the shell runs again once a prompt or dialog started inside it has
 /// its answer.
 pub(super) enum Replay {
-    /// A command, which asks again and receives the armed answers.
-    Action(Action),
-    /// The queued close or exit, drained again.
+    /// A command, which asks again and receives the armed answers. It acts on
+    /// the active document, so it runs again only while `context` still holds.
+    Action { action: Action, context: ReplayContext },
+    /// The queued close or exit, drained again. Each queued close names its
+    /// document, so it needs no context.
     Close,
-    /// The save pipeline's pump, for Save All's destinations.
+    /// The save pipeline's pump, for Save All's destinations, which also names
+    /// its documents.
     Lifecycle,
     /// A click or key the shell handled directly (a banner button, a picker,
     /// a button of the Recovery center), with the pointer and modifiers it had
     /// and the modal it went to. It runs again only while that modal (or none)
-    /// is active again, so it never lands somewhere else.
+    /// is active again and `context` still holds, so it never lands somewhere
+    /// else.
     Input {
         window: WindowId,
         event: WindowEvent,
         pointer: Point,
         modifiers: ModifiersState,
         modal: Option<modal::ModalSurface>,
+        context: ReplayContext,
     },
+}
+
+/// What a replayed command or input acts on: the active document and, while
+/// the Recovery center is open, its selection. On Windows a modal dialog
+/// keeps both from changing until it returns; here the event loop runs on
+/// while the person answers, so a replay that would find either changed (a
+/// launch handed over a file, a discovery rebuilt the rows) is dropped
+/// instead of acting on something the person did not answer for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ReplayContext {
+    document: Option<u64>,
+    recovery: Option<super::recovery::RecoverySelection>,
 }
 
 /// What assistive technology reads of the prompt: its title, its complete
@@ -66,6 +83,9 @@ pub(super) struct PromptRuntime {
     bounds: Rect,
     text_bounds: Rect,
     buttons: Vec<Rect>,
+    /// The launch or instance pump left work queued while a question waited
+    /// (`Shell::interaction_hold`); it runs once the question is settled.
+    held: bool,
 }
 
 impl PromptRuntime {
@@ -401,24 +421,72 @@ impl Shell {
         let theme = self.settings.ui_theme();
         self.prompt.draw(renderer, width, height, theme, ops);
     }
+    /// What a command or input started now acts on (see [`ReplayContext`]).
+    pub(super) fn replay_context(&self) -> ReplayContext {
+        ReplayContext {
+            document: self.active_document(),
+            recovery: self.recovery.replay_selection(),
+        }
+    }
+    /// Whether a pump that would open, activate or close documents must leave
+    /// its work queued because a question waits for its answer. Behind a
+    /// Windows modal dialog these pumps do not run either; here they would
+    /// change the document a replayed command acts on. The held work runs once
+    /// the question is settled (`interactions_poll`).
+    pub(super) fn interaction_hold(&mut self) -> bool {
+        let waiting = native::interaction_waiting(self.platform.as_ref());
+        self.prompt.held |= waiting;
+        waiting
+    }
+    /// The scope to run again now that its answers are armed, if it may still
+    /// run: input goes back only to the modal it went to, and a command or
+    /// input only to the document (and Recovery center row) it asked about.
+    /// A replay refused here drops its answers, so nothing acts on them.
+    pub(super) fn replay_ready(&mut self) -> Option<Replay> {
+        let replay = native::interaction_replay::<Replay>(self.platform.as_ref())?;
+        // The answered prompt's modal goes first: commands refuse to run
+        // behind a modal, and input returns to the modal under the prompt.
+        self.prompt_sync();
+        let refused = match &replay {
+            Replay::Input { modal, .. } if !self.input_replay_allowed(*modal) => Some("modal-changed"),
+            Replay::Action { context, .. } | Replay::Input { context, .. } if *context != self.replay_context() => {
+                Some("context-changed")
+            }
+            _ => None,
+        };
+        let Some(reason) = refused else {
+            return Some(replay);
+        };
+        // The modal the input went to has closed meanwhile, or the document
+        // or row the question was about is no longer the one in front: the
+        // answer is dropped rather than applied to what is there now.
+        eprintln!("event=interaction_replay_dropped reason={reason}");
+        native::interaction_settle(self.platform.as_ref());
+        if reason == "context-changed"
+            && let Some(workspace) = &mut self.workspace
+        {
+            workspace.message = Some(
+                "The document in front changed while Bareline waited for your answer, so nothing was done. Try again."
+                    .into(),
+            );
+        }
+        None
+    }
     /// Runs a scope again once the prompt or dialog it opened has its answer,
     /// then drops answers that run did not use, and shows the next question.
     pub(super) fn interactions_poll(&mut self, el: &ActiveEventLoop) {
-        if let Some(replay) = native::interaction_replay::<Replay>(self.platform.as_ref()) {
-            // The answered prompt's modal goes first: commands refuse to run
-            // behind a modal.
-            self.prompt_sync();
+        if let Some(replay) = self.replay_ready() {
             eprintln!(
                 "event=interaction_replay run={}",
                 match &replay {
-                    Replay::Action(_) => "command",
+                    Replay::Action { .. } => "command",
                     Replay::Close => "close",
                     Replay::Lifecycle => "save-all",
                     Replay::Input { .. } => "input",
                 }
             );
             match replay {
-                Replay::Action(action) => self.dispatch(el, action),
+                Replay::Action { action, .. } => self.dispatch(el, action),
                 Replay::Close => self.drain_pending_close(el),
                 Replay::Lifecycle => self.lifecycle_pump(el),
                 Replay::Input {
@@ -427,25 +495,27 @@ impl Shell {
                     pointer,
                     modifiers,
                     modal,
+                    context,
                 } => {
-                    if self.input_replay_allowed(modal) {
-                        self.pointer = pointer;
-                        self.modifiers = modifiers;
-                        let again = event.clone();
+                    // The input runs with the pointer and modifiers it had;
+                    // the current ones return afterwards, so a modifier
+                    // released while the prompt was open is not held on.
+                    let current = (self.pointer, self.modifiers);
+                    self.pointer = pointer;
+                    self.modifiers = modifiers;
+                    let again = event.clone();
+                    {
                         let _scope = native::interaction_scope(self.platform.as_ref(), move || Replay::Input {
                             window,
                             event: again,
                             pointer,
                             modifiers,
                             modal,
+                            context,
                         });
                         self.window_event(el, window, event);
-                    } else {
-                        // The modal the input went to has closed meanwhile
-                        // (or another opened): the answer is dropped rather
-                        // than letting the click or key reach what is there now.
-                        eprintln!("event=interaction_replay_dropped reason=modal-changed");
                     }
+                    (self.pointer, self.modifiers) = current;
                 }
             }
             native::interaction_settle(self.platform.as_ref());
@@ -457,6 +527,13 @@ impl Shell {
         // open asks now.
         if self.lifecycle.destination_asking() && !native::interaction_waiting(self.platform.as_ref()) {
             self.lifecycle_pump(el);
+        }
+        // Launches handed over while the question waited open now.
+        if self.prompt.held && !native::interaction_waiting(self.platform.as_ref()) {
+            self.prompt.held = false;
+            eprintln!("event=interaction_held_work_resumed");
+            self.instance_pump(el);
+            self.launch_pump();
         }
         self.prompt_sync();
     }
@@ -637,5 +714,122 @@ mod tests {
         let workspace = shell.workspace.as_ref().unwrap();
         assert_eq!(workspace.editors.len(), 1, "Don't Save closed the document");
         assert_ne!(workspace.editors[0].document_identity().0, identity.0);
+    }
+
+    /// Save As runs again only on the document that asked. A location chosen
+    /// after another document came to the front (a second launch handed over
+    /// a file while the dialog was open) is dropped: nothing is written for
+    /// either document, and the next Save As asks afresh (Linux).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_save_as_answered_after_the_active_document_changed_writes_nothing() {
+        use super::super::accessibility::tests::headless_shell;
+        use bareline_app::workspace::Workspace;
+        use bareline_file_io::lifecycle::SaveOperation;
+        use bareline_platform_linux::portal::{
+            ChooserMethod, ChooserOptions, ChooserResponse, FileChooser, PortalError,
+        };
+        use std::{
+            sync::{Arc, Mutex, mpsc},
+            time::{Duration, Instant},
+        };
+        /// A portal whose Save dialog answers once the test releases it.
+        struct Released(Mutex<mpsc::Receiver<()>>, String);
+        impl FileChooser for Released {
+            fn choose(
+                &self,
+                _method: ChooserMethod,
+                _parent: &str,
+                _title: &str,
+                _options: &ChooserOptions,
+            ) -> Result<ChooserResponse, PortalError> {
+                let _ = self.0.lock().unwrap().recv_timeout(Duration::from_secs(10));
+                Ok(ChooserResponse {
+                    code: 0,
+                    uris: vec![self.1.clone()],
+                })
+            }
+        }
+        /// Save As on the active document, scoped as `dispatch` scopes it.
+        fn save_as(shell: &mut Shell) -> bool {
+            let _scope = native::interaction_scope(shell.platform.as_ref(), || Replay::Action {
+                action: Action::SaveAs,
+                context: shell.replay_context(),
+            });
+            shell.request_document_save(shell.app.active, SaveOperation::SaveAs)
+        }
+        /// Waits for the dialog's answer and returns the replay `replay_ready`
+        /// lets run, or `None` once it dropped it.
+        fn answered(shell: &mut Shell) -> Option<Replay> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while native::interaction_waiting(shell.platform.as_ref()) {
+                if let Some(replay) = shell.replay_ready() {
+                    return Some(replay);
+                }
+                assert!(Instant::now() < deadline, "the Save dialog never answered");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            None
+        }
+        let directory = std::env::temp_dir().join(format!("bareline-replay-context-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let chosen = directory.join("x.txt");
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let (release, released) = mpsc::channel();
+        let mut shell = headless_shell();
+        shell.app.tabs = workspace.titles();
+        shell.workspace = Some(workspace);
+        shell.platform = Some(crate::shell::native::Platform::for_tests_with(Arc::new(Released(
+            Mutex::new(released),
+            format!("file://{}", chosen.display()),
+        ))));
+        shell.app.active = 0;
+
+        // With the same document in front, the answered Save As runs again.
+        assert!(!save_as(&mut shell), "nothing is saved before a location is chosen");
+        release.send(()).unwrap();
+        assert!(
+            matches!(
+                answered(&mut shell),
+                Some(Replay::Action {
+                    action: Action::SaveAs,
+                    ..
+                })
+            ),
+            "the answer reaches the document that asked"
+        );
+        native::interaction_settle(shell.platform.as_ref());
+
+        // Another document comes to the front while the dialog is open.
+        assert!(!save_as(&mut shell));
+        shell.prompt_sync();
+        assert_eq!(
+            shell.modal.map(|modal| modal.surface),
+            Some(modal::ModalSurface::Prompt)
+        );
+        assert!(shell.interaction_hold(), "launch and instance pumps hold meanwhile");
+        shell.app.active = 1;
+        release.send(()).unwrap();
+        assert!(answered(&mut shell).is_none(), "the replay is dropped");
+        assert!(!native::interaction_waiting(shell.platform.as_ref()));
+        assert!(shell.modal.is_none());
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert!(workspace.path(0).is_none() && workspace.path(1).is_none());
+        assert!(
+            workspace
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("nothing was done"))
+        );
+        assert!(!chosen.exists(), "nothing was written to the chosen location");
+        // The dropped answer is gone: Save As on the document now in front
+        // opens its own dialog.
+        assert!(!save_as(&mut shell));
+        assert!(native::interaction_waiting(shell.platform.as_ref()));
+        assert!(shell.prompt.held);
+        drop(release);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

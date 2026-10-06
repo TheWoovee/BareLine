@@ -52,11 +52,25 @@ impl Question {
     /// Whether an armed answer to `self` answers `asked`. A Save dialog's
     /// options carry a default folder that a worker checks within a time
     /// budget, so the same run may describe it differently the second time;
-    /// any Save dialog of the run therefore takes the location chosen.
+    /// only that folder may differ. The kind and the suggested name, which
+    /// name the document being saved, must match, so one document's Save
+    /// dialog never answers another's.
     fn answers(&self, asked: &Question) -> bool {
         match (self, asked) {
-            (Self::Dialog(DialogRequest::Save(_)), Self::Dialog(DialogRequest::Save(_))) => true,
+            (Self::Dialog(DialogRequest::Save(armed)), Self::Dialog(DialogRequest::Save(asked))) => {
+                armed.kind == asked.kind
+                    && armed.default_name == asked.default_name
+                    && armed.app_confirms_overwrite == asked.app_confirms_overwrite
+            }
             _ => self == asked,
+        }
+    }
+    /// A short description for the diagnostic log.
+    fn describe(&self) -> String {
+        match self {
+            Self::Prompt(prompt) => format!("prompt:{:?}", prompt.instruction),
+            Self::Dialog(DialogRequest::Save(options)) => format!("save-dialog:{:?}", options.default_name),
+            Self::Dialog(request) => format!("dialog:{request:?}"),
         }
     }
 }
@@ -195,10 +209,21 @@ impl Interactions {
     /// safe answer (the question is now open, or cannot be asked here).
     pub(super) fn ask(&self, question: Question) -> Option<Answer> {
         let mut state = self.state.borrow_mut();
-        if state.armed.front().is_some_and(|(armed, _)| armed.answers(&question)) {
-            let (question, answer) = state.armed.pop_front()?;
-            state.consumed.push((question, answer.clone()));
-            return Some(answer);
+        match state.armed.front() {
+            Some((armed, _)) if armed.answers(&question) => {
+                let (question, answer) = state.armed.pop_front()?;
+                state.consumed.push((question, answer.clone()));
+                return Some(answer);
+            }
+            // The run asked something other than what was answered (its state
+            // changed between runs): the answer stays unused and is dropped
+            // when the run settles; logged so a re-asked prompt is traceable.
+            Some((armed, _)) => eprintln!(
+                "event=prompt_answer_mismatch armed={} asked={}",
+                armed.describe(),
+                question.describe()
+            ),
+            None => {}
         }
         if state.open.is_some() || state.ready.is_some() {
             return None;
@@ -489,6 +514,33 @@ mod tests {
             interactions.ask(again),
             Some(Answer::Paths(Ok(vec![PathBuf::from("/tmp/e.txt")])))
         );
+    }
+
+    #[test]
+    fn one_documents_save_dialog_answer_never_answers_anothers() {
+        use bareline_platform::{SaveDialogOptions, SaveFileKind};
+        let save = |name: &str| {
+            Question::Dialog(DialogRequest::Save(
+                SaveDialogOptions::new(SaveFileKind::Text).named(name),
+            ))
+        };
+        let interactions = interactions(chosen("file:///tmp/x.txt"));
+        {
+            let _scope = interactions.scope(Box::new("save"));
+            interactions.ask(save("Untitled 1"));
+        }
+        assert_eq!(ready(&interactions), Some("save"));
+        {
+            let _scope = interactions.scope(Box::new("save"));
+            // Another document's dialog (its own suggested name) is asked
+            // afresh instead of taking the location chosen for "Untitled 1".
+            assert_eq!(interactions.ask(save("b.txt")), None);
+        }
+        interactions.settle();
+        assert!(interactions.waiting(), "the other document's dialog is open");
+        assert!(!save("a").answers(&Question::Dialog(DialogRequest::Save(
+            SaveDialogOptions::new(SaveFileKind::Html).named("a")
+        ))));
     }
 
     #[test]

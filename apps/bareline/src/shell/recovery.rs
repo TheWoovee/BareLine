@@ -212,6 +212,14 @@ enum RecoveryRowId {
     Original(PathBuf),
     Untitled(PathBuf),
 }
+/// The Recovery center's selection, as `RecoveryRuntime::replay_selection`
+/// describes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RecoverySelection {
+    index: usize,
+    rows: usize,
+    row: Option<RecoveryRowId>,
+}
 impl RecoveryRow {
     fn identity(&self) -> RecoveryRowId {
         self.original.clone().map_or_else(
@@ -492,6 +500,16 @@ impl RecoveryRuntime {
             RecoveryContent::Ready(rows) => rows,
             RecoveryContent::Discovering | RecoveryContent::Failed(_) => &[],
         }
+    }
+    /// What a click in the open center acts on: the selected row, where it
+    /// is and how many rows there are. A click replayed after a prompt runs
+    /// only while this is unchanged (`prompt::ReplayContext`).
+    pub(super) fn replay_selection(&self) -> Option<RecoverySelection> {
+        self.open.then(|| RecoverySelection {
+            index: self.selected,
+            rows: self.rows().len(),
+            row: self.rows().get(self.selected).map(RecoveryRow::identity),
+        })
     }
     fn remember_selection(&mut self) {
         let identity = self.rows().get(self.selected).map(RecoveryRow::identity);

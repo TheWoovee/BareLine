@@ -596,6 +596,85 @@ cd"
         assert!(again.clipboard_text_if_any().is_ok());
     }
 
+    /// Copy and Paste through the editor's own command path (what Ctrl+C and
+    /// Ctrl+V dispatch: `power_action` with the active document) against the
+    /// session's real clipboard: a selected line copied and pasted twice is
+    /// duplicated. Wayland windows cannot be driven by xdotool, and WSLg offers
+    /// no virtual keyboard, so this is how the Wayland session's keystroke path
+    /// is exercised there. Needs a desktop session, so it is ignored by default:
+    /// `cargo test -p bareline --bin bareline command_path_clipboard -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs a Wayland or X11 session"]
+    fn the_command_path_clipboard_duplicates_a_copied_line() {
+        use crate::shell::accessibility::tests::headless_shell;
+        use bareline_app::workspace::{Input, Workspace};
+        use bareline_commands::Action;
+        use bareline_document::TextOffset;
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        fn settle(workspace: &mut Workspace, index: usize) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                workspace.pump();
+                if !workspace.editors[index].busy() {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "the edit never landed");
+                std::thread::yield_now();
+            }
+        }
+        fn text(shell: &crate::shell::Shell, index: usize) -> String {
+            let snapshot = shell.workspace.as_ref().unwrap().editors[index].snapshot();
+            snapshot.read(TextOffset(0)..TextOffset(snapshot.len()), 4096).unwrap()
+        }
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        let index = workspace.new_document_with_text("alpha line\nbravo\n".into()).unwrap();
+        // Select the first line with its line break, as Ctrl+Home, Shift+Down
+        // do (by offset: line navigation waits for a renderer to lay out).
+        workspace.editors[index].enqueue(Input::SetCaret(0, false));
+        workspace.editors[index].enqueue(Input::SetCaret("alpha line\n".len(), true));
+        settle(&mut workspace, index);
+        let mut shell = headless_shell();
+        shell.app.tabs = workspace.titles();
+        shell.app.active = index;
+        shell.workspace = Some(workspace);
+        shell.platform = Some(Platform::with_dialogs(LinuxDialogs::with_chooser(Arc::new(NoPortal))));
+        eprintln!(
+            "event=command_path_clipboard WAYLAND_DISPLAY={:?} DISPLAY={:?} backend={:?}",
+            std::env::var_os("WAYLAND_DISPLAY"),
+            std::env::var_os("DISPLAY"),
+            shell
+                .platform
+                .as_ref()
+                .unwrap()
+                .clipboard()
+                .map(LinuxClipboard::backend)
+        );
+        assert!(shell.power_action(Action::Copy), "Ctrl+C is handled");
+        for _ in 0..2 {
+            assert!(shell.power_action(Action::Paste), "Ctrl+V is handled");
+            settle(shell.workspace.as_mut().unwrap(), index);
+        }
+        let duplicated = text(&shell, index);
+        eprintln!(
+            "event=command_path_clipboard document={duplicated:?} message={:?}",
+            shell.workspace.as_ref().unwrap().message
+        );
+        for (tool, arguments) in [
+            ("wl-paste", &["--no-newline"][..]),
+            ("xclip", &["-o", "-selection", "clipboard"][..]),
+        ] {
+            let output = std::process::Command::new(tool).args(arguments).output();
+            eprintln!(
+                "event=command_path_clipboard reader={tool} text={:?}",
+                output.map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            );
+        }
+        assert_eq!(duplicated, "alpha line\nalpha line\nbravo\n");
+    }
+
     #[test]
     fn a_saved_path_is_replaced_only_after_the_save_dialog_confirmed_it() {
         let platform = Platform::for_tests();
