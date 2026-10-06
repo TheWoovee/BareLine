@@ -1237,9 +1237,12 @@ fn colour_counts(image: &Image, rect: (i32, i32, i32, i32), probes: &[(String, u
 // ---------------------------------------------------------------- the smoke --
 
 fn journey_smoke(env: &Env) -> Result<(), String> {
-    let (home, _) = env.scratch("smoke")?;
+    let (home, data_root) = env.scratch("smoke")?;
     let layout = Layout::new(&home);
     layout.create().map_err(|failure| failure.detail)?;
+    // As on Windows: a marked diagnostic root keeps the smoke out of any profile.
+    std::fs::create_dir_all(&data_root).map_err(|error| error.to_string())?;
+    std::fs::write(data_root.join(".bareline-diagnostic"), []).map_err(|error| error.to_string())?;
     let mut command = Command::new(&env.exe);
     command.args([
         "--smoke",
@@ -1248,6 +1251,7 @@ fn journey_smoke(env: &Env) -> Result<(), String> {
         "--no-extensions",
         "--new-instance",
     ]);
+    command.arg("--diagnostic-root").arg(&data_root);
     for (name, value) in layout.environment() {
         command.env(name, value);
     }

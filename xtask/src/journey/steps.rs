@@ -416,14 +416,34 @@ fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
         if classification != "pass" {
             // The latest non-passing attempt names the step to fix.
             if let Some(last) = attempts.iter().rev().find(|report| report["status"] != "passed") {
-                issues.push(serde_json::json!({
-                    "journey": name,
-                    "result": classification,
-                    "step": last["failing_step"],
-                    "class": last["classification"].as_str().unwrap_or("skipped"),
-                    "service": last["service"],
-                    "detail": last["detail"],
-                }));
+                // Every failing step is an issue: independent steps (the
+                // regression procedure) can fail on their own.
+                let failing: Vec<&serde_json::Value> = last["steps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|step| step["status"] == "FAIL")
+                    .collect();
+                for step in &failing {
+                    issues.push(serde_json::json!({
+                        "journey": name,
+                        "result": classification,
+                        "step": step["id"],
+                        "class": step["class"],
+                        "service": step["service"],
+                        "detail": step["observed"],
+                    }));
+                }
+                if failing.is_empty() {
+                    issues.push(serde_json::json!({
+                        "journey": name,
+                        "result": classification,
+                        "step": last["failing_step"],
+                        "class": last["classification"].as_str().unwrap_or("skipped"),
+                        "service": last["service"],
+                        "detail": last["detail"],
+                    }));
+                }
             }
         }
         journeys.push(serde_json::json!({
@@ -778,12 +798,38 @@ mod tests {
             platform(),
             &[step("s1", StepStatus::Skipped("no portal".into()))],
         );
-        let reports = [watch(2), pass, flaky[1].clone(), watch(1), flaky[0].clone(), skipped];
+        // Independent steps fail on their own; each is an issue.
+        let independent = report(
+            "ui_regressions",
+            1,
+            Path::new("/e"),
+            platform(),
+            &[
+                step("s1", StepStatus::Pass),
+                step(
+                    "s2",
+                    StepStatus::Fail(Failure::not_wired(Service::Dialogs, "no prompt")),
+                ),
+                step("s3", StepStatus::Fail(Failure::product("trace missing"))),
+            ],
+        );
+        let reports = [
+            watch(2),
+            pass,
+            flaky[1].clone(),
+            independent,
+            watch(1),
+            flaky[0].clone(),
+            skipped,
+        ];
         let summary = summarize(&reports);
         let journeys = summary["journeys"].as_array().unwrap();
         // Manifest order, not input order.
         let order: Vec<_> = journeys.iter().map(|row| row["name"].as_str().unwrap()).collect();
-        assert_eq!(order, ["plain_text", "code_config", "huge_log_tail", "udl"]);
+        assert_eq!(
+            order,
+            ["plain_text", "code_config", "huge_log_tail", "udl", "ui_regressions"]
+        );
         let rows: serde_json::Map<String, serde_json::Value> = journeys
             .iter()
             .map(|row| (row["name"].as_str().unwrap().to_owned(), row.clone()))
@@ -793,12 +839,28 @@ mod tests {
         assert_eq!(rows["huge_log_tail"]["classification"], "fail");
         assert_eq!(rows["huge_log_tail"]["failures"][0]["attempt"], 1);
         assert_eq!(rows["udl"]["classification"], "skipped");
-        assert_eq!(summary["services_not_wired"], serde_json::json!(["file watching"]));
+        assert_eq!(
+            summary["services_not_wired"],
+            serde_json::json!(["dialogs", "file watching"])
+        );
         let issues = summary["tracked_issues"].as_array().unwrap();
-        assert_eq!(issues.len(), 3);
+        assert_eq!(issues.len(), 5);
         assert_eq!(issues[1]["journey"], "huge_log_tail");
         assert_eq!(issues[1]["step"], "s3");
+        assert_eq!(issues[1]["class"], "service_not_wired");
         assert_eq!(issues[2]["class"], "skipped");
+        let independent: Vec<_> = issues[3..]
+            .iter()
+            .map(|issue| (&issue["step"], &issue["class"]))
+            .collect();
+        assert_eq!(
+            independent[0],
+            (&serde_json::json!("s2"), &serde_json::json!("service_not_wired"))
+        );
+        assert_eq!(
+            independent[1],
+            (&serde_json::json!("s3"), &serde_json::json!("product"))
+        );
         let markdown = summary_markdown(&summary);
         assert!(markdown.contains("| huge_log_tail | 0/2 | 2 | 0 | fail | s3 | service_not_wired | file watching |"));
         assert!(markdown.contains("| plain_text | 1/1 | 0 | 0 | pass |"));
