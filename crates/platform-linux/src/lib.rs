@@ -1,14 +1,43 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Compile-complete unsupported native adapter; this is not a product port.
+//! The Linux native adapter. Filesystem, path trust, capability and data-folder
+//! services (PR-030) and the platform services of PR-031 are real library types:
+//! the clipboard, portal dialogs, in-app prompts, inotify file watching, the
+//! single-instance handoff, the extension host transport and its Landlock
+//! sandbox, and the desktop appearance. `NativePlatform` still answers
+//! `Unsupported` until the shell's seam wires those types in.
 use bareline_platform::{Capability, PlatformReadiness, PlatformServices, Unsupported};
-/// Filesystem, path trust, capability and data-folder services (PR-030) are
-/// real; the rest of this adapter still reports Unsupported.
 #[cfg(unix)]
 pub use bareline_platform_posix::{
     DirectoryGuard, PosixFileSystem, PosixFilesystemCapability, PosixPathTrustProvider, PosixSessionPathTrustProvider,
-    paths,
+    instance, paths,
 };
+
+#[cfg(target_os = "linux")]
+pub mod appearance;
+#[cfg(target_os = "linux")]
+pub mod clipboard;
+#[cfg(target_os = "linux")]
+pub mod dialogs;
+#[cfg(target_os = "linux")]
+pub mod extension_transport;
+#[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(target_os = "linux")]
+pub mod prompts;
+#[cfg(target_os = "linux")]
+pub mod sandbox;
+#[cfg(target_os = "linux")]
+mod watch;
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+pub use {
+    appearance::{LinuxAppearance, spell_checker_factory, system_ui_language},
+    clipboard::LinuxClipboard,
+    dialogs::LinuxDialogs,
+    prompts::{AboutAction, InAppPrompt, SaveChoice, SavePromptOutcome},
+    sandbox::LinuxHostSandbox,
+    watch::LinuxWatchService,
+};
 #[derive(Default)]
 pub struct NativePlatform;
 impl PlatformReadiness for NativePlatform {

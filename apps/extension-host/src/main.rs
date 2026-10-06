@@ -7,9 +7,13 @@ mod build_capabilities {
         "/../../build-support/capability_assertion.rs"
     ));
 }
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn run() -> Result<(), String> {
     use bareline_extensions_protocol::{Invocation, MAX_CHUNK_BYTES, decode};
+    // A Unix socket on Linux and macOS: the same handshake and peer checks.
+    #[cfg(unix)]
+    use bareline_platform_posix::extension_transport::AuthenticatedSocket as AuthenticatedPipe;
+    #[cfg(windows)]
     use bareline_platform_windows::extension_transport::AuthenticatedPipe;
     use sha2::{Digest, Sha256};
     use std::{
@@ -134,8 +138,9 @@ fn run() -> Result<(), String> {
 /// Hidden verification entry point, present only in debug builds: read the two paths given
 /// after `--sandbox-selftest` and report — via the exit code — whether the restricted-token
 /// sandbox (SEC-03) allowed the granted file and denied the %USERPROFILE% file. Exit 0 means
-/// both expectations held. Never compiled into a release host.
-#[cfg(all(windows, debug_assertions))]
+/// both expectations held. Never compiled into a release host. On Linux the sandbox is
+/// Landlock and the denied path is under $HOME; a denied folder is listed instead of read.
+#[cfg(all(any(windows, target_os = "linux"), debug_assertions))]
 fn sandbox_selftest() {
     let mut args = std::env::args_os().skip(1);
     if args.next().is_none_or(|flag| flag != "--sandbox-selftest") {
@@ -145,7 +150,11 @@ fn sandbox_selftest() {
         std::process::exit(64);
     };
     let grant_ok = std::fs::read(&grant).is_ok();
-    let deny_blocked = std::fs::read(&deny).is_err();
+    let deny_blocked = if std::path::Path::new(&deny).is_dir() {
+        std::fs::read_dir(&deny).is_err()
+    } else {
+        std::fs::read(&deny).is_err()
+    };
     let code = if grant_ok && deny_blocked {
         0
     } else {
@@ -161,14 +170,14 @@ fn main() {
         std::process::exit(1);
     }
     build_capabilities::retain();
-    #[cfg(all(windows, debug_assertions))]
+    #[cfg(all(any(windows, target_os = "linux"), debug_assertions))]
     sandbox_selftest();
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     if let Err(error) = run() {
         eprintln!("Extension host stopped: {error}");
         std::process::exit(1);
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
     {
         eprintln!("Authenticated native host transport is unavailable on this platform");
         std::process::exit(1);

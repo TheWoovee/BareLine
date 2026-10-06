@@ -22,6 +22,15 @@ bareline-platform-windows = { path = "../../crates/platform-windows" }
 
 sha2 = "=0.10.9"
 
+# Linux and macOS: the shared Unix-socket transport.
+[target.'cfg(unix)'.dependencies]
+bareline-platform-posix = { path = "../../crates/platform-posix" }
+sha2 = "=0.10.9"
+
 [dev-dependencies]
 bareline-macros = { path = "../../crates/macros" }
 wat = "=1.258.0"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+bareline-distribution = { path = "../../crates/distribution" }
+bareline-platform-linux = { path = "../../crates/platform-linux" }
