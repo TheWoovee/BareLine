@@ -394,7 +394,10 @@ dependencies = [
 name = "bareline-platform-linux"
 version = "0.2.0"
 dependencies = [
+ "bareline-document",
+ "bareline-file-io",
  "bareline-platform",
+ "bareline-platform-posix",
  "bareline-renderer",
  "bareline-renderer-recording",
  "bareline-ui",
@@ -405,7 +408,10 @@ dependencies = [
 name = "bareline-platform-macos"
 version = "0.2.0"
 dependencies = [
+ "bareline-document",
+ "bareline-file-io",
  "bareline-platform",
+ "bareline-platform-posix",
  "bareline-renderer",
  "bareline-renderer-recording",
  "bareline-ui",

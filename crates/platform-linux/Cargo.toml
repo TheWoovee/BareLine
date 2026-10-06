@@ -7,12 +7,18 @@ rust-version.workspace = true
 
 [dependencies]
 bareline-platform = { path = "../platform" }
+# Empty off Unix; the Linux and macOS adapters share its filesystem services.
+bareline-platform-posix = { path = "../platform-posix" }
 
 [dev-dependencies]
 winit.workspace = true
 bareline-renderer = { path = "../renderer" }
 bareline-renderer-recording = { path = "../renderer-recording" }
 bareline-ui = { path = "../ui" }
+
+[target.'cfg(unix)'.dev-dependencies]
+bareline-document = { path = "../document" }
+bareline-file-io = { path = "../file-io" }
 
 [[example]]
 name = "recording_probe_linux"
