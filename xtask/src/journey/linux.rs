@@ -57,8 +57,12 @@ pub(super) fn desktop(root: &Path, scratch: &Path) -> Result<Box<dyn Desktop>, F
 }
 
 struct X11 {
+    /// The checkout, for the helper scripts beside the journeys.
+    root: PathBuf,
     /// The DISPLAY every tool and editor of this desktop uses.
     display: OsString,
+    /// Characters outside the keymap already bound to keycodes of their own.
+    bound: std::cell::RefCell<String>,
     /// The private X server, ended with the desktop.
     server: Option<Child>,
     /// The private session bus with the portal stand-in, or why there is none.
@@ -139,14 +143,18 @@ impl X11 {
             let display = std::env::var_os("DISPLAY")
                 .ok_or_else(|| Failure::environment("BARELINE_QA_DISPLAY=inherit without an X11 DISPLAY"))?;
             return Ok(Self {
+                root: root.to_path_buf(),
                 display,
+                bound: std::cell::RefCell::default(),
                 server: None,
                 bus: Err("the caller's session bus is used (BARELINE_QA_DISPLAY=inherit)".into()),
             });
         }
         let (server, display) = start_xvfb(scratch)?;
         let mut desktop = Self {
+            root: root.to_path_buf(),
             display,
+            bound: std::cell::RefCell::default(),
             server: Some(server),
             bus: Err(String::new()),
         };
@@ -168,6 +176,42 @@ impl X11 {
             arguments[0],
             TOOL_DEADLINE,
         )
+    }
+
+    /// On the private display, give every character of `text` outside the
+    /// keymap a keycode of its own before it is typed (tests/e2e/x11_keymap.py).
+    /// xdotool otherwise rebinds one scratch keycode around each such key
+    /// event, and the editor can read an event after the next rebinding: the
+    /// character is lost or arrives as the next one. The caller's display
+    /// (BARELINE_QA_DISPLAY=inherit) keeps its keymap.
+    fn bind_characters(&self, text: &str) -> Result<serde_json::Value, Failure> {
+        let new: String = text
+            .chars()
+            .filter(|character| !character.is_ascii() && !self.bound.borrow().contains(*character))
+            .collect();
+        if self.server.is_none() || new.is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        let python = std::env::var_os("BARELINE_QA_PYTHON").unwrap_or_else(|| "python3".into());
+        let output = output_within(
+            Command::new(python)
+                .arg(self.root.join("tests/e2e/x11_keymap.py"))
+                .arg(&new)
+                .env("DISPLAY", &self.display)
+                .env("PYTHONDONTWRITEBYTECODE", "1"),
+            "x11_keymap.py",
+            TOOL_DEADLINE,
+        )?;
+        if !output.status.success() {
+            return Err(Failure::harness(format!(
+                "x11_keymap.py failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        self.bound.borrow_mut().push_str(&new);
+        // Clients read the changed keymap before the first key that needs it.
+        std::thread::sleep(Duration::from_millis(300));
+        serde_json::from_slice(&output.stdout).map_err(|error| Failure::harness(format!("x11_keymap.py: {error}")))
     }
 
     fn checked(&self, arguments: &[&str]) -> Result<String, Failure> {
@@ -535,6 +579,7 @@ impl Desktop for X11 {
     }
 
     fn text(&self, window: &Window, text: &str) -> Result<(), Failure> {
+        self.bind_characters(text)?;
         self.focus(window)?;
         for (run, ascii) in typing_runs(text) {
             let delay = if ascii { ASCII_DELAY_MS } else { UNICODE_DELAY_MS };
@@ -784,6 +829,46 @@ mod tests {
         assert_eq!(requests[0]["method"], "OpenFile");
         assert_eq!(requests[0]["uris"][0], uri.as_str());
         assert_eq!(requests[1]["response"], 1);
+        drop(desktop);
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    /// Characters outside the keymap get keycodes of their own on the private
+    /// display, once, so xdotool never rebinds a keycode while a client reads.
+    #[test]
+    fn characters_outside_the_keymap_are_bound_once_to_their_own_keycodes() {
+        if !private_display_available() {
+            return;
+        }
+        let scratch = scratch("keymap");
+        let desktop = X11::start(&root(), &scratch).expect("a private Xvfb");
+        let text = "A\u{1F389}e\u{301}\u{6587}";
+        let bound = desktop.bind_characters(text).unwrap();
+        let codes: Vec<u64> = ["\u{1F389}", "\u{301}", "\u{6587}"]
+            .iter()
+            .map(|character| bound[*character].as_u64().unwrap())
+            .collect();
+        assert!(codes.iter().all(|code| (8..=255).contains(code)), "{bound}");
+        let mut distinct = codes.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 3, "{bound}");
+        // Bound once: typing the same characters again changes nothing.
+        assert_eq!(desktop.bind_characters(text).unwrap(), serde_json::Value::Null);
+        assert_eq!(desktop.bound.borrow().as_str(), "\u{1F389}\u{301}\u{6587}");
+        // A later client sees the bindings: the helper finds each keycode.
+        let output = output_within(
+            Command::new("python3")
+                .arg(root().join("tests/e2e/x11_keymap.py"))
+                .arg("\u{301}\u{6587}")
+                .env("DISPLAY", &desktop.display),
+            "x11_keymap.py",
+            Duration::from_secs(20),
+        )
+        .unwrap();
+        let again: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(again["\u{301}"].as_u64(), Some(codes[1]));
+        assert_eq!(again["\u{6587}"].as_u64(), Some(codes[2]));
         drop(desktop);
         let _ = std::fs::remove_dir_all(scratch);
     }
