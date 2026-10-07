@@ -2058,6 +2058,7 @@ pub(super) mod tests {
             profile: Default::default(),
             smoke: false,
             failed: false,
+            window_title: "Bareline".into(),
             prototype: None,
             workspace: None,
             notify: std::sync::Arc::new(|| {}),

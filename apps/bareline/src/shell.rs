@@ -189,6 +189,8 @@ struct Shell {
     profile: profile::ProfileRuntime,
     smoke: bool,
     failed: bool,
+    /// The title last given to the window (`sync_window_title`).
+    window_title: String,
     prototype: Option<TextPrototype>,
     workspace: Option<Workspace>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
@@ -866,6 +868,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         profile: profile::ProfileRuntime::new(&mut launch),
         smoke,
         failed: false,
+        window_title: "Bareline".into(),
         prototype: prototype.then(TextPrototype::mixed_script),
         workspace: None,
         notify,
@@ -1385,7 +1388,29 @@ fn poll_when_exiting(el: &ActiveEventLoop) {
         el.set_control_flow(flow);
     }
 }
+/// The window's title: the active document's tab title (its name, and " •"
+/// while it has unsaved changes) before the product name, as Notepad++ names
+/// its window, so window lists and Alt+Tab tell windows apart (LNX-UI-011).
+fn window_title(document: Option<&str>) -> String {
+    document.map_or_else(|| "Bareline".into(), |name| format!("{name} – Bareline"))
+}
 impl Shell {
+    /// Retitles the window when the active tab, its path or its dirty state
+    /// changed; every such change repaints, so the frame checks it.
+    fn sync_window_title(&mut self) {
+        let title = window_title(
+            self.workspace
+                .as_ref()
+                .and_then(|workspace| workspace.title(self.app.active))
+                .as_deref(),
+        );
+        if title != self.window_title {
+            if let Some(window) = &self.window {
+                window.set_title(&title);
+            }
+            self.window_title = title;
+        }
+    }
     /// A startup problem that did not stop the launch stays on screen until the
     /// user dismisses it (APP-01, APP-17).
     fn startup_notice(&mut self, id: &str, level: bareline_ui::theme::ToastLevel, text: String, details: String) {
@@ -4505,6 +4530,7 @@ impl Shell {
         }
     }
     fn on_redraw(&mut self, el: &ActiveEventLoop, editor_bounds: bareline_renderer::Rect) {
+        self.sync_window_title();
         if self.renderer.is_none() {
             self.ledger.record(StartupAction::CreateRenderer);
             let _renderer_phase = bareline_diagnostics::startup_span(StartupAction::CreateRenderer);
@@ -5904,6 +5930,29 @@ mod deferred_close_tests {
         assert!(shell.pending_close.is_none(), "Cancel must retire the exit request");
         drop(shell);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// LNX-UI-011: the window was always titled "Bareline".
+    #[test]
+    fn the_window_title_follows_the_active_document_and_its_unsaved_changes() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let mut shell = headless_shell();
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Bareline", "no documents yet");
+        shell.workspace = Some(workspace);
+        shell.app.active = 1;
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Untitled 2 – Bareline");
+        let workspace = shell.workspace.as_mut().unwrap();
+        workspace.editors[1].enqueue(Input::Insert("edited".into()));
+        settle(workspace);
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Untitled 2 • – Bareline");
+        shell.app.active = 0;
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Untitled 1 – Bareline");
     }
 
     #[test]

@@ -3343,22 +3343,23 @@ impl Workspace {
         }
     }
     pub fn titles(&self) -> Vec<String> {
-        self.editors
-            .iter()
-            .enumerate()
-            .map(|(i, editor)| {
-                let mut title = self.tabs[i]
-                    .file
-                    .as_ref()
-                    .and_then(|file| file.path.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| self.tabs[i].label.clone());
-                if editor.dirty() {
-                    title.push_str(" •");
-                }
-                title
-            })
-            .collect()
+        (0..self.editors.len()).filter_map(|i| self.title(i)).collect()
+    }
+    /// The tab title of the document at `index`: its file name, or its label
+    /// while it has no file, and " •" while it has unsaved changes.
+    pub fn title(&self, index: usize) -> Option<String> {
+        let editor = self.editors.get(index)?;
+        let tab = self.tabs.get(index)?;
+        let mut title = tab
+            .file
+            .as_ref()
+            .and_then(|file| file.path.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| tab.label.clone());
+        if editor.dirty() {
+            title.push_str(" •");
+        }
+        Some(title)
     }
     /// Drain only navigation commands whose target selection has actually been applied.
     pub fn take_acknowledged_commands(&mut self) -> Vec<(String, std::collections::BTreeMap<String, String>)> {
