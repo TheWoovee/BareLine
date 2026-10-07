@@ -53,10 +53,13 @@ pub(super) enum Service {
     Accessibility,
     /// The native menu bar (macOS); Linux reaches commands through the palette.
     Menus,
+    /// Running configured external commands (Run, macro external commands)
+    /// inside the editor's process containment, after the user's consent.
+    ExternalProcesses,
 }
 
 impl Service {
-    pub(super) const ALL: [Service; 7] = [
+    pub(super) const ALL: [Service; 8] = [
         Service::Dialogs,
         Service::FileWatching,
         Service::Clipboard,
@@ -64,6 +67,7 @@ impl Service {
         Service::ExtensionHost,
         Service::Accessibility,
         Service::Menus,
+        Service::ExternalProcesses,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -75,6 +79,7 @@ impl Service {
             Service::ExtensionHost => "extension host",
             Service::Accessibility => "accessibility",
             Service::Menus => "menus",
+            Service::ExternalProcesses => "external processes",
         }
     }
 }
@@ -200,7 +205,7 @@ const SEAM: &str = "apps/bareline/src/shell/native/unix";
 /// step that needs a service whose stand-in is still in place is classified
 /// `service_not_wired`; once the service is wired the phrase is gone and the
 /// same failure is a product failure.
-const STAND_INS: [(Service, &str, &str); 7] = [
+const STAND_INS: [(Service, &str, &str); 8] = [
     (
         Service::Dialogs,
         "platform.rs",
@@ -224,6 +229,11 @@ const STAND_INS: [(Service, &str, &str); 7] = [
     ),
     (Service::Accessibility, "accessibility.rs", "no_platform_adapter"),
     (Service::Menus, "platform.rs", "fn command_id(&self, _menu_id: usize)"),
+    (
+        Service::ExternalProcesses,
+        "process.rs",
+        "Runs no program: process containment",
+    ),
 ];
 
 /// `Some(true)` while the seam still holds `service`'s stand-in, `Some(false)`
@@ -392,14 +402,19 @@ pub(super) fn write_summary(
 }
 
 fn summarize(reports: &[serde_json::Value]) -> serde_json::Value {
-    let mut names: Vec<&str> = reports.iter().filter_map(|report| report["name"].as_str()).collect();
+    let mut names: Vec<&str> = Vec::new();
+    for name in reports.iter().filter_map(|report| report["name"].as_str()) {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    // Manifest order; other journeys keep the order they first appeared in.
     names.sort_by_key(|name| {
         ORDINARY
             .iter()
             .position(|known| known == name)
             .unwrap_or(ORDINARY.len())
     });
-    names.dedup();
     let mut journeys = Vec::new();
     let mut issues = Vec::new();
     for name in names {
@@ -970,6 +985,33 @@ mod tests {
         let markdown = summary_markdown(&summary);
         assert!(markdown.contains("| huge_log_tail | 0/2 | 2 | 0 | fail | s3 | service_not_wired | file watching |"));
         assert!(markdown.contains("| plain_text | 1/1 | 0 | 0 | pass |"));
+    }
+
+    #[test]
+    fn journeys_outside_the_ordinary_tier_get_one_row_however_their_attempts_interleave() {
+        let attempt = |name: &str, attempt| {
+            report(
+                name,
+                attempt,
+                Path::new("/e"),
+                platform(),
+                &[step("s1", StepStatus::Pass)],
+            )
+        };
+        let summary = summarize(&[
+            attempt("smoke", 1),
+            attempt("perf", 1),
+            attempt("plain_text", 1),
+            attempt("smoke", 2),
+            attempt("perf", 2),
+        ]);
+        let rows: Vec<(&str, u64)> = summary["journeys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| (row["name"].as_str().unwrap(), row["attempts"].as_u64().unwrap()))
+            .collect();
+        assert_eq!(rows, [("plain_text", 1), ("smoke", 2), ("perf", 2)]);
     }
 
     #[test]
