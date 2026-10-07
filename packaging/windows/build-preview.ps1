@@ -163,7 +163,7 @@ SHA-256SUMS covers every download except itself. These unsigned hashes detect co
         '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
     })
     [IO.File]::WriteAllText((Join-Path $output 'SHA-256SUMS'), (($inventory -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
-    & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $output -Version $version -RequireInstaller:$Installer -BuildHash $buildHash
+    & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $output -Version $version -Platform windows -RequireInstaller:$Installer -BuildHash $buildHash
     Write-Output "Unsigned preview packages and SHA-256SUMS: $output"
     Write-Output "Staged payload, SDK licenses, dependency SBOMs and build-tools.json: $stage"
 } finally {
