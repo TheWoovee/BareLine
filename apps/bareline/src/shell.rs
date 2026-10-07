@@ -18,6 +18,7 @@ mod native;
 mod performance;
 mod power;
 mod profile;
+mod prompt;
 mod recovery;
 mod render_errors;
 mod run_prompt;
@@ -232,6 +233,8 @@ struct Shell {
     scrolling: scrolling::Runtime,
     inventory: inventory::InventoryRuntime,
     toasts: toast::ToastStack,
+    /// A question the platform asks through the shell's own modal (Linux).
+    prompt: prompt::PromptRuntime,
     render_errors: render_errors::RenderErrorLatch,
     /// Clickable status-bar picker regions (Language/Indent/EOL/Encoding),
     /// rebuilt each frame and hit-tested on a left click (UX-40).
@@ -800,6 +803,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let wake = wake_dispatch.clone();
         std::sync::Arc::new(move || wake(Wake::All))
     };
+    // Portal dialogs, the desktop appearance and (macOS) the menu bar answer
+    // from other threads and wake the loop through it.
+    native::set_event_notify(notify.clone());
+    // How an extension host would be confined on this system (Linux: the
+    // Landlock ABI, or why the host will not run), logged once as
+    // `event=extension_isolation`; the Extensions page shows the same words.
+    let _ = native::extension_transport::isolation();
     if !smoke && !perf && !prototype {
         ledger.record(StartupAction::InstanceHandoff);
     }
@@ -897,6 +907,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         scrolling: Default::default(),
         inventory: inventory::InventoryRuntime::default(),
         toasts: Default::default(),
+        prompt: Default::default(),
         render_errors: Default::default(),
         status_pickers: Vec::new(),
         view_chrome: Default::default(),
@@ -1151,12 +1162,34 @@ impl ApplicationHandler<Wake> for Handler {
         self.shell.resumed(el);
     }
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let event = native::translate_event(event);
         // A tab switch, open or close by key or click is the user's choice of tab.
         let input = matches!(
             event,
             WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. }
         );
+        // Input that arrives while a question is open or its answer waits for
+        // its run (Linux) comes after both, as it does after a Windows modal
+        // dialog: the answered run goes first, and an open question's modal is
+        // up before the input reaches the editor.
+        if input && native::interaction_waiting(self.shell.platform.as_ref()) {
+            self.shell.interactions_poll(el);
+        }
         let before = input.then(|| self.shell.active_document());
+        // A key or click the shell handles itself may ask a question that
+        // answers later (Linux); the same input then runs again.
+        let (pointer, modifiers) = (self.shell.pointer, self.shell.modifiers);
+        let modal = self.shell.modal.map(|modal| modal.surface);
+        let _interaction = input.then(|| {
+            native::interaction_scope(self.shell.platform.as_ref(), || prompt::Replay::Input {
+                window: id,
+                event: event.clone(),
+                pointer,
+                modifiers,
+                modal,
+                context: self.shell.replay_context(),
+            })
+        });
         self.shell.window_event(el, id, event);
         if let Some(before) = before {
             self.shell.note_focus_input(before);
@@ -1165,6 +1198,11 @@ impl ApplicationHandler<Wake> for Handler {
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
+        // A prompt or dialog that answers later (Linux) runs its asker again.
+        self.shell.interactions_poll(el);
+        if native::appearance_changed() {
+            self.shell.follow_system_appearance();
+        }
         // A rename moves its file on a worker; it no-ops when none is pending.
         self.shell.shell_rename_pump();
         // Named session load and save; no-ops when none is pending.
@@ -2159,6 +2197,12 @@ impl Shell {
         (self.notify)();
     }
     fn drain_pending_close(&mut self, el: &ActiveEventLoop) {
+        // A prompt or dialog of the platform is open (Linux): queued closes wait
+        // for its answer, as they wait behind a modal dialog on Windows.
+        if native::interaction_waiting(self.platform.as_ref()) {
+            return;
+        }
+        let _interaction = native::interaction_scope(self.platform.as_ref(), || prompt::Replay::Close);
         match self.pending_close.take() {
             Some(PendingClose::Application) => {
                 if self.application_close_ready(PendingClose::Application) {
@@ -2259,6 +2303,12 @@ impl Shell {
             0,
         );
         let outcome = self.platform.as_ref().unwrap().confirm_save_document(&name);
+        if native::interaction_waiting(self.platform.as_ref()) {
+            // The shell's own prompt answers later (Linux): the close stays
+            // queued and asks again once it has the answer.
+            self.pending_close = Some(PendingClose::Document(*target));
+            return false;
+        }
         match outcome {
             SavePromptOutcome::Choice { choice, selected } => {
                 self.trace_save_choice(self.pending_close_trace_ticket.unwrap_or(0), choice, selected);
@@ -2316,6 +2366,10 @@ impl Shell {
             }
             SaveChoice::Save => {
                 if !self.save_index(index) {
+                    if native::interaction_waiting(self.platform.as_ref()) {
+                        // The Save As dialog answers later (Linux): ask again then.
+                        self.pending_close = Some(PendingClose::Document(*target));
+                    }
                     return false;
                 }
                 self.pending_close = Some(PendingClose::Document(CloseTarget {
@@ -2491,6 +2545,11 @@ impl Shell {
             return;
         }
         if !confirmed && !self.confirm_exit() {
+            if native::interaction_waiting(self.platform.as_ref()) {
+                // The exit prompt answers later (Linux): the exit stays queued
+                // and the queued close asks again once it has the answer.
+                self.pending_close = Some(PendingClose::Application);
+            }
             self.instance_resume();
             return;
         }
@@ -2536,6 +2595,11 @@ impl Shell {
         self.qa_command_trace
             .record(ticket, "dialog-enter", "application", 0, 0, 0);
         let outcome = self.platform.as_ref().unwrap().confirm_save_all(&names);
+        if native::interaction_waiting(self.platform.as_ref()) {
+            // The shell's own prompt answers later (Linux); the caller keeps
+            // what asked queued, and it asks again once it has the answer.
+            return false;
+        }
         match outcome {
             SavePromptOutcome::Choice { choice, selected } => {
                 self.trace_save_choice(ticket, choice, selected);
@@ -3062,6 +3126,12 @@ impl Shell {
         false
     }
     fn dispatch(&mut self, el: &ActiveEventLoop, action: Action) {
+        // A command may ask a question that answers later (Linux); it then runs
+        // again and receives the answer where it asked.
+        let _interaction = native::interaction_scope(self.platform.as_ref(), || prompt::Replay::Action {
+            action,
+            context: self.replay_context(),
+        });
         if self.session.closing() {
             return;
         }
@@ -3351,7 +3421,7 @@ impl ApplicationHandler for Shell {
         };
         // The first frame follows the OS light/dark preference; the window
         // reads it when it is created (APP-15).
-        self.settings.apply_window_theme(window.theme());
+        self.settings.apply_window_theme(native::window_theme(&window));
         let handle = match native::raw_window(&window) {
             Ok(handle) => handle,
             Err(e) => {
@@ -5300,6 +5370,13 @@ impl Shell {
         } else {
             self.palette.release(renderer);
         }
+        // A question the platform asks through the shell sits above everything.
+        self.draw_prompt(
+            renderer,
+            size.width as f32 / scale,
+            size.height as f32 / scale,
+            operations,
+        );
         for (kind, error) in failures {
             self.layer_failed(el, kind, error);
         }

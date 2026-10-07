@@ -1,34 +1,103 @@
 // SPDX-License-Identifier: MPL-2.0
-//! System preferences the shell reads: contrast, the user's language, the
-//! legacy code page and spell checking.
-use std::{io, sync::Arc};
+//! System preferences the shell reads: light or dark, contrast, the user's
+//! language, the legacy code page and spell checking.
+//!
+//! Linux follows the desktop portal's appearance through one
+//! `LinuxAppearance` per process, started the first time the shell asks; its
+//! worker wakes the event loop when the desktop changes, and the shell then
+//! reads the cached value again (`appearance_changed`). Without a portal (WSL,
+//! a bare X server) the defaults apply: no preference, normal contrast. macOS
+//! reads the application's effective appearance and increased-contrast
+//! setting through AppKit.
+#[cfg(target_os = "linux")]
+use std::io;
+use winit::window::{Theme, Window};
 
-pub fn high_contrast_enabled() -> io::Result<bool> {
-    Ok(false)
+#[cfg(target_os = "linux")]
+mod desktop {
+    use bareline_platform_linux::LinuxAppearance;
+    use std::sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    static APPEARANCE: OnceLock<LinuxAppearance> = OnceLock::new();
+    /// Set by the appearance worker; taken by the event loop.
+    static CHANGED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn appearance() -> &'static LinuxAppearance {
+        APPEARANCE.get_or_init(|| {
+            LinuxAppearance::start(Arc::new(|| {
+                CHANGED.store(true, Ordering::Release);
+                // The shell's wake at the time of the change: the appearance
+                // may start before the event loop exists.
+                super::super::window::event_notify()();
+            }))
+        })
+    }
+    pub(super) fn take_changed() -> bool {
+        APPEARANCE.get().is_some() && CHANGED.swap(false, Ordering::AcqRel)
+    }
 }
+
+/// The light or dark preference the first frame and later changes follow: the
+/// portal's preference on Linux, where winit reports none on X11.
+#[cfg(target_os = "linux")]
+pub fn window_theme(window: &Window) -> Option<Theme> {
+    theme(desktop::appearance().dark()).or_else(|| window.theme())
+}
+/// AppKit's effective appearance of the application.
+#[cfg(target_os = "macos")]
+pub fn window_theme(window: &Window) -> Option<Theme> {
+    use bareline_platform_macos::{MacAppearance, MainThreadMarker};
+    thread_local! {
+        static APPEARANCE: std::cell::OnceCell<MacAppearance> = const { std::cell::OnceCell::new() };
+    }
+    let dark = MainThreadMarker::new()
+        .map(|mtm| APPEARANCE.with(|appearance| appearance.get_or_init(|| MacAppearance::new(mtm)).current().dark));
+    theme(dark).or_else(|| window.theme())
+}
+fn theme(dark: Option<bool>) -> Option<Theme> {
+    dark.map(|dark| if dark { Theme::Dark } else { Theme::Light })
+}
+/// Whether the desktop's appearance changed since the last call, so the shell
+/// reads the theme and contrast again.
+#[cfg(target_os = "linux")]
+pub fn appearance_changed() -> bool {
+    desktop::take_changed()
+}
+/// macOS reports appearance changes through winit's `ThemeChanged` and window
+/// activation, which the shell already follows.
+#[cfg(target_os = "macos")]
+pub fn appearance_changed() -> bool {
+    false
+}
+#[cfg(target_os = "linux")]
+pub fn high_contrast_enabled() -> io::Result<bool> {
+    Ok(desktop::appearance().high_contrast())
+}
+/// System Settings > Accessibility > Display > Increase contrast.
+#[cfg(target_os = "macos")]
+pub use bareline_platform_macos::high_contrast_enabled;
 pub fn high_contrast_highlight() -> Option<(u32, u32)> {
     None
 }
-/// The user's language from the POSIX locale variables as a BCP 47 name such as
-/// `de-DE`. `None` for the C/POSIX locale or when nothing is set.
-pub fn system_ui_language() -> Option<String> {
-    ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .find(|value| !value.is_empty())
-        .and_then(|value| locale_name(value.to_str()?))
-}
-/// `de_DE.UTF-8` or `sr_RS@latin` to `de-DE` or `sr-RS`.
-fn locale_name(value: &str) -> Option<String> {
-    let name = value.split(['.', '@']).next().unwrap_or_default().replace('_', "-");
-    (!name.is_empty() && name != "C" && name != "POSIX").then_some(name)
-}
+/// The user's language as a BCP 47 name such as `de-DE`: from the gettext
+/// variables (`LANGUAGE` first, then the POSIX locale).
+#[cfg(target_os = "linux")]
+pub use bareline_platform_linux::system_ui_language;
+/// The first preferred language in System Settings, from NSLocale.
+#[cfg(target_os = "macos")]
+pub use bareline_platform_macos::system_ui_language;
 /// The code page legacy text falls back to: UTF-8 on these systems.
 pub fn system_code_page() -> u32 {
     65001
 }
+#[cfg(target_os = "linux")]
+pub use bareline_platform_linux::spell_checker_factory;
+#[cfg(target_os = "macos")]
 pub fn spell_checker_factory() -> bareline_platform::spelling::SpellCheckerFactory {
-    Arc::new(|| Err("This system does not support spell checking yet".to_owned()))
+    std::sync::Arc::new(|| Err("This system does not support spell checking yet".to_owned()))
 }
 
 #[cfg(test)]
@@ -36,12 +105,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn locale_names_become_language_tags() {
-        assert_eq!(locale_name("de_DE.UTF-8").as_deref(), Some("de-DE"));
-        assert_eq!(locale_name("sr_RS@latin").as_deref(), Some("sr-RS"));
-        assert_eq!(locale_name("en").as_deref(), Some("en"));
-        assert_eq!(locale_name("C.UTF-8"), None);
-        assert_eq!(locale_name("POSIX"), None);
-        assert_eq!(locale_name(""), None);
+    fn the_desktop_preferences_answer_without_a_desktop() {
+        // Answers come from a cache (Linux) or AppKit (macOS), never an error.
+        assert!(high_contrast_enabled().is_ok());
+        assert!(high_contrast_highlight().is_none());
+        assert_eq!(system_code_page(), 65001);
+        assert!(system_ui_language().is_none_or(|language| !language.is_empty()));
+        assert!(spell_checker_factory()().is_err());
     }
 }

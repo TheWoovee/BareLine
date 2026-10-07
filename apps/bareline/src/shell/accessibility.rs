@@ -743,6 +743,30 @@ impl Shell {
                         focus = super::toast::DETAILS_CLOSE_ID;
                     }
                 }
+                super::modal::ModalSurface::Prompt => {
+                    if let Some(super::prompt::PromptSemantics {
+                        name,
+                        text,
+                        text_bounds,
+                        buttons,
+                    }) = self.prompt.semantics()
+                    {
+                        let mut children = vec![node(
+                            super::prompt::PROMPT_TEXT_ID,
+                            AccessibilityRole::Status,
+                            "Message",
+                            Some(text),
+                            text_bounds,
+                            false,
+                            false,
+                        )];
+                        children.extend(buttons.into_iter().map(|(id, label, bounds)| {
+                            node(id, AccessibilityRole::Button, &label, None, bounds, true, true)
+                        }));
+                        semantic_group(&mut chrome, modal.semantics.group, &name, children);
+                        focus = self.prompt.focused_id();
+                    }
+                }
                 _ => {}
             }
         }
@@ -1470,6 +1494,15 @@ impl Shell {
                 // stale background actions never continue into the editor.
                 true
             }
+            super::modal::ModalSurface::Prompt => {
+                match action {
+                    AccessibilityAction::Focus(id) => self.prompt_focus(*id),
+                    AccessibilityAction::Invoke(id) => self.prompt_invoke(*id),
+                    _ => {}
+                }
+                // The prompt owns the active layer; nothing reaches the editor.
+                true
+            }
             super::modal::ModalSurface::NotificationDetails => match action {
                 AccessibilityAction::Focus(id) if *id == super::toast::DETAILS_CLOSE_ID => {
                     self.modal_focus(modal.surface, *id);
@@ -2066,6 +2099,7 @@ pub(super) mod tests {
             charsets: Default::default(),
             run_prompt: Default::default(),
             toasts: Default::default(),
+            prompt: Default::default(),
             render_errors: Default::default(),
             status_pickers: Vec::new(),
             view_chrome: Default::default(),

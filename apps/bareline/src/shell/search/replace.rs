@@ -1982,6 +1982,14 @@ impl Shell {
                     EXIT_WAIT_ID,
                 )
             });
+            if crate::shell::native::interaction_waiting(self.platform.as_ref()) {
+                // The shell's own prompt answers later (Linux): the exit stays
+                // queued and this gate asks again, receiving the answer, when
+                // the queued close runs again.
+                self.search.replace.exit_prompted = None;
+                self.pending_close = Some(pending);
+                return None;
+            }
             match choice {
                 Some(EXIT_CANCEL_ID) => {
                     self.search_replace_command("search.replacePreview.cancel");

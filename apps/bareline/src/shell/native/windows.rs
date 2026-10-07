@@ -20,7 +20,7 @@ pub use bareline_platform_windows::{
     AboutAction, CommandMessage, SaveChoice, SavePromptOutcome, SessionEndMonitor, SessionEndSignal,
     WindowsAccessibility as Accessibility, WindowsFileSystem as FileSystem, WindowsPathTrustProvider as PathTrust,
     WindowsPlatform as Platform, WindowsProcessLauncher as ProcessLauncher, WindowsRenderer as Renderer,
-    WindowsSessionPathTrustProvider as SessionPathTrust, WindowsWatchService as WatchService, cli, extension_transport,
+    WindowsSessionPathTrustProvider as SessionPathTrust, WindowsWatchService as WatchService, cli,
     high_contrast_enabled, high_contrast_highlight, installed_font_families, instance, monotonic_ns, private_bytes,
     recycle_entry, register_application_restart, resolve_program, shell_integration, spell_checker_factory,
     system_code_page, system_ui_language, update,
@@ -30,6 +30,54 @@ pub use bareline_platform_windows::{SessionEndHost, SessionEndMessage};
 
 pub mod printing {
     pub use bareline_platform_windows::printing::{WindowsPrintJob as PrintJob, choose_printer};
+}
+
+pub mod extension_transport {
+    pub use bareline_platform_windows::extension_transport::*;
+    /// The Extensions page names the host's confinement only where it can be
+    /// missing; on Windows the job object and AppContainer always apply.
+    pub fn isolation() -> Option<String> {
+        None
+    }
+}
+
+/// What the workspace says after `recycle_entry`.
+pub const RECYCLED: &str = "Moved to the Recycle Bin";
+
+/// Every Windows prompt and dialog is modal: the call returns the answer, so
+/// nothing is ever deferred, replayed or drawn by the shell (see the Linux
+/// seam's `interaction` for the systems where that is needed).
+pub struct InteractionScope;
+pub fn interaction_scope<R: 'static>(_platform: Option<&Platform>, _owner: impl FnOnce() -> R) -> InteractionScope {
+    InteractionScope
+}
+pub fn interaction_waiting(_platform: Option<&Platform>) -> bool {
+    false
+}
+pub fn interaction_replay<R: 'static>(_platform: Option<&Platform>) -> Option<R> {
+    None
+}
+pub fn interaction_settle(_platform: Option<&Platform>) {}
+/// Nothing of the Windows save dialog carries over to the destination check.
+pub fn save_destination_settled(_platform: Option<&Platform>) {}
+pub fn in_app_prompt(_platform: Option<&Platform>) -> Option<super::PromptView> {
+    None
+}
+pub fn answer_prompt(_platform: Option<&Platform>, _id: i32) {}
+
+/// The Windows services wake the loop through their own window messages.
+pub fn set_event_notify(_notify: std::sync::Arc<dyn Fn() + Send + Sync>) {}
+/// winit's events already carry the keymap's modifiers on Windows.
+pub fn translate_event(event: winit::event::WindowEvent) -> winit::event::WindowEvent {
+    event
+}
+/// The `AppsUseLightTheme` preference, as winit reads it.
+pub fn window_theme(window: &Window) -> Option<winit::window::Theme> {
+    window.theme()
+}
+/// Windows reports appearance changes as `ThemeChanged` window events.
+pub fn appearance_changed() -> bool {
+    false
 }
 
 /// The native handle of the editor window: its HWND.

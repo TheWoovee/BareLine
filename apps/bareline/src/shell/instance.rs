@@ -152,6 +152,12 @@ impl Shell {
                 self.instance.message = Some(message);
             }
         }
+        // A prompt or file dialog waits for its answer (Linux): the requests stay
+        // queued, as they do behind a modal dialog on Windows, so the command
+        // that asked runs again on the document it asked about.
+        if self.interaction_hold() {
+            return;
+        }
         // Every queued request was acknowledged by the pipe worker, so each one is
         // acted on here; none is dropped for having waited (APP-03).
         while let Some(request) = self.instance.server.as_ref().and_then(InstanceServer::try_recv) {
