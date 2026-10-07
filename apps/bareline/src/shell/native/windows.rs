@@ -79,6 +79,8 @@ pub fn window_theme(window: &Window) -> Option<winit::window::Theme> {
 pub fn appearance_changed() -> bool {
     false
 }
+/// Nothing to ask again on activation: `ThemeChanged` covers Windows.
+pub fn appearance_activated() {}
 
 /// The native handle of the editor window: its HWND.
 pub type RawWindow = isize;

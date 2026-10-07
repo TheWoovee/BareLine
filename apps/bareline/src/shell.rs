@@ -3495,6 +3495,8 @@ impl ApplicationHandler for Shell {
         }
         if matches!(&event, WindowEvent::Focused(true)) {
             self.watch_focus_check();
+            // macOS reads the appearance again after the event (`about_to_wait`).
+            native::appearance_activated();
         }
         if matches!(&event, WindowEvent::ThemeChanged(_) | WindowEvent::Focused(true)) {
             self.applied_settings = None;

@@ -71,8 +71,8 @@ pub use self::{
 #[cfg(test)]
 pub use session::{SessionEndHost, SessionEndMessage};
 pub use system::{
-    appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory, system_code_page,
-    system_ui_language, window_theme,
+    appearance_activated, appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory,
+    system_code_page, system_ui_language, window_theme,
 };
 pub use watch::WatchService;
 pub use window::{RawWindow, install_message_hook, raw_window, set_event_notify, translate_event};

@@ -8,7 +8,9 @@
 //! reads the cached value again (`appearance_changed`). Without a portal (WSL,
 //! a bare X server) the defaults apply: no preference, normal contrast. macOS
 //! reads the application's effective appearance and increased-contrast
-//! setting through AppKit.
+//! setting through AppKit, and asks `MacAppearance::changed` again whenever the
+//! window is activated (`appearance_activated`): increased contrast has no
+//! event, and System Settings, where both are changed, takes focus.
 #[cfg(target_os = "linux")]
 use std::io;
 use winit::window::{Theme, Window};
@@ -46,16 +48,39 @@ mod desktop {
 pub fn window_theme(window: &Window) -> Option<Theme> {
     theme(desktop::appearance().dark()).or_else(|| window.theme())
 }
+#[cfg(target_os = "macos")]
+mod appkit {
+    use bareline_platform_macos::{MacAppearance, MainThreadMarker};
+    use std::cell::OnceCell;
+
+    thread_local! {
+        static APPEARANCE: OnceCell<MacAppearance> = const { OnceCell::new() };
+        static ACTIVATION: super::Activation = const { super::Activation(std::cell::Cell::new(false)) };
+    }
+    /// The main thread's reader. Its first answer is the baseline `changed`
+    /// compares with, so only a later change counts.
+    pub(super) fn with<R>(read: impl FnOnce(&MacAppearance) -> R) -> Option<R> {
+        let mtm = MainThreadMarker::new()?;
+        Some(APPEARANCE.with(|appearance| {
+            read(appearance.get_or_init(|| {
+                let appearance = MacAppearance::new(mtm);
+                let _ = appearance.changed();
+                appearance
+            }))
+        }))
+    }
+    pub(super) fn activated() {
+        ACTIVATION.with(super::Activation::arm);
+    }
+    pub(super) fn take_changed() -> bool {
+        ACTIVATION
+            .with(|activation| activation.changed(|| with(|appearance| appearance.changed().is_some()) == Some(true)))
+    }
+}
 /// AppKit's effective appearance of the application.
 #[cfg(target_os = "macos")]
 pub fn window_theme(window: &Window) -> Option<Theme> {
-    use bareline_platform_macos::{MacAppearance, MainThreadMarker};
-    thread_local! {
-        static APPEARANCE: std::cell::OnceCell<MacAppearance> = const { std::cell::OnceCell::new() };
-    }
-    let dark = MainThreadMarker::new()
-        .map(|mtm| APPEARANCE.with(|appearance| appearance.get_or_init(|| MacAppearance::new(mtm)).current().dark));
-    theme(dark).or_else(|| window.theme())
+    theme(appkit::with(|appearance| appearance.current().dark)).or_else(|| window.theme())
 }
 fn theme(dark: Option<bool>) -> Option<Theme> {
     dark.map(|dark| if dark { Theme::Dark } else { Theme::Light })
@@ -66,11 +91,33 @@ fn theme(dark: Option<bool>) -> Option<Theme> {
 pub fn appearance_changed() -> bool {
     desktop::take_changed()
 }
-/// macOS reports appearance changes through winit's `ThemeChanged` and window
-/// activation, which the shell already follows.
+/// Whether AppKit's appearance or increased contrast changed since it was last
+/// asked, which happens once after each activation of the window.
 #[cfg(target_os = "macos")]
 pub fn appearance_changed() -> bool {
-    false
+    appkit::take_changed()
+}
+/// The window was activated (it became key, as when the person returns from
+/// System Settings). macOS asks AppKit at the next `appearance_changed`; the
+/// Linux portal reports its changes itself.
+pub fn appearance_activated() {
+    #[cfg(target_os = "macos")]
+    appkit::activated();
+}
+/// Asks a system without change events again only once per activation of the
+/// window, so the event loop does not query it on every turn.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Default)]
+struct Activation(std::cell::Cell<bool>);
+#[cfg(any(target_os = "macos", test))]
+impl Activation {
+    fn arm(&self) {
+        self.0.set(true);
+    }
+    /// `changed` answers whether the appearance differs from its last answer.
+    fn changed(&self, changed: impl FnOnce() -> bool) -> bool {
+        self.0.take() && changed()
+    }
 }
 #[cfg(target_os = "linux")]
 pub fn high_contrast_enabled() -> io::Result<bool> {
@@ -112,5 +159,29 @@ mod tests {
         assert_eq!(system_code_page(), 65001);
         assert!(system_ui_language().is_none_or(|language| !language.is_empty()));
         assert!(spell_checker_factory()().is_err());
+    }
+
+    /// macOS consults `MacAppearance::changed` after each activation of the
+    /// window, once, and never between activations.
+    #[test]
+    fn appearance_is_asked_again_once_per_activation() {
+        let activation = Activation::default();
+        let asked = std::cell::Cell::new(0);
+        let ask = |answer: bool| {
+            asked.set(asked.get() + 1);
+            answer
+        };
+        assert!(!activation.changed(|| ask(true)));
+        assert_eq!(asked.get(), 0, "not asked before an activation");
+        activation.arm();
+        assert!(activation.changed(|| ask(true)));
+        assert!(!activation.changed(|| ask(true)));
+        assert_eq!(asked.get(), 1, "asked once per activation");
+        activation.arm();
+        assert!(!activation.changed(|| ask(false)));
+        assert_eq!(asked.get(), 2);
+        // The seam answers without a window or AppKit main thread.
+        appearance_activated();
+        let _ = appearance_changed();
     }
 }
