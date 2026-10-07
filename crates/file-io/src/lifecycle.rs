@@ -3868,6 +3868,103 @@ mod encoded_tests {
             .count();
         assert!(later_steps >= 2, "the open waited for the whole transcode: {events:?}");
     }
+    /// `Platform` whose file system shares sealed files with hard links, as
+    /// Linux and macOS do (LNX-DISK-004).
+    struct SharingPlatform;
+    impl LocalFileSystem for SharingPlatform {
+        fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+            Platform.guard_directory(path)
+        }
+        fn available_space(&self, path: &std::path::Path) -> std::io::Result<u64> {
+            Platform.available_space(path)
+        }
+        fn open_sealed_read(&self, path: &std::path::Path) -> std::io::Result<std::fs::File> {
+            Platform.open_sealed_read(path)
+        }
+        /// File identities are real, so a shared file has the identity of its source.
+        fn identity(&self, f: &File) -> io::Result<FileIdentity> {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let m = f.metadata()?;
+                Ok(FileIdentity {
+                    volume: m.dev(),
+                    file: m.ino(),
+                    length: m.size(),
+                    modified: Platform.identity(f)?.modified,
+                })
+            }
+            #[cfg(not(unix))]
+            Platform.identity(f)
+        }
+        fn validate_target(&self, path: &Path) -> io::Result<()> {
+            Platform.validate_target(path)
+        }
+        fn commit(&self, stage: &Path, target: &Path, replace: bool) -> io::Result<()> {
+            Platform.commit(stage, target, replace)
+        }
+        fn shares_sealed_files(&self) -> bool {
+            true
+        }
+        fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+            fs::hard_link(source, target)
+        }
+    }
+    /// Interpret As on a paged document whose sealed text is a shared copy of
+    /// its raw bytes, and whose new text is shared again, completes.
+    #[test]
+    fn reinterpretation_of_a_shared_store_completes() {
+        let temp = Temp::new();
+        let big = temp.0.join("big.txt");
+        fs::write(&big, vec![b'a'; 6 * 65536]).unwrap();
+        let source_options = crate::source::SourceOptions {
+            resident_max_bytes: 0,
+            page_size_bytes: 4096,
+            page_cache_bytes: 1 << 20,
+        };
+        let opened = match open_paged_encoded(
+            PagedOpenRequest {
+                path: big.clone(),
+                bytes: Budget::new(32 << 20),
+                history: Budget::new(1 << 20),
+                cache: temp.0.join("cache"),
+                options: DiskOptions {
+                    temp_quota_bytes: 64 << 20,
+                    interpret: Some(Encoding::Utf8),
+                },
+                source_options,
+            },
+            Arc::new(SharingPlatform),
+            Cancellation::default(),
+            |_| {},
+        ) {
+            TranscodeOutcome::Complete(opened) => opened,
+            _ => panic!("paged open failed"),
+        };
+        let service = IoService::new(Arc::new(SharingPlatform)).unwrap();
+        let reinterpret = service
+            .submit(
+                IoRequest::InterpretPaged(Box::new(InterpretPagedRequest {
+                    source: opened.transcoded.store.clone(),
+                    target: Encoding::Windows1252,
+                    path: big.clone(),
+                    fingerprint: opened.fingerprint.clone(),
+                    cache: temp.0.join("cache"),
+                    quota: 64 << 20,
+                    options: source_options,
+                    bytes: Budget::new(32 << 20),
+                    history: Budget::new(1 << 20),
+                })),
+                Arc::new(|| {}),
+            )
+            .ok()
+            .unwrap();
+        match completion(&reinterpret) {
+            IoCompletion::Transcode(TranscodeOutcome::Complete(reinterpreted)) => assert_eq!(reinterpreted.path, big),
+            IoCompletion::Transcode(TranscodeOutcome::Failed(error)) => panic!("reinterpretation failed: {error}"),
+            _ => panic!("reinterpretation failed"),
+        }
+    }
     #[test]
     fn reinterpretation_lets_queued_bulk_work_run_between_slices() {
         let temp = Temp::new();
