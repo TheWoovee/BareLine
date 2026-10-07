@@ -261,8 +261,12 @@ struct ListedJob {
     /// Records a retried Rollback might still restore; deleting discards them.
     retry: usize,
 }
+#[cfg(windows)]
 const NO_DURABLE_ROOT: &str =
     "Replace in Files needs the durable recovery folder for receipts and backups; they are never kept in %TEMP%.";
+/// `%TEMP%` names nothing on Linux or macOS (LNX-EDIT-010).
+#[cfg(not(windows))]
+const NO_DURABLE_ROOT: &str = "Replace in Files needs the durable recovery folder for receipts and backups; they are never kept in the temporary folder.";
 const EXIT_WAIT_ID: i32 = 1301;
 const EXIT_CANCEL_ID: i32 = 1302;
 const DELETE_BACKUP_ID: i32 = 1303;
@@ -2353,7 +2357,12 @@ mod menu_state_tests {
         assert!(shell.search.replace.preview.is_some(), "the reviewed preview is kept");
         assert!(shell.search.replace.disk_queue.is_none());
         assert!(
-            shell.search.replace.status.contains("%TEMP%"),
+            shell.search.replace.status.contains(NO_DURABLE_ROOT)
+                && shell
+                    .search
+                    .replace
+                    .status
+                    .contains(if cfg!(windows) { "%TEMP%" } else { "temporary folder" }),
             "{}",
             shell.search.replace.status
         );

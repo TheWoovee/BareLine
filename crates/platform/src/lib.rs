@@ -109,8 +109,12 @@ impl CapabilityReport {
             SaveStrategy::RenameReplace => Some(
                 "This drive cannot replace files atomically. Saving goes through a temporary file and keeps the previous version until the save is verified.",
             ),
-            SaveStrategy::Transactional if self.redirected => {
+            // Junctions exist only on Windows (LNX-EDIT-010).
+            SaveStrategy::Transactional if self.redirected && cfg!(windows) => {
                 Some("Opened through a junction or symbolic link. Saving writes to the linked location.")
+            }
+            SaveStrategy::Transactional if self.redirected => {
+                Some("Opened through a symbolic link. Saving writes to the linked location.")
             }
             SaveStrategy::Transactional => None,
         }
@@ -852,6 +856,25 @@ mod tests {
         for op in [PathOperation::Read, PathOperation::Write, PathOperation::Execute] {
             assert!(!RestrictedPaths.permits(&path, op));
         }
+    }
+
+    /// LNX-EDIT-010: junctions are a Windows concept; elsewhere the link is
+    /// a symbolic link.
+    #[test]
+    fn a_redirected_location_is_named_with_this_systems_link_kind() {
+        let report = CapabilityReport {
+            atomic_replace: Support::Supported,
+            acl: Support::Supported,
+            ads: Support::Supported,
+            hard_links: Support::Supported,
+            storage: StorageKind::Local,
+            save: SaveStrategy::Transactional,
+            redirected: true,
+            cloud: false,
+        };
+        let notice = report.notice().unwrap();
+        assert!(notice.contains("symbolic link"), "{notice}");
+        assert_eq!(notice.contains("junction"), cfg!(windows), "{notice}");
     }
 }
 

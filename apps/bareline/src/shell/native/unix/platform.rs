@@ -13,3 +13,26 @@ mod macos;
 pub use linux::*;
 #[cfg(target_os = "macos")]
 pub use macos::*;
+
+/// What the shell says when the close (`exit` false) or exit prompt could not
+/// be shown. A Windows error code means nothing here, so the words say what
+/// stayed open and the way out instead (LNX-UI-007, LNX-MSG-012).
+pub fn save_prompt_failed(exit: bool, _code: i32) -> String {
+    if exit {
+        "Bareline could not ask about the unsaved documents, so it stays open. Save them, or close them one at a time; their text stays in recovery meanwhile.".into()
+    } else {
+        "Bareline could not ask about the unsaved changes, so the document stays open. Save it first; its text stays in recovery meanwhile.".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_failed_save_prompt_names_no_windows_error_code() {
+        for exit in [false, true] {
+            let message = super::save_prompt_failed(exit, -2_147_467_263);
+            assert!(!message.contains("HRESULT") && !message.contains("0x8"), "{message}");
+            assert!(message.contains("stays open"), "{message}");
+        }
+    }
+}

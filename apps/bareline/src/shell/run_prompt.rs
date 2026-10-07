@@ -20,6 +20,10 @@ pub(super) struct RunPromptRuntime {
 }
 
 /// Help text under the Run field; also the field's accessible description.
+#[cfg(not(windows))]
+pub(super) const RUN_HINT: &str = "tool or /path/to/tool \"$(FULL_CURRENT_PATH)\"";
+/// The same with Windows program names and paths.
+#[cfg(windows)]
 pub(super) const RUN_HINT: &str = "tool.exe or C:\\path\\tool.exe \"$(FULL_CURRENT_PATH)\"";
 
 /// A Run line: the program token, the text after it as typed (cmd.exe parses

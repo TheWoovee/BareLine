@@ -78,6 +78,13 @@ pub fn session_end_signalled(_monitor: &SessionEndMonitor) -> bool {
     false
 }
 
+/// What the shell says when the close (`exit` false) or exit prompt could not
+/// be shown; the HRESULT is what Windows support asks for.
+pub fn save_prompt_failed(exit: bool, code: i32) -> String {
+    let prompt = if exit { "Exit" } else { "Close" };
+    format!("{prompt} prompt unavailable (HRESULT {code:#010x}).")
+}
+
 /// The Windows services wake the loop through their own window messages.
 pub fn set_event_notify(_notify: std::sync::Arc<dyn Fn() + Send + Sync>) {}
 /// winit's events already carry the keymap's modifiers on Windows.

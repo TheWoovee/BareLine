@@ -886,7 +886,9 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ),
         (
             bareline_commands::CommandId("workspace.delete"),
-            "Delete Selected Entry to Recycle Bin",
+            // The Recycle Bin on Windows, the Trash elsewhere; the outcome
+            // message names which (LNX-UI-007).
+            "Delete Selected Entry (Recoverable)",
         ),
     ] {
         let registered = registry.register(bareline_commands::CommandSpec {

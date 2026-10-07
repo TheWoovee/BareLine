@@ -2355,7 +2355,7 @@ impl Shell {
                     code,
                 );
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.message = Some(format!("Close prompt unavailable (HRESULT {code:#010x})."));
+                    workspace.message = Some(native::save_prompt_failed(false, code));
                 }
                 self.pending_close_trace_ticket = None;
                 false
@@ -2641,7 +2641,7 @@ impl Shell {
                     .record(ticket, "dialog-failure", "application", 0, 0, code);
                 self.pending_close_trace_ticket = None;
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.message = Some(format!("Exit prompt unavailable (HRESULT {code:#010x})."));
+                    workspace.message = Some(native::save_prompt_failed(true, code));
                 }
                 false
             }
