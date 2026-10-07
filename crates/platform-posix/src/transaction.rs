@@ -11,9 +11,11 @@
 //! filesystem implements it, so readers never see the name missing and the
 //! displaced file keeps its identity; elsewhere the displaced file is moved
 //! aside first and the stage published with a no-replace rename. A linked target
-//! is rewritten in place after its exact bytes are retained.
+//! is rewritten in place after its exact bytes are retained. So is a target whose
+//! folder accepts no new entries; its stage, and so its transaction folder, then
+//! live in a private folder of the profile instead.
 use crate::{
-    cache, capability, resolve,
+    cache, capability, paths, resolve,
     sys::{self, CREATE, DIRECTORY, Node, READ, changed, denied, invalid_data},
     trust::DirectoryGuard,
 };
@@ -28,9 +30,10 @@ use std::{
     io::{self, Seek, SeekFrom, Write},
     os::unix::{
         ffi::{OsStrExt, OsStringExt},
-        fs::{MetadataExt, PermissionsExt},
+        fs::{DirBuilderExt, MetadataExt, PermissionsExt},
     },
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 const MANIFEST_MAGIC: &[u8] = b"bareline-save-manifest-posix-v1\0";
@@ -41,6 +44,42 @@ const EDITOR: &str = "editor-version";
 const DISPLACED: &str = "displaced-version";
 const STATE: &str = "state";
 const PREFIX: &str = ".bareline-save-";
+
+/// The folder chosen with [`set_locked_folder_stage`], if any.
+static LOCKED_FOLDER_STAGE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Keep stages and transactions of saves into folders that accept no new
+/// entries in `folder` instead of the profile's recovery folder.
+pub(crate) fn set_locked_folder_stage(folder: PathBuf) {
+    *LOCKED_FOLDER_STAGE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(folder);
+}
+
+/// Where a save into a folder that accepts no new entries keeps its stage and
+/// transaction: `in-place-saves` in the profile's recovery folder (or the folder
+/// [`set_locked_folder_stage`] chose), created private on demand. `None` without
+/// a usable profile.
+pub(crate) fn locked_folder_stage() -> Option<PathBuf> {
+    let chosen = LOCKED_FOLDER_STAGE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let folder = chosen.or_else(|| {
+        paths::AppDirectories::for_current_process(paths::APPLICATION)
+            .ok()
+            .map(|folders| folders.data.join("recovery").join("in-place-saves"))
+    })?;
+    if !folder.is_absolute() {
+        return None;
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&folder)
+        .ok()?;
+    Some(folder)
+}
 
 #[cfg(test)]
 pub(crate) static FAIL_CLEANUP_BEFORE_MANIFEST: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
@@ -191,6 +230,8 @@ impl Transaction {
 
 pub(crate) struct Prepared {
     parent: DirectoryGuard,
+    /// The folder holding the transaction when it is not `parent`.
+    store: Option<DirectoryGuard>,
     transaction: Transaction,
     proposed: File,
     strategy: SaveStrategy,
@@ -228,11 +269,14 @@ pub(crate) fn prepare(
     mode: CommitMode,
     cancellation: &dyn CommitCancellation,
 ) -> io::Result<PreparedCommit> {
-    if target.parent().is_none() || staged.parent() != target.parent() {
-        return Err(io::Error::new(
+    let apart = || {
+        io::Error::new(
             io::ErrorKind::InvalidInput,
             "save stage and destination must share a directory",
-        ));
+        )
+    };
+    if target.parent().is_none() || staged.parent().is_none() {
+        return Err(apart());
     }
     // Resolve links once so the transaction pins the physical location instead
     // of re-traversing a link that could be retargeted meanwhile.
@@ -241,19 +285,34 @@ pub(crate) fn prepare(
     if strategy == SaveStrategy::CopyOnly {
         return Err(denied("saving to this location is unavailable; use Save Copy"));
     }
+    // A folder that accepts no new entries holds neither the stage nor the
+    // transaction: both live in the folder the stage was created in.
+    let locked = strategy == SaveStrategy::InPlaceLockedFolder;
+    if !locked && staged.parent() != target.parent() {
+        return Err(apart());
+    }
     let target = resolved.path;
     let staged = resolve::resolve(staged)?.path;
     let (parent_path, _) = sys::split(&target)?;
-    // An in-place rewrite may reach a symbolic link's target in another folder.
-    if strategy != SaveStrategy::InPlace && staged.parent() != Some(parent_path) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "save stage and destination must share a directory",
+    if locked && mode == CommitMode::CreateNew {
+        return Err(denied(
+            "this folder is not writable, so no new file can be created in it",
         ));
     }
+    // An in-place rewrite may reach a symbolic link's target in another folder.
+    if !matches!(strategy, SaveStrategy::InPlace | SaveStrategy::InPlaceLockedFolder)
+        && staged.parent() != Some(parent_path)
+    {
+        return Err(apart());
+    }
     let parent = DirectoryGuard::open_resolved(parent_path)?;
-    let transaction = create_transaction(&parent)?;
-    let directory_path = parent_path.join(&transaction.name);
+    let store = match staged.parent() {
+        Some(folder) if locked => Some(DirectoryGuard::open_resolved(folder)?),
+        _ => None,
+    };
+    let home = store.as_ref().unwrap_or(&parent);
+    let transaction = create_transaction(home)?;
+    let directory_path = home.path().join(&transaction.name);
     let journal = directory_path.join(STATE);
     let prepared = (|| {
         write_record(
@@ -280,7 +339,7 @@ pub(crate) fn prepare(
             ] {
                 let _ = unlink_present(&transaction.directory, name);
             }
-            let _ = transaction.remove(&parent);
+            let _ = transaction.remove(home);
             return Err(error);
         }
     };
@@ -293,6 +352,7 @@ pub(crate) fn prepare(
         journal_path: Some(journal),
         guard: Some(Box::new(Prepared {
             parent,
+            store,
             transaction,
             proposed,
             strategy,
@@ -318,6 +378,7 @@ pub(crate) fn abort(transaction: PreparedCommit) -> io::Result<()> {
     let (_, prepared) = prepared_guards(transaction)?;
     let Prepared {
         parent,
+        store,
         transaction,
         proposed,
         strategy: _,
@@ -328,7 +389,7 @@ pub(crate) fn abort(transaction: PreparedCommit) -> io::Result<()> {
         unlink_present(&transaction.directory, state_name(state))?;
     }
     unlink_present(&transaction.directory, MANIFEST)?;
-    transaction.remove(&parent)
+    transaction.remove(store.as_ref().unwrap_or(&parent))
 }
 
 /// Give the stage the displaced file's permissions and, where allowed, owner,
@@ -435,17 +496,18 @@ pub(crate) fn commit(file_system: &dyn LocalFileSystem, transaction: PreparedCom
     } = transaction;
     let Prepared {
         parent,
+        store,
         transaction,
         proposed,
         strategy,
     } = prepared;
     let journal = journal_path.ok_or_else(|| invalid_data("commit journal missing"))?;
-    transaction.still_named(&parent)?;
+    transaction.still_named(store.as_ref().unwrap_or(&parent))?;
     let (_, target_name) = sys::split(&target)?;
     let (stage_parent, stage_name) = sys::split(&staged)?;
     let published = match (mode, strategy) {
-        (CommitMode::Replace, SaveStrategy::InPlace) => {
-            rewrite_in_place(&staged, &parent, target_name, &transaction.directory).map(|()| SaveStrategy::InPlace)
+        (CommitMode::Replace, SaveStrategy::InPlace | SaveStrategy::InPlaceLockedFolder) => {
+            rewrite_in_place(&staged, &parent, target_name, &transaction.directory).map(|()| strategy)
         }
         (CommitMode::Replace, _) => carry_metadata(&parent, stage_name, target_name).and_then(|()| {
             if strategy == SaveStrategy::Transactional {
@@ -474,7 +536,7 @@ pub(crate) fn commit(file_system: &dyn LocalFileSystem, transaction: PreparedCom
     };
     sys::sync_directory(&parent.directory)?;
     sys::sync_directory(&transaction.directory)?;
-    transaction.still_named(&parent)?;
+    transaction.still_named(store.as_ref().unwrap_or(&parent))?;
     let target_identity = file_system.identity(&open_regular(&parent.directory, target_name)?)?;
     let mut artifacts = Vec::new();
     let displaced = displaced_path
@@ -509,7 +571,7 @@ pub(crate) fn commit(file_system: &dyn LocalFileSystem, transaction: PreparedCom
         state,
         cleanup: CleanupResponsibility::Caller,
         cleanup_token: Some(Box::new(Cleanup {
-            parent,
+            parent: store.unwrap_or(parent),
             transaction,
             artifacts,
             journal,
@@ -689,6 +751,75 @@ pub(crate) fn inspect(parent: &Path, cancellation: &dyn CommitCancellation) -> i
     Ok(recoveries)
 }
 
+/// Only these names, a regular editor version among them, are in `directory`.
+/// The listing stops at the first other name, so it stays bounded.
+fn holds_only(directory: &File, names: &[&str]) -> io::Result<bool> {
+    for entry in rustix::fs::Dir::read_from(directory)? {
+        let entry = entry?;
+        let name = OsStr::from_bytes(entry.file_name().to_bytes());
+        if name == "." || name == ".." {
+            continue;
+        }
+        if !names.iter().any(|known| name == *known) {
+            return Ok(false);
+        }
+    }
+    match open_regular(directory, EDITOR) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Remove the transactions in `parent` that a process left while it was still
+/// copying the editor version (LNX-FILE-007): a valid manifest naming a file in
+/// `parent`, at most a partial editor version beside it, no state record, and no
+/// process holding the folder's lease. Names are unlinked relative to the
+/// folder's descriptor, and the folder only while its name still holds it.
+pub(crate) fn reclaim(parent: &Path) -> io::Result<Vec<PathBuf>> {
+    let guard = match resolve::resolve(parent).and_then(|resolved| DirectoryGuard::open_resolved(&resolved.path)) {
+        Ok(guard) => guard,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut removed = Vec::new();
+    for entry in rustix::fs::Dir::read_from(&guard)?.take(4_096) {
+        let entry = entry?;
+        let name = OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string();
+        let Some(generation) = parse_generation(&name) else {
+            continue;
+        };
+        if !sys::stat_name(&guard, &name).is_ok_and(|stat| stat.kind == FileType::Directory) {
+            continue;
+        }
+        let Ok(directory) = sys::open_at(&guard, &name, DIRECTORY) else {
+            continue;
+        };
+        // Its creator holds the folder's shared lease before it writes the
+        // manifest, so a folder with a manifest and no lease outlived its process.
+        if !read_manifest(&directory, MANIFEST, generation)
+            .is_ok_and(|(target, _)| target.parent() == Some(guard.path()))
+            || rustix::fs::flock(&directory, FlockOperation::NonBlockingLockExclusive).is_err()
+            || !holds_only(&directory, &[MANIFEST, EDITOR]).unwrap_or(false)
+        {
+            continue;
+        }
+        let transaction = Transaction {
+            node: Node::of(&directory)?,
+            directory,
+            name,
+            generation,
+        };
+        let reclaimed = unlink_present(&transaction.directory, EDITOR)
+            .and_then(|()| unlink_present(&transaction.directory, MANIFEST))
+            .and_then(|()| transaction.remove(&guard));
+        if reclaimed.is_ok() {
+            removed.push(guard.path().join(&transaction.name));
+        }
+    }
+    Ok(removed)
+}
+
 pub(crate) fn resume(
     file_system: &dyn LocalFileSystem,
     recovery: &CommitRecovery,
@@ -786,5 +917,54 @@ mod tests {
         );
         assert_eq!(parse_generation(OsStr::new(".bareline-save-1")), None);
         assert_eq!(state_name(CommitState::Replaced), OsString::from("state.replaced"));
+    }
+
+    /// LNX-FILE-007: only a transaction an ended process left while copying its
+    /// editor version is reclaimed. A complete editor version, a transaction of a
+    /// file in another folder, one a process holds, and foreign entries stay.
+    #[test]
+    fn reclaim_removes_only_interrupted_transactions_nobody_holds() {
+        let folder = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("bareline-posix-reclaim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let target = folder.join("big.log");
+        std::fs::write(&target, b"old").unwrap();
+        let make = |generation: u128, target: &Path, entries: &[(&str, &str)]| {
+            let directory = folder.join(format!("{PREFIX}{generation:032x}"));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(
+                directory.join(MANIFEST),
+                manifest_bytes(generation, target, CommitMode::Replace).unwrap(),
+            )
+            .unwrap();
+            for (name, bytes) in entries {
+                std::fs::write(directory.join(name), bytes).unwrap();
+            }
+            directory
+        };
+        let partial = make(1, &target, &[(EDITOR, "half of the ed")]);
+        let complete = make(
+            2,
+            &target,
+            &[(EDITOR, "whole"), ("state.precommit", "bareline-save-v1\nprecommit\n")],
+        );
+        let foreign = make(3, Path::new("/elsewhere/big.log"), &[(EDITOR, "x")]);
+        let held = make(4, &target, &[(EDITOR, "live")]);
+        let stranger = make(5, &target, &[(EDITOR, "x"), ("notes", "user file")]);
+        let lease = File::open(&held).unwrap();
+        cache::lock(&lease, FlockOperation::NonBlockingLockShared).unwrap();
+
+        assert_eq!(reclaim(&folder).unwrap(), vec![partial.clone()]);
+        assert!(!partial.exists());
+        for kept in [&complete, &foreign, &held, &stranger] {
+            assert!(kept.join(EDITOR).exists(), "{}", kept.display());
+        }
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        drop(lease);
+        assert!(reclaim(&folder.join("absent")).unwrap().is_empty());
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

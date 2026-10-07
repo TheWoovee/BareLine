@@ -7,13 +7,16 @@
 //! (Linux) or `renamex_np(RENAME_SWAP)` (APFS/HFS+), which keeps the displaced
 //! file's identity like NTFS `ReplaceFileW`; those filesystems report a
 //! transactional save without a notice. Elsewhere the displaced file is moved
-//! aside first and the stage published with a no-replace rename.
+//! aside first and the stage published with a no-replace rename. A writable
+//! file in a folder that accepts no new entries is rewritten in place, its
+//! previous version kept in the profile.
 use crate::{
     resolve::{self, Resolved},
     sys::{self, WALK},
     trust,
 };
 use bareline_platform::{CapabilityReport, FilesystemCapability, SaveStrategy, StorageKind, Support};
+use rustix::fs::{Access, AtFlags, CWD};
 use std::{
     fs::File,
     io,
@@ -41,15 +44,21 @@ pub(crate) struct Facts {
     pub links: u64,
     pub redirected: bool,
     pub final_link: bool,
+    /// This user may create entries in the folder that holds the target.
+    pub folder_writable: bool,
 }
 
 /// Save policy: exchange-capable filesystems keep the transactional replace,
 /// others replace through a same-directory stage, linked targets are rewritten
 /// in place so every link sees the change, read-only mounts offer Save Copy.
+/// An existing file in a folder this user cannot add entries to is rewritten in
+/// place too, as no stage or transaction can be created beside it.
 pub(crate) fn classify(facts: &Facts) -> CapabilityReport {
     let known = facts.mount.storage != StorageKind::Unknown;
     let save = if !known || facts.mount.read_only {
         SaveStrategy::CopyOnly
+    } else if facts.links > 0 && !facts.folder_writable {
+        SaveStrategy::InPlaceLockedFolder
     } else if facts.links > 1 || facts.final_link {
         SaveStrategy::InPlace
     } else if facts.mount.exchange {
@@ -101,6 +110,8 @@ pub(crate) fn report_resolved(resolved: &Resolved) -> io::Result<CapabilityRepor
         links,
         redirected: resolved.redirected,
         final_link: resolved.final_link,
+        folder_writable: rustix::fs::accessat(CWD, &folder, Access::WRITE_OK | Access::EXEC_OK, AtFlags::empty())
+            .is_ok(),
     }))
 }
 
@@ -438,6 +449,7 @@ mod tests {
             links: 1,
             redirected: false,
             final_link: false,
+            folder_writable: true,
         }
     }
 
@@ -483,6 +495,34 @@ mod tests {
         }));
         assert_eq!(unknown.save, SaveStrategy::CopyOnly);
         assert_eq!(unknown.atomic_replace, Support::Unknown);
+    }
+
+    /// LNX-EDIT-003: a writable file in a folder this user cannot add entries
+    /// to is rewritten in place, with a notice; a new name there has no save
+    /// path, and a read-only mount still offers Save Copy only.
+    #[test]
+    fn locked_folder_rewrites_existing_files_in_place() {
+        let locked = Facts {
+            folder_writable: false,
+            ..facts(local(true))
+        };
+        let report = classify(&locked);
+        assert_eq!(report.save, SaveStrategy::InPlaceLockedFolder);
+        assert!(report.notice().is_some_and(|notice| {
+            notice.starts_with("This folder is not writable; saving rewrites the file in place")
+        }));
+        let linked = classify(&Facts { links: 3, ..locked });
+        assert_eq!(linked.save, SaveStrategy::InPlaceLockedFolder);
+        let absent = classify(&Facts { links: 0, ..locked });
+        assert_ne!(absent.save, SaveStrategy::InPlaceLockedFolder);
+        let read_only = classify(&Facts {
+            mount: Mount {
+                read_only: true,
+                ..local(true)
+            },
+            ..locked
+        });
+        assert_eq!(read_only.save, SaveStrategy::CopyOnly);
     }
 
     #[cfg(target_os = "linux")]
@@ -559,6 +599,20 @@ mod tests {
         std::fs::write(&target, b"x").unwrap();
         let plain = report(&target).unwrap();
         assert!(!plain.redirected);
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            eprintln!("note: the superuser may write every folder; the locked-folder probe is skipped");
+        } else {
+            let locked = root.join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::write(locked.join("doc.txt"), b"x").unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            assert_eq!(
+                report(&locked.join("doc.txt")).unwrap().save,
+                SaveStrategy::InPlaceLockedFolder
+            );
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         assert_ne!(plain.save, SaveStrategy::InPlace);
         assert_ne!(plain.save, SaveStrategy::CopyOnly);
         // A missing file is reported through its folder.

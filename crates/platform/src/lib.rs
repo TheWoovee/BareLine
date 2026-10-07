@@ -77,6 +77,10 @@ pub enum SaveStrategy {
     RenameReplace,
     /// Rewrite the existing file object so hard and symbolic links stay intact.
     InPlace,
+    /// The file is writable but its folder accepts no new entries: rewrite the
+    /// file in place and keep the previous version in a private folder outside
+    /// it (the profile) until the save is verified.
+    InPlaceLockedFolder,
     /// Saving here is unavailable; Save Copy to another location still works.
     CopyOnly,
 }
@@ -105,6 +109,9 @@ impl CapabilityReport {
             }
             SaveStrategy::InPlace => Some(
                 "This file has other links. Saving rewrites it in place so every link sees the change; the previous version is kept until the save is verified.",
+            ),
+            SaveStrategy::InPlaceLockedFolder => Some(
+                "This folder is not writable; saving rewrites the file in place and keeps the previous version in Bareline's recovery folder until the save is verified.",
             ),
             SaveStrategy::RenameReplace => Some(
                 "This drive cannot replace files atomically. Saving goes through a temporary file and keeps the previous version until the save is verified.",
@@ -500,6 +507,25 @@ pub trait LocalFileSystem: Send + Sync {
     /// Reacquire exact cleanup ownership for a verified interrupted cleanup.
     fn resume_commit_cleanup(&self, _: &CommitRecovery) -> std::io::Result<Option<CommitReceipt>> {
         Ok(None)
+    }
+    /// A private folder outside every document folder for the stage and the
+    /// retained previous version of a save whose destination folder accepts no
+    /// new entries ([`SaveStrategy::InPlaceLockedFolder`]). `None` where the
+    /// platform never saves that way.
+    fn locked_folder_stage(&self) -> Option<PathBuf> {
+        None
+    }
+    /// `folder` is on storage only this machine writes (no network, cloud or
+    /// shared mount), so a save stage whose owner process is provably gone and
+    /// that no process holds may be reclaimed without waiting.
+    fn local_storage(&self, _: &Path) -> bool {
+        false
+    }
+    /// Remove save transactions in `parent` that an ended process left before
+    /// they held a complete editor version (never one a live process holds), and
+    /// return the folders removed.
+    fn reclaim_commit_transactions(&self, _: &Path) -> std::io::Result<Vec<PathBuf>> {
+        Ok(Vec::new())
     }
     /// Compatibility primitive for platform adapters that do not participate in document saves.
     fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()>;

@@ -9,10 +9,17 @@ use crate::{
 use bareline_platform::{
     CacheDirectoryIdentity, CacheDirectoryLease, CacheProcessIdentity, CacheRemovalOutcome, CapabilityReport,
     CommitCancellation, CommitMode, CommitReceipt, CommitRecovery, CommitState, FileIdentity, FilesystemCapability,
-    LocalFileSystem, PreparedCommit, ProcessLiveness, RemoteReadAccess, SaveStrategy,
+    LocalFileSystem, PreparedCommit, ProcessLiveness, RemoteReadAccess, SaveStrategy, StorageKind,
 };
 use rustix::fs::{Access, AtFlags, CWD};
-use std::{fs::File, io, os::unix::fs::MetadataExt, path::Path, sync::Arc, time::Duration};
+use std::{
+    fs::File,
+    io,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 /// Background file operations on Linux and macOS.
 ///
@@ -34,6 +41,13 @@ impl PosixFileSystem {
     /// The concrete folder guard behind `guard_directory`.
     pub fn guard_directory_handle(&self, path: &Path) -> io::Result<DirectoryGuard> {
         DirectoryGuard::open(path)
+    }
+
+    /// Keep the stage and the previous version of saves into folders that
+    /// accept no new entries in `folder` (absolute, private to this user) instead
+    /// of `in-place-saves` in the profile's recovery folder.
+    pub fn set_locked_folder_stage(folder: PathBuf) {
+        transaction::set_locked_folder_stage(folder);
     }
 
     fn validate_path(&self, path: &Path, writing: bool) -> io::Result<()> {
@@ -197,6 +211,24 @@ impl LocalFileSystem for PosixFileSystem {
 
     fn commit_transaction(&self, transaction: PreparedCommit) -> io::Result<CommitReceipt> {
         transaction::commit(self, transaction)
+    }
+
+    fn locked_folder_stage(&self) -> Option<PathBuf> {
+        transaction::locked_folder_stage()
+    }
+
+    /// Local and removable mounts; network, FUSE-served and cloud folders keep
+    /// the age guard because another machine may write them.
+    fn local_storage(&self, folder: &Path) -> bool {
+        capability::report(folder)
+            .is_ok_and(|report| matches!(report.storage, StorageKind::Local | StorageKind::Removable) && !report.cloud)
+    }
+
+    fn reclaim_commit_transactions(&self, parent: &Path) -> io::Result<Vec<PathBuf>> {
+        if !self.local_storage(parent) {
+            return Ok(Vec::new());
+        }
+        transaction::reclaim(parent)
     }
 
     fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
@@ -401,6 +433,87 @@ mod tests {
         assert_eq!(
             std::fs::read(&receipt.displaced.as_ref().unwrap().path).unwrap(),
             b"prior bytes"
+        );
+    }
+
+    /// LNX-EDIT-003: a writable file in a folder this user cannot add entries to
+    /// is rewritten in place from a stage kept elsewhere; the transaction, and so
+    /// the previous version, lives beside that stage, never in the folder.
+    #[test]
+    fn locked_folder_target_is_rewritten_in_place_with_the_previous_version_elsewhere() {
+        let scratch = Scratch::new("locked-folder");
+        let folder = scratch.0.join("rodir");
+        let private = scratch.0.join("private");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::create_dir(&private).unwrap();
+        let target = folder.join("f.txt");
+        std::fs::write(&target, b"indir\n").unwrap();
+        let inode = std::fs::metadata(&target).unwrap().ino();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let restore = || std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if std::fs::write(folder.join("probe"), b"").is_ok() {
+            eprintln!("skipped: this user may write every folder (superuser)");
+            restore();
+            return;
+        }
+        let report = PosixFileSystem.report(&target).unwrap();
+        assert_eq!(report.save, SaveStrategy::InPlaceLockedFolder);
+        assert!(report.notice().is_some_and(|notice| notice.contains("not writable")));
+        PosixFileSystem.validate_target(&target).unwrap();
+
+        let stage = private.join(".bareline-test-stage.tmp");
+        std::fs::write(&stage, b"indir\nEDIT\n").unwrap();
+        // A new file cannot be created in the folder this way.
+        assert!(
+            PosixFileSystem
+                .prepare_commit(&stage, &folder.join("new.txt"), CommitMode::CreateNew, &Never)
+                .is_err()
+        );
+        let prepared = PosixFileSystem
+            .prepare_commit(&stage, &target, CommitMode::Replace, &Never)
+            .unwrap();
+        let journal = prepared.journal_path.clone().unwrap();
+        assert_eq!(journal.parent().and_then(Path::parent), Some(private.as_path()));
+        let mut receipt = PosixFileSystem.commit_transaction(prepared).unwrap();
+        assert_eq!(receipt.strategy, SaveStrategy::InPlaceLockedFolder);
+        assert_eq!(std::fs::read(&target).unwrap(), b"indir\nEDIT\n");
+        assert_eq!(std::fs::metadata(&target).unwrap().ino(), inode);
+        let displaced = receipt.displaced.clone().unwrap();
+        assert!(displaced.path.starts_with(&private));
+        assert_eq!(std::fs::read(&displaced.path).unwrap(), b"indir\n");
+        let names: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["f.txt"], "nothing is created in the folder");
+
+        receipt
+            .cleanup_token
+            .as_mut()
+            .unwrap()
+            .publish_cleanup_authority()
+            .unwrap();
+        PosixFileSystem
+            .mark_commit_state(&receipt, CommitState::CleanupPending)
+            .unwrap();
+        PosixFileSystem.cleanup_commit(&mut receipt).unwrap();
+        assert!(!journal.parent().unwrap().exists());
+        restore();
+    }
+
+    #[test]
+    fn locked_folder_stage_is_private_and_created_on_demand() {
+        let scratch = Scratch::new("locked-stage");
+        let chosen = scratch.0.join("profile/recovery/in-place-saves");
+        PosixFileSystem::set_locked_folder_stage(chosen.clone());
+        assert_eq!(PosixFileSystem.locked_folder_stage(), Some(chosen.clone()));
+        assert_eq!(std::fs::metadata(&chosen).unwrap().mode() & 0o777, 0o700);
+        assert!(PosixFileSystem.local_storage(&scratch.0));
+        assert!(
+            PosixFileSystem
+                .reclaim_commit_transactions(&scratch.0)
+                .unwrap()
+                .is_empty()
         );
     }
 
