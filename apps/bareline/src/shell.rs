@@ -5769,7 +5769,8 @@ impl Shell {
 #[cfg(test)]
 mod deferred_close_tests {
     use super::{CloseTarget, PendingClose, accessibility::tests::headless_shell, lifecycle::Identity};
-    use bareline_app::workspace::{Input, Workspace};
+    use bareline_app::workspace::{Input, Workspace, WorkspaceEditor};
+    use bareline_commands::Action;
     use bareline_platform::LocalFileSystem;
     use std::{
         path::Path,
@@ -6141,6 +6142,105 @@ mod deferred_close_tests {
         assert_eq!(workspace.editors.len(), 1);
         assert_ne!(workspace.editors[0].document_identity().0, identity.0);
         assert_eq!(std::fs::read_to_string(path).unwrap(), "save before close");
+        drop(shell);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// LNX-JRN-001 (PR-T05): Ctrl+S then Ctrl+W on an edited paged document.
+    /// Its running save keeps the shown editor busy, and the split views took
+    /// that for pending split-view edits with no split open: the Close was
+    /// dropped with their message and never queued. It now reaches the close
+    /// queue, is deferred as document-busy, and closes once after the save,
+    /// without a prompt, with the edit on disk.
+    #[test]
+    fn close_during_the_shown_documents_own_paged_save_is_queued_and_deferred() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-close-paged-save-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("busy-document.txt");
+        std::fs::write(&path, "0123456789abcdef\n").unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        // Every file opens paged here, as the journey's 256 MiB fixture does.
+        workspace.resident_max_bytes = 1;
+        workspace.open(path.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            workspace.pump();
+            if !workspace.io_busy()
+                && matches!(workspace.editors.as_slice(), [WorkspaceEditor::Paged(paged)] if paged.viewport_ready() && !paged.busy())
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "paged open: {:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        workspace.editors[0].enqueue(Input::Insert("X".into()));
+        settle(&mut workspace);
+        assert!(workspace.editors[0].dirty());
+        let mut shell = headless_shell();
+        shell.app.tabs = workspace.titles();
+        shell.workspace = Some(workspace);
+        let trace = root.join("command-trace.jsonl");
+        shell.qa_command_trace = super::QaCommandTrace {
+            file: Some(std::fs::File::create(&trace).unwrap()),
+            emitted: 0,
+            seen_transitions: Vec::new(),
+        };
+        // A frame shows the document in the primary view.
+        shell.views.sync(shell.workspace.as_mut().unwrap(), &mut shell.app);
+        assert_eq!(shell.views.primary_index(shell.workspace.as_ref().unwrap()), Some(0));
+        // Ctrl+S: the paged save holds the document busy until a workspace pump
+        // takes its result, and nothing below pumps it before the close defers.
+        assert!(shell.workspace.as_mut().unwrap().save(0, path.clone()));
+        assert!(shell.workspace.as_ref().unwrap().document_busy(0));
+        assert!(!shell.views.open() && !shell.views.pending_edits());
+        // Ctrl+W: no split-view edit is pending, so dispatch goes on to queue the close.
+        assert!(!shell.route_text_and_clipboard(Action::Close));
+        assert_ne!(
+            shell.workspace.as_ref().unwrap().message.as_deref(),
+            Some("Wait for pending split-view edits before saving or closing.")
+        );
+        shell.queue_active_close();
+        let Some(PendingClose::Document(target)) = shell.pending_close.take() else {
+            panic!("Close was not queued");
+        };
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        shell.close_document_with_renderer(target, &mut renderer);
+        assert!(matches!(
+            shell.pending_close,
+            Some(PendingClose::Document(CloseTarget { deferred: true, .. }))
+        ));
+        assert_eq!(shell.workspace.as_ref().unwrap().path(0), Some(path.as_path()));
+        settle(shell.workspace.as_mut().unwrap());
+        assert!(!shell.workspace.as_ref().unwrap().editors[0].dirty());
+        let Some(PendingClose::Document(target)) = shell.pending_close.take() else {
+            panic!("deferred close was lost");
+        };
+        // A headless shell has no prompt: a dirty document would stay open.
+        shell.close_document_with_renderer(target, &mut renderer);
+        assert!(shell.pending_close.is_none());
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.path(0), None, "a fresh Untitled replaces the closed document");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "X0123456789abcdef\n");
+        let rows = std::fs::read_to_string(&trace).unwrap();
+        let stages: Vec<&str> = rows
+            .lines()
+            .filter_map(|row| row.split("\"stage\":").nth(1)?.split(",\"command_id\"").next())
+            .collect();
+        assert_eq!(
+            stages,
+            [
+                "\"queued\",\"detail\":\"document\"",
+                "\"deferred\",\"detail\":\"document-busy\""
+            ]
+        );
         drop(shell);
         std::fs::remove_dir_all(root).unwrap();
     }
