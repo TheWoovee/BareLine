@@ -1315,6 +1315,56 @@ mod tests {
         assert_ne!(panes(&shell)[pane as usize].1, before[pane as usize].1);
     }
 
+    /// LNX-JRN-001: Save, Close and Exit wait in the split views only for
+    /// split-view input the shell cannot see. The shown document's own pending
+    /// work is the shell's to wait for (PR-T05).
+    #[test]
+    fn save_and_close_wait_in_the_split_only_for_pending_split_view_input() {
+        const SPLIT_PENDING: &str = "Wait for pending split-view edits before saving or closing.";
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        accessibility_test_setup(&mut shell, "split_vertical");
+        assert!(shell.views.open());
+        let workspace = shell.workspace.as_mut().unwrap();
+        let primary = shell.views.primary_index(workspace).unwrap();
+        // The primary view's own edit is in flight; no split-view input waits.
+        workspace.editors[primary].enqueue(Input::Insert("own".into()));
+        assert!(workspace.editors[primary].busy());
+        assert!(!shell.views.pending_edits());
+        for action in [Action::Save, Action::SaveAs, Action::Quit] {
+            assert!(!shell.views_action(action), "{action:?} was held as a split-view edit");
+            assert_ne!(
+                shell.workspace.as_ref().unwrap().message.as_deref(),
+                Some(SPLIT_PENDING)
+            );
+        }
+        // Input typed into the other view queues behind that edit: it holds them.
+        shell
+            .views
+            .input(shell.workspace.as_mut().unwrap(), 1, Input::Insert("pane".into()));
+        assert!(shell.views.pending_edits());
+        for action in [Action::Save, Action::SaveAs, Action::Close, Action::Quit] {
+            shell.workspace.as_mut().unwrap().message = None;
+            assert!(shell.views_action(action));
+            assert_eq!(
+                shell.workspace.as_ref().unwrap().message.as_deref(),
+                Some(SPLIT_PENDING),
+                "{action:?}"
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let workspace = shell.workspace.as_mut().unwrap();
+            workspace.pump();
+            shell.views.pump(workspace);
+            if !shell.views.busy(workspace) && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "split edits did not settle");
+            std::thread::yield_now();
+        }
+        assert!(!shell.views_action(Action::Save));
+    }
+
     #[test]
     fn closing_split_preserves_shared_undo_redo_from_either_writer() {
         fn exercise(writer: u32, close_from: u32) {
@@ -6610,7 +6660,13 @@ impl Shell {
             return false;
         };
         self.views.pump(workspace);
-        if matches!(action, Action::Save | Action::SaveAs | Action::Close | Action::Quit) && self.views.busy(workspace)
+        // Only split-view input the shell cannot see holds these back: input
+        // queued for a pane, or an edit the other pane has not handed over. The
+        // shown document's own edit or save is the shell's to wait for, as it is
+        // without a split: its Close is queued and deferred while the document
+        // is busy, and Save and Exit apply their own busy checks (PR-T05,
+        // LNX-JRN-001).
+        if matches!(action, Action::Save | Action::SaveAs | Action::Close | Action::Quit) && self.views.pending_edits()
         {
             workspace.message = Some("Wait for pending split-view edits before saving or closing.".into());
             return true;
