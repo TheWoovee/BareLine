@@ -985,6 +985,40 @@ impl Shell {
         self.session.end.finish(complete);
         true
     }
+    /// A session end the system reports to the process rather than to the
+    /// window (Linux and macOS: SIGTERM, SIGHUP, SIGINT): the same flush as a
+    /// logoff, then an exit without prompts, because nothing else ends the
+    /// process there. Unsaved text stays in recovery for the next start, and
+    /// the shell's teardown releases its owned caches as on any exit.
+    /// Returns whether the shell is now exiting for it.
+    pub(super) fn session_end_pump(&mut self, el: &ActiveEventLoop) -> bool {
+        let ended = self.session_end_signal_flush().is_some();
+        if ended {
+            el.exit();
+        }
+        ended
+    }
+    /// Runs the flush for a session-end signal that arrived; `None` when none
+    /// did, else whether everything was written in time.
+    fn session_end_signal_flush(&mut self) -> Option<bool> {
+        if !self
+            .session
+            .end_monitor
+            .as_ref()
+            .is_some_and(crate::shell::native::session_end_signalled)
+        {
+            return None;
+        }
+        let complete = self.session.end.take_request() && {
+            let complete = self.session_end_flush(Instant::now() + self.session.end_budget);
+            self.session.end.finish(complete);
+            complete
+        };
+        eprintln!("event=session_end_exit flushed={complete}");
+        // The exit is not a close: nothing queued may ask, save or discard now.
+        self.pending_close = None;
+        Some(complete)
+    }
     /// Write session.json, then pump until every document's latest text is in a
     /// durable recovery checkpoint, giving up at `deadline`. Never prompts and
     /// never exits: Windows ends the process once the session ends.
@@ -1750,6 +1784,50 @@ mod close_tests {
             .unwrap();
         assert_eq!(loaded.manifest.documents.len(), 1);
         assert!(loaded.manifest.documents[0].path.is_none());
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// LNX-SIG-005: SIGTERM 50 ms after typing used to end the process before
+    /// the text reached recovery or the session was written.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_session_end_signal_writes_the_session_and_makes_unsaved_text_recoverable_once() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-session-signal-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        shell.startup.mark_first_frame();
+        shell.session.configure(Some(root.join("session.json")), None, true);
+        shell.session.end_budget = Duration::from_secs(60);
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        workspace.recovery_root = Some(root.join("recovery"));
+        workspace.new_document().unwrap();
+        // Typed just before the signal: neither acknowledged nor checkpointed yet.
+        workspace.editors[0].enqueue(Input::Insert("unsaved at SIGTERM".into()));
+        shell.workspace = Some(workspace);
+        let (monitor, pending) = crate::shell::native::session_end_monitor_for_tests(shell.session.end.clone());
+        shell.session.end_monitor = Some(monitor);
+        assert_eq!(shell.session_end_signal_flush(), None, "no signal, no flush");
+        assert!(!root.join("session.json").exists());
+        pending.store(15, std::sync::atomic::Ordering::Release);
+        assert_eq!(shell.session_end_signal_flush(), Some(true));
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert!(workspace.recovery_settled());
+        let status = workspace.editors[0].recovery_status();
+        assert!(status.error.is_none(), "{:?}", status.error);
+        assert!(status.durable.is_some() && status.complete);
+        let loaded = bareline_file_io::session::SessionStore::new(root.join("session.json"))
+            .load()
+            .unwrap();
+        assert_eq!(loaded.manifest.documents.len(), 1);
+        // The signal is routed once; the next poll finds nothing.
+        assert_eq!(shell.session_end_signal_flush(), None);
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
     }

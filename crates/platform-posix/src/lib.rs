@@ -7,9 +7,10 @@
 //! descriptors, capability reports classify the mount, owned caches use
 //! `flock` leases that other processes respect, and `paths` resolves the
 //! per-user data folders. `process` identifies processes (for cache owners and
-//! recovery journals) and counts their resources, and `trash` moves entries to
-//! the user's trash. Off Unix the crate compiles to an empty unit so the
-//! workspace keeps one member list on every OS.
+//! recovery journals) and counts their resources, `trash` moves entries to the
+//! user's trash, and `session_end` turns the signals that end a session into a
+//! flush. Off Unix the crate compiles to an empty unit so the workspace keeps
+//! one member list on every OS.
 #![cfg(unix)]
 
 mod cache;
@@ -22,6 +23,7 @@ mod ipc;
 pub mod paths;
 pub mod process;
 mod resolve;
+pub mod session_end;
 mod sys;
 mod transaction;
 pub mod trash;

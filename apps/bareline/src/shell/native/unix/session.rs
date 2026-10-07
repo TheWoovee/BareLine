@@ -1,17 +1,34 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Logoff and shutdown reach Bareline as SIGTERM or SIGHUP on these systems
-//! (ADR-C); until that handler exists the signal state is kept but never fed.
-//! The protocol is the Windows adapter's, so the shell's session code and its
-//! tests behave the same.
+//! Logoff, shutdown, a closed terminal and Ctrl+C reach Bareline as SIGTERM,
+//! SIGHUP or SIGINT on these systems (ADR-C). The monitor catches them
+//! (`bareline_platform_posix::session_end`) and feeds the Windows adapter's
+//! protocol, so the shell's session code and its tests behave the same: the
+//! first signal is a session that really ends (`End { ending: true }`), which
+//! the shell flushes and then exits on, because nothing else ends the process
+//! here. A second signal, or a flush that outlives `SIGNAL_DEADLINE`, ends the
+//! process with the signal's default action.
 use super::{
     error::{Error, Result},
-    window::RawWindow,
+    window::{RawWindow, event_notify},
 };
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+    time::Duration,
+};
+
+/// How long after the signal the process may take to flush and exit. The
+/// shell's own flush budget (`SESSION_END_BUDGET`, 3 s) fits inside it with
+/// room for the exit; systemd waits 90 s and logout managers about 5 s.
+const SIGNAL_DEADLINE: Duration = Duration::from_secs(5);
 
 #[allow(
     dead_code,
-    reason = "nothing feeds session-end notifications here until the signal handler exists"
+    reason = "a signal is never a cancellable query; `Query` completes the shared protocol"
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionEndMessage {
@@ -21,10 +38,6 @@ pub enum SessionEndMessage {
     End { ending: bool },
 }
 /// Side effects of a session-end notification.
-#[allow(
-    dead_code,
-    reason = "nothing feeds session-end notifications here until the signal handler exists"
-)]
 pub trait SessionEndHost {
     /// Route one flush request to the application.
     fn deliver(&mut self);
@@ -34,10 +47,6 @@ pub trait SessionEndHost {
 }
 /// UI-thread state shared by the session-end source and the application; the
 /// same protocol as the Windows adapter's.
-#[allow(
-    dead_code,
-    reason = "nothing feeds session-end notifications here until the signal handler exists"
-)]
 #[derive(Debug, Default)]
 pub struct SessionEndSignal {
     requests: Cell<u32>,
@@ -62,10 +71,6 @@ impl SessionEndSignal {
         self.flushed.set(complete);
     }
     /// Answer one notification and return its result.
-    #[allow(
-        dead_code,
-        reason = "nothing feeds session-end notifications here until the signal handler exists"
-    )]
     pub fn respond(&self, host: &mut dyn SessionEndHost, message: SessionEndMessage) -> isize {
         match message {
             SessionEndMessage::Query => {
@@ -86,25 +91,73 @@ impl SessionEndSignal {
             }
         }
     }
-    #[allow(
-        dead_code,
-        reason = "nothing feeds session-end notifications here until the signal handler exists"
-    )]
     fn request(&self, host: &mut dyn SessionEndHost) {
         self.flushed.set(false);
         self.requests.set(self.requests.get().saturating_add(1));
         host.deliver();
     }
 }
-pub struct SessionEndMonitor;
+/// The signals have no window message to route through, so the flush request
+/// waits in `SessionEndSignal` until the shell polls (`session_end_signalled`).
+struct Queued;
+impl SessionEndHost for Queued {
+    fn deliver(&mut self) {}
+    /// A signal grants no extra time; `SIGNAL_DEADLINE` bounds the flush.
+    fn block(&mut self) -> bool {
+        false
+    }
+    fn unblock(&mut self) {}
+}
+pub struct SessionEndMonitor {
+    signal: Rc<SessionEndSignal>,
+    /// The signal that ended the session and is not yet routed; 0 for none.
+    pending: Arc<AtomicI32>,
+}
 impl SessionEndMonitor {
     /// # Safety
-    /// None for this stand-in, which keeps no handle; see `Platform::new`.
-    pub unsafe fn attach(_raw: RawWindow, _signal: Rc<SessionEndSignal>) -> Result<Self> {
-        Err(Error::other(
-            "This system does not report logoff or shutdown to Bareline yet",
-        ))
+    /// None here: no handle is kept. The signature matches the Windows adapter;
+    /// see `Platform::new`.
+    pub unsafe fn attach(_raw: RawWindow, signal: Rc<SessionEndSignal>) -> Result<Self> {
+        let pending = Arc::new(AtomicI32::new(0));
+        let raised = pending.clone();
+        let notify = event_notify();
+        let signals = bareline_platform_posix::session_end::SessionEndSignals::install(
+            move |number| {
+                raised.store(number, Ordering::Release);
+                notify();
+            },
+            SIGNAL_DEADLINE,
+        )
+        .map_err(|error| Error::other(format!("Session-end signals cannot be caught: {error}")))?;
+        eprintln!("event=session_end_signals caught={:?}", signals.caught());
+        Ok(Self::with_pending(signal, pending))
     }
+    fn with_pending(signal: Rc<SessionEndSignal>, pending: Arc<AtomicI32>) -> Self {
+        Self { signal, pending }
+    }
+    /// Routes a signal that arrived since the last poll as a session that
+    /// really ends; true when the shell must now flush and exit.
+    fn poll(&self) -> bool {
+        let number = self.pending.swap(0, Ordering::AcqRel);
+        if number == 0 {
+            return false;
+        }
+        eprintln!("event=session_end_signal signal={number}");
+        self.signal
+            .respond(&mut Queued, SessionEndMessage::End { ending: true });
+        true
+    }
+}
+/// Whether a session-end signal arrived: its flush request is then queued in
+/// the monitor's `SessionEndSignal`, and the shell flushes and exits.
+pub fn session_end_signalled(monitor: &SessionEndMonitor) -> bool {
+    monitor.poll()
+}
+/// A monitor whose signal is raised by the test, not by the system.
+#[cfg(test)]
+pub fn session_end_monitor_for_tests(signal: Rc<SessionEndSignal>) -> (SessionEndMonitor, Arc<AtomicI32>) {
+    let pending = Arc::new(AtomicI32::new(0));
+    (SessionEndMonitor::with_pending(signal, pending.clone()), pending)
 }
 /// Restart registration exists for Windows update restarts; these systems
 /// update through their package managers, so there is nothing to register.

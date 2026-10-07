@@ -1196,6 +1196,12 @@ impl ApplicationHandler<Wake> for Handler {
         }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        // A session-end signal (Linux, macOS) flushes and exits before anything
+        // else may ask a question or start a save.
+        if self.shell.session_end_pump(el) {
+            poll_when_exiting(el);
+            return;
+        }
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
         // A prompt or dialog that answers later (Linux) runs its asker again.

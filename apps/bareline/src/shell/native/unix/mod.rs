@@ -56,7 +56,7 @@ pub use platform::{
 };
 pub use process::{ProcessLauncher, alive, handle_counters, monotonic_ns, private_bytes, resolve_program};
 pub use renderer::{Renderer, create_renderer, installed_font_families};
-pub use session::{SessionEndMonitor, SessionEndSignal, register_application_restart};
+pub use session::{SessionEndMonitor, SessionEndSignal, register_application_restart, session_end_signalled};
 // Types the shell reaches only through values and methods (as on Windows), or
 // only in its tests.
 #[allow(
@@ -69,7 +69,7 @@ pub use self::{
     renderer::InstalledFontFamily,
 };
 #[cfg(test)]
-pub use session::{SessionEndHost, SessionEndMessage};
+pub use session::{SessionEndHost, SessionEndMessage, session_end_monitor_for_tests};
 pub use system::{
     appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory, system_code_page,
     system_ui_language, window_theme,

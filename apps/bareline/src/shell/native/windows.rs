@@ -65,6 +65,13 @@ pub fn in_app_prompt(_platform: Option<&Platform>) -> Option<super::PromptView> 
 }
 pub fn answer_prompt(_platform: Option<&Platform>, _id: i32) {}
 
+/// Logoff and shutdown reach the window as WM_QUERYENDSESSION/WM_ENDSESSION,
+/// which the monitor routes as a close request, and Windows ends the process
+/// itself; nothing is ever reported to the process for the shell to poll.
+pub fn session_end_signalled(_monitor: &SessionEndMonitor) -> bool {
+    false
+}
+
 /// The Windows services wake the loop through their own window messages.
 pub fn set_event_notify(_notify: std::sync::Arc<dyn Fn() + Send + Sync>) {}
 /// winit's events already carry the keymap's modifiers on Windows.
