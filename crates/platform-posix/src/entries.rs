@@ -15,8 +15,10 @@ use std::{
     path::{Component, Path},
 };
 
-/// The pinned parent of `path` and its final name. Every ancestor is opened
-/// without following links, so a linked folder on the way is refused.
+/// The pinned parent of `path` and its final name. A linked folder on the way
+/// is refused unless the link is part of the system layout (macOS `/var` and
+/// `/tmp`); the resolved, link-free chain is then opened without following
+/// links, so a link swapped in meanwhile is refused too.
 pub(crate) fn parent<'a>(fs: &dyn LocalFileSystem, path: &'a Path) -> io::Result<(DirectoryGuard, &'a OsStr)> {
     if !path.is_absolute()
         || path
@@ -31,7 +33,11 @@ pub(crate) fn parent<'a>(fs: &dyn LocalFileSystem, path: &'a Path) -> io::Result
     fs.validate_target(path)?;
     let (parent, name) = sys::split(path).map_err(|_| denied("the root folder cannot be changed"))?;
     resolve::names(parent)?;
-    Ok((DirectoryGuard::open_resolved(parent)?, name))
+    let resolved = resolve::resolve(parent)?;
+    if resolved.redirected {
+        return Err(denied("symbolic links are not followed here"));
+    }
+    Ok((DirectoryGuard::open_resolved(&resolved.path)?, name))
 }
 
 pub(crate) fn create(fs: &dyn LocalFileSystem, path: &Path, directory: bool) -> io::Result<()> {
@@ -110,5 +116,49 @@ mod tests {
         PosixFileSystem.delete_entry(&b).unwrap();
         PosixFileSystem.delete_entry(&root).unwrap();
         assert!(!root.exists());
+    }
+
+    /// macOS keeps the temporary folder behind the system's `/var` and `/tmp`
+    /// links (`/var/lock` on Linux): entries there are created, renamed and
+    /// deleted, while a folder the person linked on the way is still refused.
+    #[test]
+    fn system_links_on_the_way_are_followed_and_others_refused() {
+        let unique = format!("bareline-entry-links-{}", std::process::id());
+        let mut checked = Vec::new();
+        for base in [
+            std::env::temp_dir(),
+            std::path::PathBuf::from("/tmp"),
+            std::path::PathBuf::from("/var/lock"),
+        ] {
+            // Only a base reached through the system's links exercises the rule.
+            if !crate::trust::tests::behind_root_links(&base) || checked.contains(&base) {
+                continue;
+            }
+            let root = base.join(&unique);
+            let _ = std::fs::remove_dir_all(&root);
+            PosixFileSystem.create_entry(&root, true).unwrap();
+            let (a, b) = (root.join("a.txt"), root.join("b.txt"));
+            PosixFileSystem.create_entry(&a, false).unwrap();
+            PosixFileSystem.rename_entry(&a, &b).unwrap();
+            assert!(!a.exists() && b.exists());
+            PosixFileSystem.delete_entry(&b).unwrap();
+            PosixFileSystem.delete_entry(&root).unwrap();
+            assert!(!root.exists());
+            checked.push(base);
+        }
+        eprintln!("bases behind system links: {checked:?}");
+
+        let root = std::env::temp_dir().canonicalize().unwrap().join(&unique);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real/a.txt"), b"kept").unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        let error = PosixFileSystem
+            .rename_entry(&root.join("link/a.txt"), &root.join("link/b.txt"))
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(PosixFileSystem.delete_entry(&root.join("link/a.txt")).is_err());
+        assert_eq!(std::fs::read(root.join("real/a.txt")).unwrap(), b"kept");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

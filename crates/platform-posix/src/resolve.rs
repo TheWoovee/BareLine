@@ -4,10 +4,17 @@
 //! walk continues, so the result names no link and records whether one was
 //! crossed. `..` after a link refers to the link target's parent, as the kernel
 //! resolves it. A missing final name is kept, so new files resolve too.
+//!
+//! Links of the system layout are not redirections: one owned by the superuser
+//! in a folder only the superuser can change (macOS `/var`, `/tmp` and `/etc`,
+//! merged-usr `/bin`, Linux `/var/run`) names the same object for everyone, as
+//! a plain folder does. Every other link, such as one in a cloned repository or
+//! an extracted archive, still counts as crossed.
 use std::{
     collections::VecDeque,
     ffi::{OsStr, OsString},
     io,
+    os::unix::fs::MetadataExt,
     path::{Component, Path, PathBuf},
 };
 
@@ -17,7 +24,8 @@ const MAX_LINKS: usize = 40;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Resolved {
     pub path: PathBuf,
-    /// A symbolic link was crossed anywhere on the way.
+    /// A symbolic link that is not part of the system layout was crossed
+    /// anywhere on the way.
     pub redirected: bool,
     /// The final name itself was a symbolic link.
     pub final_link: bool,
@@ -77,7 +85,7 @@ pub(crate) fn resolve(path: &Path) -> io::Result<Resolved> {
                     ));
                 }
                 let target = std::fs::read_link(&candidate)?;
-                redirected = true;
+                redirected |= !system_link(&metadata, &resolved);
                 final_link |= last;
                 if target.is_absolute() {
                     resolved = PathBuf::from("/");
@@ -103,6 +111,21 @@ pub(crate) fn resolve(path: &Path) -> io::Result<Resolved> {
         redirected,
         final_link,
     })
+}
+
+/// Whether only the superuser can change where `link`, an entry of the
+/// link-free `folder`, points: the link is root's, and so is the folder, which
+/// nobody else may write to or which is sticky (only an entry's owner may then
+/// replace it). Ownership proves nothing when the editor itself runs as the
+/// superuser, so then every link counts as a redirection.
+fn system_link(link: &std::fs::Metadata, folder: &Path) -> bool {
+    const OTHERS_WRITE: u32 = 0o022;
+    const STICKY: u32 = 0o1000;
+    !rustix::process::geteuid().is_root()
+        && link.uid() == 0
+        && std::fs::symlink_metadata(folder).is_ok_and(|folder| {
+            folder.is_dir() && folder.uid() == 0 && (folder.mode() & OTHERS_WRITE == 0 || folder.mode() & STICKY != 0)
+        })
 }
 
 /// Paths that spell `..` are refused where trust is granted, as on Windows.
@@ -167,6 +190,41 @@ mod tests {
         assert_eq!(missing.path, root.join("real/new.txt"));
         assert!(resolve(&root.join("absent/new.txt")).is_err());
         assert!(resolve(Path::new("relative.txt")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The system's own links (macOS `/var` and `/tmp`, merged-usr `/bin`,
+    /// `/var/run`) resolve without counting as a redirection, so documents in
+    /// the temporary folder are trusted like any other; a link the person made
+    /// still counts.
+    #[test]
+    fn system_layout_links_are_not_redirections() {
+        let system: Vec<&str> = ["/var", "/tmp", "/etc", "/bin", "/lib", "/var/run", "/var/lock"]
+            .into_iter()
+            .filter(|name| {
+                let path = Path::new(name);
+                std::fs::symlink_metadata(path)
+                    .is_ok_and(|link| link.file_type().is_symlink() && system_link(&link, path.parent().unwrap()))
+            })
+            .collect();
+        for name in &system {
+            let resolved = resolve(&Path::new(name).join("bareline-new.txt")).unwrap();
+            assert!(!resolved.redirected && !resolved.final_link, "{name}");
+            assert_eq!(
+                resolved.path,
+                std::fs::canonicalize(name).unwrap().join("bareline-new.txt"),
+                "{name}"
+            );
+            // Named itself, the link is still reported as the final link.
+            let itself = resolve(Path::new(name)).unwrap();
+            assert!(!itself.redirected && itself.final_link, "{name}");
+        }
+        // Ubuntu (`/bin`, `/var/run`) and macOS (`/var`, `/tmp`) have several.
+        eprintln!("system links checked: {system:?}");
+        let root = scratch("own");
+        std::fs::create_dir(root.join("real")).unwrap();
+        symlink(root.join("real"), root.join("mine")).unwrap();
+        assert!(resolve(&root.join("mine/doc.txt")).unwrap().redirected);
         std::fs::remove_dir_all(root).unwrap();
     }
 

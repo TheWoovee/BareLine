@@ -187,9 +187,21 @@ impl PathTrustProvider for PosixSessionPathTrustProvider {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::{io::Read, os::unix::fs::symlink};
+
+    /// `base` is reached through links, and only through root's (the system
+    /// layout); never as root, where ownership proves nothing.
+    pub(crate) fn behind_root_links(base: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        !rustix::process::geteuid().is_root()
+            && base.canonicalize().is_ok_and(|real| real != base)
+            && base.ancestors().all(|ancestor| {
+                std::fs::symlink_metadata(ancestor)
+                    .is_ok_and(|metadata| !metadata.file_type().is_symlink() || metadata.uid() == 0)
+            })
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let directory = std::env::temp_dir()
@@ -247,6 +259,39 @@ mod tests {
         opened.file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"behind a link");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A document reached through the system's own links (the macOS temporary
+    /// folder under `/var`, `/tmp`; `/var/lock` on Linux) is trusted for reading
+    /// and writing like any other; the canonical path names the real folder.
+    #[test]
+    fn system_layout_links_keep_trust() {
+        let mut checked = Vec::new();
+        for base in [std::env::temp_dir(), PathBuf::from("/tmp"), PathBuf::from("/var/lock")] {
+            if !behind_root_links(&base) || checked.contains(&base) {
+                continue;
+            }
+            let real = base.canonicalize().unwrap();
+            let root = base.join(format!("bareline-trust-system-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let path = root.join("doc.txt");
+            std::fs::write(&path, b"through the system link").unwrap();
+            let mut opened = PosixPathTrustProvider.open_read(&path, PathOrigin::User).unwrap();
+            assert!(!opened.trust.traverses_reparse_point, "{}", path.display());
+            assert_eq!(
+                opened.trust.canonical,
+                real.join(root.file_name().unwrap()).join("doc.txt")
+            );
+            assert!(PosixPathTrustProvider.permits(&opened.trust, PathOperation::Read));
+            assert!(PosixPathTrustProvider.permits(&opened.trust, PathOperation::Write));
+            let mut bytes = Vec::new();
+            opened.file.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"through the system link");
+            std::fs::remove_dir_all(root).unwrap();
+            checked.push(base);
+        }
+        eprintln!("bases behind system links: {checked:?}");
     }
 
     #[test]
