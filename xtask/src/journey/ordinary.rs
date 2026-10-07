@@ -2766,6 +2766,9 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
         "s3",
         "U08: after Clone and each F6 typing landed at the focused pane's own caret: 'A' at one pane's start and 'Z' at the other's end of the shared text.",
         |run| {
+            // Each step starts from its own fixture, whatever an earlier one left.
+            stop_regression_editor(run);
+            run.write(&saved, initial.as_bytes())?;
             fresh(run, &[saved.as_path()], false)?;
             run.command("Clone to Other View")?;
             run.keys(&["Primary+End", "F6", "Primary+Home", "F6", "F6"])?;
@@ -2865,6 +2868,7 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
         "ISSUE-030: after a clean Exit with session restore enabled, each relaunch showed a visible window with a first frame and restored the document tab.",
         |run| {
             stop_regression_editor(run);
+            run.write(&saved, initial.as_bytes())?;
             let session = profile.join("session.json");
             let _ = std::fs::remove_file(&session);
             run.substituted("native Open", OPEN_ROUTE);
