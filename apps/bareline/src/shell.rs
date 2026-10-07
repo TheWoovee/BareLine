@@ -2967,7 +2967,7 @@ impl Shell {
     /// open-documents field, a Settings/Shortcuts field, the command palette, a
     /// split pane, or the Find field. Returns `true` when the action was
     /// consumed and `dispatch` should stop.
-    fn route_text_and_clipboard(&mut self, el: &ActiveEventLoop, action: Action) -> bool {
+    fn route_text_and_clipboard(&mut self, action: Action) -> bool {
         if !self.palette.open
             && matches!(
                 action,
@@ -3089,48 +3089,57 @@ impl Shell {
             self.window.as_ref().unwrap().request_redraw();
             return true;
         }
-        // Clipboard and edit actions belong to the palette before either split pane.
-        if self.views_action(el, action) {
-            return true;
+        // Clipboard and edit actions belong to the palette, then to the focused
+        // Find field, before either split pane: with a split or comparison open,
+        // Ctrl+A, Ctrl+V or Ctrl+Z typed in the field edit the field, never the
+        // pane's document (LNX-EDIT-005).
+        self.find_field_text_action(action) || self.views_action(action)
+    }
+    /// Select All, Copy, Cut, Paste, Undo and Redo while the Find bar has focus
+    /// act on its focused field. Returns `true` when the field consumed the action.
+    fn find_field_text_action(&mut self, action: Action) -> bool {
+        let Some(workspace) = self.workspace.as_mut().filter(|workspace| workspace.find.has_focus()) else {
+            return false;
+        };
+        if !matches!(
+            action,
+            Action::SelectAll | Action::Copy | Action::Cut | Action::Paste | Action::Undo | Action::Redo
+        ) {
+            return false;
         }
-        if let Some(workspace) = &mut self.workspace
-            && workspace.find.has_focus()
-            && matches!(
-                action,
-                Action::SelectAll | Action::Copy | Action::Cut | Action::Paste | Action::Undo | Action::Redo
-            )
-        {
-            let field = workspace.find.active_field();
-            let platform = self.platform.as_ref().unwrap();
-            match action {
-                Action::SelectAll => field.select_all(),
-                Action::Undo => field.undo(false),
-                Action::Redo => field.undo(true),
-                Action::Paste => match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+        let field = workspace.find.active_field();
+        let platform = self.platform.as_ref();
+        match action {
+            Action::SelectAll => field.select_all(),
+            Action::Undo => field.undo(false),
+            Action::Redo => field.undo(true),
+            Action::Paste => {
+                match platform.map(|platform| platform.clipboard_text_within(bareline_ui::text_field::LIMIT)) {
                     // An empty or non-text clipboard is a no-op, not an error.
-                    Ok(None) => {}
-                    Ok(Some(value)) => {
+                    None | Some(Ok(None)) => {}
+                    Some(Ok(Some(value))) => {
                         if !field.commit(&value) {
                             workspace.message = Some("Find accepts a single line up to 16 KiB.".into());
                         }
                     }
-                    Err(error) => workspace.message = Some(error.message()),
-                },
-                Action::Copy | Action::Cut if !field.selected().is_empty() => {
-                    if platform.set_clipboard_text(field.selected()).is_ok() {
-                        if action == Action::Cut {
-                            field.insert("");
-                        }
-                    } else {
-                        workspace.message = Some("Clipboard write failed; selection was preserved.".into());
-                    }
+                    Some(Err(error)) => workspace.message = Some(error.message()),
                 }
-                _ => {}
             }
-            self.window.as_ref().unwrap().request_redraw();
-            return true;
+            Action::Copy | Action::Cut if !field.selected().is_empty() => {
+                if platform.is_some_and(|platform| platform.set_clipboard_text(field.selected()).is_ok()) {
+                    if action == Action::Cut {
+                        field.insert("");
+                    }
+                } else {
+                    workspace.message = Some("Clipboard write failed; selection was preserved.".into());
+                }
+            }
+            _ => {}
         }
-        false
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
     }
     fn dispatch(&mut self, el: &ActiveEventLoop, action: Action) {
         // A command may ask a question that answers later (Linux); it then runs
@@ -3149,7 +3158,7 @@ impl Shell {
         }
         self.sync_contributions();
         self.record_acknowledged_inputs();
-        if self.route_text_and_clipboard(el, action) {
+        if self.route_text_and_clipboard(action) {
             return;
         }
         match action {

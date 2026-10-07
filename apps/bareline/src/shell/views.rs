@@ -1234,6 +1234,87 @@ mod tests {
         }
     }
 
+    /// LNX-EDIT-005: Ctrl+A, Ctrl+V and Ctrl+Z reach dispatch from the Find
+    /// field; with a split view open they edit the field, never a pane's document.
+    #[test]
+    fn find_field_edit_commands_skip_the_split_panes() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        accessibility_test_setup(&mut shell, "split_vertical");
+        assert!(shell.views.open());
+        let settle = |shell: &mut Shell| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let workspace = shell.workspace.as_mut().unwrap();
+                workspace.pump();
+                shell.views.pump(workspace);
+                if !shell.views.busy(workspace) && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "split edit timed out");
+                std::thread::yield_now();
+            }
+        };
+        let pane = shell.views.pane();
+        shell.views.input(
+            shell.workspace.as_mut().unwrap(),
+            pane,
+            Input::Insert("document".into()),
+        );
+        settle(&mut shell);
+        // Text, selection and undo state of both panes' document.
+        let panes = |shell: &Shell| {
+            let workspace = shell.workspace.as_ref().unwrap();
+            let primary = &workspace.editors[shell.views.primary_index(workspace).unwrap()];
+            [primary, shell.views.secondary.as_ref().unwrap()].map(|editor| {
+                let snapshot = editor.snapshot();
+                let text = snapshot
+                    .read(
+                        bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()),
+                        100,
+                    )
+                    .unwrap();
+                (text, editor.viewport().selection, editor.can_undo())
+            })
+        };
+        let before = panes(&shell);
+        assert_eq!(before[0].0, "document");
+        assert_eq!(before[1].0, "document");
+        // The active pane can undo the edit, so a misrouted Undo would show.
+        assert!(before[pane as usize].2);
+        let workspace = shell.workspace.as_mut().unwrap();
+        workspace.find.show();
+        assert!(workspace.find.has_focus());
+        assert!(workspace.find.field.insert("query"));
+        let field = |shell: &Shell| {
+            let field = &shell.workspace.as_ref().unwrap().find.field;
+            (field.value().to_owned(), field.selection())
+        };
+        // Select All selects the query.
+        assert!(shell.route_text_and_clipboard(Action::SelectAll));
+        settle(&mut shell);
+        assert_eq!(field(&shell), ("query".into(), (0, 5)));
+        assert_eq!(panes(&shell), before);
+        // Paste goes to the field; unit tests have no clipboard, so it is empty.
+        assert!(shell.route_text_and_clipboard(Action::Paste));
+        settle(&mut shell);
+        assert_eq!(field(&shell), ("query".into(), (0, 5)));
+        assert_eq!(panes(&shell), before);
+        // Undo and Redo walk the field's history, not the document's.
+        assert!(shell.route_text_and_clipboard(Action::Undo));
+        settle(&mut shell);
+        assert_eq!(field(&shell).0, "");
+        assert_eq!(panes(&shell), before);
+        assert!(shell.route_text_and_clipboard(Action::Redo));
+        settle(&mut shell);
+        assert_eq!(field(&shell).0, "query");
+        assert_eq!(panes(&shell), before);
+        // Without the field's focus the same commands edit the active pane.
+        shell.workspace.as_mut().unwrap().find.focused = false;
+        assert!(shell.route_text_and_clipboard(Action::SelectAll));
+        settle(&mut shell);
+        assert_ne!(panes(&shell)[pane as usize].1, before[pane as usize].1);
+    }
+
     #[test]
     fn closing_split_preserves_shared_undo_redo_from_either_writer() {
         fn exercise(writer: u32, close_from: u32) {
@@ -6478,7 +6559,7 @@ impl Shell {
         }
         true
     }
-    pub(super) fn views_action(&mut self, _el: &ActiveEventLoop, action: Action) -> bool {
+    pub(super) fn views_action(&mut self, action: Action) -> bool {
         if !self.views.open() && action != Action::Close {
             return false;
         }
