@@ -510,9 +510,11 @@ pub trait LocalFileSystem: Send + Sync {
     }
     /// A private folder outside every document folder for the stage and the
     /// retained previous version of a save whose destination folder accepts no
-    /// new entries ([`SaveStrategy::InPlaceLockedFolder`]). `None` where the
-    /// platform never saves that way.
-    fn locked_folder_stage(&self) -> Option<PathBuf> {
+    /// new entries ([`SaveStrategy::InPlaceLockedFolder`]), created private when
+    /// missing if `create` (a save), otherwise only where it exists (an
+    /// inspection). `None` where the platform never saves that way. Inspecting a
+    /// document's folder also reports the transactions kept here for its files.
+    fn locked_folder_stage(&self, _create: bool) -> Option<PathBuf> {
         None
     }
     /// `folder` is on storage only this machine writes (no network, cloud or
@@ -523,9 +525,16 @@ pub trait LocalFileSystem: Send + Sync {
     }
     /// Remove save transactions in `parent` that an ended process left before
     /// they held a complete editor version (never one a live process holds), and
-    /// return the folders removed.
+    /// return the folders removed. Transactions [`Self::locked_folder_stage`]
+    /// holds for files of `parent` count as the folder's.
     fn reclaim_commit_transactions(&self, _: &Path) -> std::io::Result<Vec<PathBuf>> {
         Ok(Vec::new())
+    }
+    /// `path` is a save stage that no process holds: a live save keeps an
+    /// exclusive lock on its stage. The name is never followed and a FIFO never
+    /// waited on. `false` where the platform cannot tell; the age guard decides.
+    fn stage_unheld(&self, _: &Path) -> bool {
+        false
     }
     /// Compatibility primitive for platform adapters that do not participate in document saves.
     fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()>;

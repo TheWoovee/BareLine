@@ -44,6 +44,10 @@ pub mod extension_transport {
 /// What the workspace says after `recycle_entry`.
 pub const RECYCLED: &str = "Moved to the Recycle Bin";
 
+/// Every Windows save keeps its transaction beside the file, so no recovery
+/// folder is needed (see the Linux seam's `files::use_recovery_folder`).
+pub fn use_recovery_folder(_recovery: Option<&Path>) {}
+
 /// Every Windows prompt and dialog is modal: the call returns the answer, so
 /// nothing is ever deferred, replayed or drawn by the shell (see the Linux
 /// seam's `interaction` for the systems where that is needed).

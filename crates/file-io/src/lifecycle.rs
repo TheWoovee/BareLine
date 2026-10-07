@@ -498,6 +498,11 @@ pub fn inspect_save_recovery(
     // folder opens, not only at its next save (LNX-FILE-007).
     let mut reclaimed = platform.reclaim_commit_transactions(parent).unwrap_or_default();
     reclaimed.extend(sweep_dead_stages(parent, platform, false));
+    // So are the stages of saves into folders that accept no new entries, which
+    // live in the platform's private folder (LNX-EDIT-003).
+    if let Some(store) = platform.locked_folder_stage(false) {
+        reclaimed.extend(sweep_dead_stages(&store, platform, false));
+    }
     match platform.inspect_commit_transactions(parent, cancellation) {
         Ok(found) => {
             let mut result = SaveRecovery {
@@ -1228,8 +1233,9 @@ fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem, once: bool) 
                 .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age >= STAGE_SWEEP_MIN_AGE))
         };
         // Every live stage holds its lock, whichever process (or pid namespace)
-        // writes it.
-        let unheld = || cfg!(unix) && File::open(entry.path()).is_ok_and(|stage| stage.try_lock().is_ok());
+        // writes it. The platform checks it without following a link swapped
+        // onto the name or waiting on a FIFO.
+        let unheld = || platform.stage_unheld(&entry.path());
         if owner != std::process::id()
             && entry.file_type().is_ok_and(|kind| kind.is_file())
             && platform.cache_process_liveness(owner, 0) == bareline_platform::ProcessLiveness::Dead
@@ -1494,7 +1500,7 @@ fn save_bytes(
     let mut relocated = false;
     let (mut file, mut staged) = match create_stage(parent, cancellation) {
         Ok(created) => created,
-        Err(FileError::Io(error)) if folder_refused(&error) => match platform.locked_folder_stage() {
+        Err(FileError::Io(error)) if folder_refused(&error) => match platform.locked_folder_stage(true) {
             Some(folder) if mode == CommitMode::Replace => {
                 relocated = true;
                 create_stage(&folder, cancellation).map_err(|error| storage_error(error, target, &folder))?
@@ -3368,7 +3374,7 @@ mod encoded_tests {
         }
         impl LocalFileSystem for Relocating {
             simulated_save_platform!();
-            fn locked_folder_stage(&self) -> Option<PathBuf> {
+            fn locked_folder_stage(&self, _: bool) -> Option<PathBuf> {
                 Some(self.private.clone())
             }
             fn prepare_commit(
@@ -3465,14 +3471,17 @@ mod encoded_tests {
         assert_eq!(fs::read_dir(&locked).unwrap().count(), 1);
     }
     /// LNX-FILE-007: on storage only this machine writes, opening a document
-    /// reclaims a dead process's stage at once and reports it. A stage some
-    /// process still holds (as every live save does), one whose owner may be
-    /// alive, and a reported copy stay; elsewhere the age guard still decides.
+    /// reclaims a dead process's stage at once and reports it, beside the file
+    /// and in the platform's private folder for saves into folders that accept
+    /// no new entries. A stage some process still holds (as every live save
+    /// does), one whose owner may be alive, and a reported copy stay; elsewhere
+    /// the age guard still decides.
     #[cfg(unix)]
     #[test]
     fn open_time_inspection_reclaims_dead_stages_at_once_on_local_storage() {
         struct Machine {
             local: bool,
+            store: Option<PathBuf>,
         }
         impl LocalFileSystem for Machine {
             simulated_save_platform!();
@@ -3485,6 +3494,12 @@ mod encoded_tests {
             }
             fn local_storage(&self, _: &Path) -> bool {
                 self.local
+            }
+            fn stage_unheld(&self, path: &Path) -> bool {
+                File::open(path).is_ok_and(|stage| stage.try_lock().is_ok())
+            }
+            fn locked_folder_stage(&self, _: bool) -> Option<PathBuf> {
+                self.store.clone()
             }
         }
         let temp = Temp::new();
@@ -3501,14 +3516,38 @@ mod encoded_tests {
         let shared = Temp::new();
         let remote = shared.0.join(".bareline-424242-1.tmp");
         fs::write(&remote, b"another machine's save").unwrap();
-        let found = inspect_save_recovery(&shared.0, &Machine { local: false }, &Cancellation::default()).unwrap();
+        let found = inspect_save_recovery(
+            &shared.0,
+            &Machine {
+                local: false,
+                store: None,
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
         assert!(found.reclaimed.is_empty() && remote.exists());
 
-        let found = inspect_save_recovery(&temp.0, &Machine { local: true }, &Cancellation::default()).unwrap();
-        assert_eq!(found.reclaimed, vec![dead.clone()]);
-        assert!(!dead.exists());
-        assert!(held.exists() && unknown.exists() && kept.exists());
+        let store = Temp::new();
+        let stored_dead = store.0.join(".bareline-424242-7.tmp");
+        let stored_held = store.0.join(".bareline-424244-7.tmp");
+        fs::write(&stored_dead, b"half of a locked-folder save").unwrap();
+        fs::write(&stored_held, b"a live locked-folder save").unwrap();
+        let stored_holder = File::open(&stored_held).unwrap();
+        stored_holder.try_lock().unwrap();
+        let found = inspect_save_recovery(
+            &temp.0,
+            &Machine {
+                local: true,
+                store: Some(store.0.clone()),
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(found.reclaimed, vec![dead.clone(), stored_dead.clone()]);
+        assert!(!dead.exists() && !stored_dead.exists());
+        assert!(held.exists() && unknown.exists() && kept.exists() && stored_held.exists());
         drop(holder);
+        drop(stored_holder);
 
         // The stage of a save in progress holds its lock until it is dropped.
         let (file, staged) = create_stage(&temp.0, &Cancellation::default()).unwrap();
