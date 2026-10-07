@@ -4705,8 +4705,6 @@ mod tests {
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
-    /// WSP-01: Rename keeps the document itself. A saved document is retargeted
-    /// in place, keeping its tab position, identity and undo history; an
     /// LNX-EDIT-011: the message bar covered the last text lines, so the caret
     /// after Ctrl+End or a match near the end was hidden behind it.
     #[test]
@@ -4732,6 +4730,8 @@ mod tests {
         drop(workspace);
         remove_test_directory(directory);
     }
+    /// WSP-01: Rename keeps the document itself. A saved document is retargeted
+    /// in place, keeping its tab position, identity and undo history; an
     /// Untitled tab only changes its title, and loading or failed tabs refuse.
     #[test]
     fn rename_retargets_in_place_and_retitles_untitled_tabs() {
