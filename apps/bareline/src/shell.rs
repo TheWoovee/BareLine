@@ -290,6 +290,8 @@ pub(super) enum Route {
     /// Editor surface commands handled by `power_dispatch` or the editor fallback.
     EditorPower,
     Spelling,
+    /// The command-line files beyond the first sixteen (LNX-CLI-009).
+    Launch,
 }
 
 /// Classify a contributed command ID to the handler that owns it. The order of
@@ -351,6 +353,9 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
     }
     if id == "profile.migration.retry" {
         return Some(Profile);
+    }
+    if id == launch::OPEN_REMAINING_ID {
+        return Some(Launch);
     }
     // The dispatch chain, in order.
     if matches!(
@@ -591,6 +596,15 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
             })
             .expect("unique conversion command");
     }
+    registry
+        .register(bareline_commands::CommandSpec {
+            id: bareline_commands::CommandId(launch::OPEN_REMAINING_ID),
+            title: launch::OPEN_REMAINING_TITLE,
+            category: "File",
+            shortcut: "",
+            action: Action::Contributed(bareline_commands::CommandId(launch::OPEN_REMAINING_ID)),
+        })
+        .expect("unique launch command");
     bareline_settings::register_commands(registry).expect("unique settings commands");
     for command in update::commands()
         .into_iter()
@@ -817,8 +831,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let Some(instance) = instance::prepare(&mut launch, notify.clone())? else {
         // The running instance received the usable paths; name the rest here.
-        if !launch.rejected_paths.is_empty() {
-            crate::shell::native::cli::report(&rejected_paths_text(&launch.rejected_paths), true);
+        let not_forwarded = launch.not_forwarded();
+        if !not_forwarded.is_empty() {
+            crate::shell::native::cli::report(&rejected_paths_text(&not_forwarded), true);
         }
         return Ok(());
     };
@@ -978,6 +993,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         && !STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
     {
         shell.offer_keymap_preset();
+    }
+    if let Some((text, details)) = launch.remaining_notice() {
+        shell.startup_notice(
+            launch::OPEN_REMAINING_NOTICE,
+            bareline_ui::theme::ToastLevel::Warning,
+            text,
+            details,
+        );
     }
     if !launch.rejected_paths.is_empty() {
         shell.startup_notice(
@@ -2040,6 +2063,12 @@ impl Shell {
                 );
             }
         }
+        if self.launch_remaining() == 0 {
+            context.states.insert(
+                bareline_commands::CommandId(launch::OPEN_REMAINING_ID),
+                CommandState::disabled("Every command-line file is open"),
+            );
+        }
         for id in ["settings.external_reload", "settings.external_keep"] {
             if !self.settings.controller.open || !self.settings.controller.has_external_change() {
                 context.states.insert(
@@ -2785,6 +2814,10 @@ impl Shell {
     fn dispatch_contributed(&mut self, el: &ActiveEventLoop, id: bareline_commands::CommandId) {
         if id.0 == "profile.migration.retry" {
             self.profile_retry_migration();
+            return;
+        }
+        if id.0 == launch::OPEN_REMAINING_ID {
+            self.launch_open_remaining(el);
             return;
         }
         if id.0 == "search.folder" && !self.ensure_workspace(el) {

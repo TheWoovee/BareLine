@@ -147,9 +147,11 @@ Close Bareline first. To remove an installed copy, open **Settings > Apps > Inst
 ```text
 Usage: bareline [OPTIONS] [--] [FILE ...]
 
-Opens up to 16 files on top of the restored session; further files are listed
-as not opened. A file that does not exist opens as a new document and is
-created when you save it. Use -- before file names that begin with '-'.
+Opens up to 16 files on top of the restored session; File > Recent Files >
+Open Remaining Command-Line Files opens the rest, and a launch handed to a
+running window lists them as not opened. A file that does not exist opens as
+a new document and is created when you save it. Use -- before file names
+that begin with '-'.
 
 Options:
   -                 Read standard input into a new Untitled document, for at

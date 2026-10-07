@@ -154,6 +154,14 @@ impl Workspace {
             {
                 self.complete_missing_launch(pending)
             }
+            // Reading a folder fails with EISDIR on Linux and macOS.
+            IoCompletion::Open(Err(FileError::Io(error)))
+                if error.kind() == std::io::ErrorKind::IsADirectory
+                    && pending.open_path.is_some()
+                    && pending.recovery_restore_request.is_none() =>
+            {
+                self.complete_folder_open(pending)
+            }
             IoCompletion::Open(Err(error)) | IoCompletion::Save(Err(error)) => self.complete_io_failure(pending, error),
             IoCompletion::SaveRecoveryInspection { result, .. } => self.complete_queued_save_recovery(result),
             IoCompletion::SaveCleanupRetried { .. } => {}
@@ -245,6 +253,17 @@ impl Workspace {
             Err(error)
         };
         self.record_launch_open(launch_request, result);
+    }
+    /// An open of a folder: a plain notice instead of a failed-open tab whose
+    /// Retry and large-file actions cannot help (LNX-CLI-010). A failed tab
+    /// that was retried closes too, since its path now names a folder.
+    fn complete_folder_open(&mut self, pending: PendingIo) {
+        self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
+        self.resume_abandoned_reload(pending.reload.as_ref());
+        self.discard_preview(pending.preview.as_ref());
+        let error = folder_path_message(pending.open_path.as_deref().unwrap_or(std::path::Path::new("")));
+        self.message = Some(error.clone());
+        self.record_launch_open(pending.launch_request, Err(error));
     }
     /// An open or save that failed.
     pub(super) fn complete_io_failure(&mut self, pending: PendingIo, error: FileError) {

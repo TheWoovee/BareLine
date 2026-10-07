@@ -2017,6 +2017,7 @@ pub(super) mod tests {
             legacy_extensions_path: None,
             diagnostics_path: None,
             paths: vec![],
+            remaining_paths: vec![],
             rejected_paths: vec![],
             stdin: None,
             line: None,

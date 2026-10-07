@@ -15,6 +15,11 @@ pub(super) struct LaunchRuntime {
     /// and after every document close.
     pub(super) diag_handles: bool,
     drops: DropQueue,
+    /// The command-line files beyond the first `MAX_LAUNCH_PATHS`, with the
+    /// launch's options, until Open Remaining Command-Line Files opens them.
+    remaining: crate::shell::native::instance::OpenRequest,
+    /// Open Remaining Command-Line Files is opening `remaining` group by group.
+    opening_remaining: bool,
 }
 /// Paths dropped on the window wait here until their burst has ended (APP-05).
 #[derive(Default)]
@@ -147,6 +152,13 @@ impl LaunchRuntime {
             stdin: None,
             diag_handles: config.diag_handles,
             drops: DropQueue::default(),
+            remaining: crate::shell::native::instance::OpenRequest {
+                paths: config.remaining_paths.clone(),
+                read_only: config.read_only,
+                monitor: config.monitor,
+                ..Default::default()
+            },
+            opening_remaining: false,
         };
         let _ = runtime.queue(&crate::shell::native::instance::OpenRequest {
             paths: config.paths.clone(),
@@ -220,7 +232,9 @@ impl LaunchRuntime {
                 request.state = state;
                 // A file that does not exist gets one plain notice (APP-21).
                 let failure = failure.map(|error| {
-                    if error == bareline_app::workspace::missing_file_message(&request.path) {
+                    if error == bareline_app::workspace::missing_file_message(&request.path)
+                        || error == bareline_app::workspace::folder_path_message(&request.path)
+                    {
                         error
                     } else {
                         format!("Could not open requested file: {error}")
@@ -317,6 +331,38 @@ impl super::Shell {
         }
     }
 
+    /// Open Remaining Command-Line Files (LNX-CLI-009): opens the launch's
+    /// files beyond the first `MAX_LAUNCH_PATHS`, with the launch's options,
+    /// a launch's worth at a time: the file service's open lane holds 16
+    /// waiting requests (`LANE_DEPTH`), so `launch_pump` queues the next
+    /// group once the previous one has settled.
+    pub(super) fn launch_open_remaining(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        if self.launch.remaining.paths.is_empty() || !self.ensure_workspace(el) {
+            return;
+        }
+        self.launch.opening_remaining = true;
+        self.toasts.resolve(&OPEN_REMAINING_NOTICE.into());
+        if !self.launch.has_requests() {
+            self.launch_queue_remaining();
+        }
+        self.launch_pump();
+    }
+    /// Queues the next group of the remaining command-line files.
+    fn launch_queue_remaining(&mut self) {
+        let end = MAX_LAUNCH_PATHS.min(self.launch.remaining.paths.len());
+        let request = crate::shell::native::instance::OpenRequest {
+            paths: self.launch.remaining.paths[..end].to_vec(),
+            ..self.launch.remaining.clone()
+        };
+        if self.launch.queue(&request).is_some() {
+            self.launch.remaining.paths.drain(..end);
+        }
+        self.launch.opening_remaining &= !self.launch.remaining.paths.is_empty();
+    }
+    /// Whether Open Remaining Command-Line Files has files to open.
+    pub(super) fn launch_remaining(&self) -> usize {
+        self.launch.remaining.paths.len()
+    }
     pub(super) fn launch_pump(&mut self) {
         // Launch files open on top of the restored session, never in place of
         // it or interleaved with it (APP-06). The session pump resumes them.
@@ -579,6 +625,12 @@ impl super::Shell {
             }
         }
         self.launch.retire_terminal();
+        // Open Remaining Command-Line Files continues once the group before
+        // has settled (LNX-CLI-009).
+        if self.launch.opening_remaining && !self.launch.has_requests() {
+            self.launch_queue_remaining();
+            (self.notify)();
+        }
     }
 }
 
@@ -594,6 +646,8 @@ mod request_tests {
             stdin: None,
             diag_handles: false,
             drops: DropQueue::default(),
+            remaining: Default::default(),
+            opening_remaining: false,
         }
     }
 
@@ -1139,9 +1193,11 @@ pub(super) enum LaunchMode {
 // deliberately not advertised.
 pub(super) const HELP: &str = "Usage: bareline [OPTIONS] [--] [FILE ...]
 
-Opens up to 16 files on top of the restored session; further files are listed
-as not opened. A file that does not exist opens as a new document and is
-created when you save it. Use -- before file names that begin with '-'.
+Opens up to 16 files on top of the restored session; File > Recent Files >
+Open Remaining Command-Line Files opens the rest, and a launch handed to a
+running window lists them as not opened. A file that does not exist opens as
+a new document and is created when you save it. Use -- before file names
+that begin with '-'.
 
 Options:
   -                 Read standard input into a new Untitled document, for at
@@ -1367,6 +1423,45 @@ impl Drop for ProfileInitializationRuntime {
     }
 }
 
+impl LaunchConfig {
+    /// Every command-line file a launch handed to a running window did not
+    /// open there, with the reason.
+    pub(super) fn not_forwarded(&self) -> Vec<String> {
+        self.rejected_paths
+            .iter()
+            .cloned()
+            .chain(self.remaining_paths.iter().map(|path| beyond_limit_line(path)))
+            .collect()
+    }
+    /// The startup notice for `remaining_paths`, if any: how many opened, and
+    /// the command that opens the rest (LNX-CLI-009).
+    pub(super) fn remaining_notice(&self) -> Option<(String, String)> {
+        if self.remaining_paths.is_empty() {
+            return None;
+        }
+        let count = self.remaining_paths.len();
+        let text = format!(
+            "Opened {MAX_LAUNCH_PATHS} of {} files. {OPEN_REMAINING_TITLE} opens the other {count}.",
+            count + MAX_LAUNCH_PATHS
+        );
+        let names: Vec<String> = self
+            .remaining_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        let details = format!(
+            "File > Recent Files > {OPEN_REMAINING_TITLE}, or the same command in the command palette, opens these files:\n{}",
+            names.join("\n")
+        );
+        Some((text, details))
+    }
+}
+/// The command that opens the command-line files beyond the first
+/// `MAX_LAUNCH_PATHS` (LNX-CLI-009).
+pub(super) const OPEN_REMAINING_ID: &str = "file.openRemainingLaunchFiles";
+pub(super) const OPEN_REMAINING_TITLE: &str = "Open Remaining Command-Line Files";
+pub(super) const OPEN_REMAINING_NOTICE: &str = "startup:remaining-paths";
+
 pub struct LaunchConfig {
     pub(super) mode: LaunchMode,
     pub performance: Option<super::performance::PerformanceConfig>,
@@ -1382,6 +1477,9 @@ pub struct LaunchConfig {
     pub(super) legacy_extensions_path: Option<PathBuf>,
     pub diagnostics_path: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
+    /// Usable files beyond the first `MAX_LAUNCH_PATHS`, which the instance
+    /// handoff cannot carry in one request; the window offers to open them.
+    pub(super) remaining_paths: Vec<PathBuf>,
     /// `path: reason` for each argument that could not become a file path.
     pub(super) rejected_paths: Vec<String>,
     /// Standard input, read before the instance handoff because it cannot be forwarded.
@@ -1550,7 +1648,7 @@ pub(super) fn prepare(
     let legacy = legacy_root(mode, roaming.clone());
     let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), std::env::temp_dir());
     // An unusable argument is reported with its file; it never stops the launch (APP-17).
-    let (paths, rejected_paths) = launch_paths(&cwd, parsed.options.paths);
+    let (paths, remaining_paths, rejected_paths) = launch_paths(&cwd, parsed.options.paths);
     let stdin = parsed.options.stdin.then(read_stdin);
     let config = LaunchConfig {
         mode,
@@ -1568,6 +1666,7 @@ pub(super) fn prepare(
             .logs
             .or_else(|| root.as_ref().map(|path| path.join("diagnostics"))),
         paths,
+        remaining_paths,
         rejected_paths,
         stdin,
         line: parsed.options.line,
@@ -1595,21 +1694,34 @@ pub(super) fn prepare(
     Ok(config)
 }
 
-/// Resolves the command-line files. The first 16 usable ones open; every other
-/// argument is named with the reason it was not opened (APP-09, APP-17).
-fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
-    let (mut paths, mut rejected) = (Vec::new(), Vec::new());
+/// Resolves the command-line files. The first 16 usable ones open; the usable
+/// ones after them wait for File > Open Remaining Command-Line Files (a launch
+/// handed to a running window names them instead), and every other argument
+/// is named with the reason it was not opened (APP-09, APP-17, LNX-CLI-009).
+fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<String>) {
+    let (mut paths, mut remaining, mut rejected) = (Vec::new(), Vec::new(), Vec::new());
     for path in arguments {
+        // An empty argument (a script's unset variable) would name the launch
+        // folder itself (LNX-CLI-010).
+        if path.as_os_str().is_empty() {
+            rejected.push("(empty argument): not a file name".into());
+            continue;
+        }
         match resolve_launch_path(cwd, &path) {
             Ok(resolved) if paths.len() < MAX_LAUNCH_PATHS => paths.push(resolved),
-            Ok(_) => rejected.push(format!(
-                "{}: only the first {MAX_LAUNCH_PATHS} files of a launch are opened",
-                path.display()
-            )),
+            Ok(resolved) => remaining.push(resolved),
             Err(reason) => rejected.push(format!("{}: {reason}", path.display())),
         }
     }
-    (paths, rejected)
+    (paths, remaining, rejected)
+}
+/// How a file beyond the first `MAX_LAUNCH_PATHS` is named where it cannot be
+/// offered (a launch handed to a running window).
+fn beyond_limit_line(path: &Path) -> String {
+    format!(
+        "{}: only the first {MAX_LAUNCH_PATHS} files of a launch are opened",
+        path.display()
+    )
 }
 
 /// Reads piped standard input for `-` (APP-09). Only a file or pipe is read:
@@ -2028,6 +2140,50 @@ mod tests {
         PathBuf::from(if cfg!(windows) { r"D:\work" } else { "/work" })
     }
 
+    /// LNX-CLI-010: an empty argument opened the launch folder as a failed
+    /// file tab offering large-file mode.
+    #[test]
+    fn an_empty_argument_is_named_and_never_opened() {
+        let (paths, remaining, rejected) = launch_paths(&work(), vec![PathBuf::new(), PathBuf::from("notes.txt")]);
+        assert!(remaining.is_empty());
+        assert_eq!(paths, vec![work().join("notes.txt")]);
+        assert_eq!(rejected, vec!["(empty argument): not a file name".to_string()]);
+    }
+
+    /// LNX-CLI-010: a folder (the launch folder, or one named on the command
+    /// line) gets one plain notice and no failed-open tab with file actions.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_opens_no_failed_tab_and_says_it_is_a_folder() {
+        let folder = std::env::temp_dir().join(format!("bareline-folder-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.open_tracked_or_create(5, folder.clone()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        workspace.pump();
+        let expected = bareline_app::workspace::folder_path_message(&folder);
+        assert_eq!(
+            workspace.take_tracked_open_outcomes(&[5]),
+            vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+                request_id: 5,
+                error: expected.clone(),
+            }]
+        );
+        assert!(workspace.editors.is_empty(), "no failed-open tab for a folder");
+        assert_eq!(workspace.message.as_deref(), Some(expected.as_str()));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
     /// Drive-relative arguments exist only on Windows.
     #[cfg(windows)]
     #[test]
@@ -2148,13 +2304,52 @@ mod tests {
         // More than 16 paths used to refuse the whole launch without a word (APP-09).
         let parsed = parse(&args, &mut ledger).unwrap();
         assert_eq!(parsed.mode(), LaunchMode::Installed);
-        let (paths, rejected) = launch_paths(&work(), parsed.options.paths);
+        let (paths, remaining, rejected) = launch_paths(&work(), parsed.options.paths);
         assert_eq!(paths.len(), 16);
         assert_eq!(paths[0], work().join("file-0.txt"));
         assert_eq!(paths[15], work().join("file-15.txt"));
-        assert_eq!(rejected.len(), 4);
-        assert!(rejected[0].starts_with("file-16.txt: "), "{rejected:?}");
-        assert!(rejected.iter().all(|line| line.contains("first 16 files")));
+        // The rest wait for Open Remaining Command-Line Files (LNX-CLI-009)
+        // instead of being refused; nothing usable is rejected.
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            remaining,
+            (16..20)
+                .map(|index| work().join(format!("file-{index}.txt")))
+                .collect::<Vec<_>>()
+        );
+        // A launch handed to a running window still names each of them.
+        let named: Vec<_> = remaining.iter().map(|path| beyond_limit_line(path)).collect();
+        assert!(
+            named[0].starts_with(&format!("{}: ", work().join("file-16.txt").display())),
+            "{named:?}"
+        );
+        assert!(named.iter().all(|line| line.contains("first 16 files")));
+    }
+
+    /// LNX-CLI-009: the files beyond the first sixteen open on request.
+    #[test]
+    fn open_remaining_queues_every_remaining_file_with_the_launch_options() {
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        let remaining: Vec<_> = (16..200)
+            .map(|index| work().join(format!("file-{index}.txt")))
+            .collect();
+        shell.launch.remaining = crate::shell::native::instance::OpenRequest {
+            paths: remaining.clone(),
+            read_only: true,
+            ..Default::default()
+        };
+        assert_eq!(shell.launch_remaining(), 184);
+        shell.launch.opening_remaining = true;
+        let mut opened = Vec::new();
+        while shell.launch_remaining() > 0 {
+            shell.launch_queue_remaining();
+            // A group at a time: the file service's open lane holds 16.
+            assert!(shell.launch.requests.len() <= MAX_LAUNCH_PATHS);
+            assert!(shell.launch.requests.iter().all(|request| request.read_only));
+            opened.extend(shell.launch.requests.drain(..).map(|request| request.path));
+        }
+        assert_eq!(opened, remaining);
+        assert!(!shell.launch.opening_remaining, "done once every file was queued");
     }
 
     #[test]

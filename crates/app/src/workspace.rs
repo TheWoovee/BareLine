@@ -1043,6 +1043,14 @@ pub enum LaunchOpenOutcome {
 pub fn missing_file_message(path: &std::path::Path) -> String {
     format!("File not found: {}", path.display())
 }
+/// The plain notice for an open of a folder: no failed-open tab offers file
+/// actions for it (LNX-CLI-010).
+pub fn folder_path_message(path: &std::path::Path) -> String {
+    format!(
+        "{} is a folder, not a file. Open it with File > Open Workspace Folder…",
+        path.display()
+    )
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecoveryRestoreOutcome {
     Restored { request_id: u64, document: (u64, u64) },
