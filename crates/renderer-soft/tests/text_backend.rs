@@ -141,6 +141,66 @@ fn arabic_logical_order_moves_visually_left() {
 }
 
 #[test]
+fn lines_starting_right_to_left_keep_a_left_to_right_base_direction() {
+    // LNX-UI-010: like DirectWrite's default reading direction (and
+    // Scintilla), a line reads left to right whatever its first strong
+    // character is; right-to-left runs inside it still read right to left.
+    let mut backend = renderer(1.0);
+    let caret = |backend: &SoftRenderer, id: LayoutId, offset: usize| backend.caret(id, offset).unwrap().x;
+
+    // Arabic first: مرحبا, 😀, 👍 and ok from left to right.
+    let text = "مرحبا 😀 👍 ok";
+    let id = backend.shape(text, 16.0, 700.0).unwrap();
+    let word = 0..text.find(' ').unwrap();
+    let rects = backend.range_rects(id, word.clone()).unwrap();
+    assert_eq!(rects.len(), 1);
+    let (left, right) = (rects[0].x, rects[0].x + rects[0].width);
+    assert!(left.abs() < 0.01, "the Arabic word starts the line: {rects:?}");
+    // Its first letter's leading edge is the word's right edge; its last letter is leftmost.
+    assert!((caret(&backend, id, 0) - right).abs() < 0.01);
+    let last = text[word.clone()].char_indices().last().unwrap().0;
+    assert!(caret(&backend, id, last) < caret(&backend, id, 0));
+    let order: Vec<f32> = ["😀", "👍", "ok", "k"]
+        .iter()
+        .map(|part| caret(&backend, id, text.find(part).unwrap()))
+        .collect();
+    assert!(right < order[0] && order.is_sorted(), "{order:?} after {right}");
+    let width = backend.layout_size(id).unwrap().0;
+    assert!(
+        (caret(&backend, id, text.len()) - width).abs() < 0.01,
+        "the line ends at the right"
+    );
+    // Clicking the left edge lands after the Arabic word's last letter (its trailing edge).
+    let hit = backend.hit_test(id, Point { x: 1.0, y: 8.0 }).unwrap();
+    assert_eq!((hit.byte_offset, hit.trailing, hit.inside), (word.end, true, true));
+    let rects = backend.range_rects(id, word.end..text.len()).unwrap();
+    assert!(rects.len() == 1 && (rects[0].x - right).abs() < 0.01, "{rects:?}");
+
+    // Hebrew first: both words form one right-to-left run at the left, then "end".
+    let text = "שלום עולם end";
+    let id = backend.shape(text, 16.0, 700.0).unwrap();
+    let hebrew = 0..text.find(" end").unwrap();
+    let rects = backend.range_rects(id, hebrew.clone()).unwrap();
+    assert!(rects.len() == 1 && rects[0].x.abs() < 0.01, "{rects:?}");
+    let second = text.find('ע').unwrap();
+    assert!(
+        caret(&backend, id, second) < caret(&backend, id, 0),
+        "the second word is left of the first"
+    );
+    assert!(caret(&backend, id, text.find("end").unwrap()) > rects[0].x + rects[0].width);
+
+    // Latin first, unchanged: numbers after Arabic join its run, digits left to right.
+    let text = "Arabic: مرحبا 123 end";
+    let id = backend.shape(text, 16.0, 700.0).unwrap();
+    let (one, three) = (text.find('1').unwrap(), text.find('3').unwrap());
+    let arabic = text.find('م').unwrap();
+    assert!(caret(&backend, id, 0) < caret(&backend, id, one));
+    assert!(caret(&backend, id, one) < caret(&backend, id, three));
+    assert!(caret(&backend, id, three) < caret(&backend, id, arabic));
+    assert!(caret(&backend, id, arabic) < caret(&backend, id, text.find("end").unwrap()));
+}
+
+#[test]
 fn wrapped_layouts_grow_taller_as_they_narrow_and_keep_carets_inside() {
     let mut backend = renderer(1.0);
     let text = "The quick brown fox jumps over the lazy dog and keeps running far beyond the edge.";

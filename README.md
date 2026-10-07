@@ -265,6 +265,8 @@ cargo build -p bareline --release --locked
 
 The smoke run below also uses `xvfb xauth scrot xdotool x11-utils at-spi2-core fonts-dejavu-core fonts-noto-cjk`.
 
+For colour emoji, install `fonts-noto-color-emoji`: the editor draws emoji sequences with the first installed colour emoji font (Noto Color Emoji, Twemoji, JoyPixels or OpenMoji). Without one, each part of an emoji falls back to any installed font that has it (for example Noto Sans Symbols2 from `fonts-noto-core`), and a part that no font has is shown as one box.
+
 **macOS.** Install the Xcode Command Line Tools (`xcode-select --install`) for the C and C++ parts, then run the same `cargo build`.
 
 **Cross type-check for Apple silicon.** From Windows or Linux, crates without a C or C++ build step can be checked for macOS:
