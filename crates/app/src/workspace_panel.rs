@@ -206,9 +206,6 @@ impl WorkspacePanel {
         );
         self.message = Some("Refreshing loaded folders…".into());
     }
-    pub fn width(&self) -> f32 {
-        if self.open { 238.0 } else { 0.0 }
-    }
     pub fn show(&mut self) {
         self.open = true;
     }
@@ -564,17 +561,20 @@ impl WorkspacePanel {
     }
     pub fn draw(
         &mut self,
-        _backend: &mut impl TextBackend,
-        _width: f32,
+        backend: &mut impl TextBackend,
+        width: f32,
         height: f32,
         ops: &mut Vec<DrawOp>,
     ) -> Result<Option<Rect>, LayoutError> {
-        self.draw_with_theme(_backend, _width, height, Theme::default(), ops)
+        self.draw_with_theme(backend, width, height, Theme::default(), ops)
     }
+    /// Draw the panel into a `width` × `height` area at the origin; the caller
+    /// passes the area its dock gives the panel on this frame, so the tree
+    /// follows the window and the dock's width instead of a fixed size.
     pub fn draw_with_theme(
         &mut self,
         _backend: &mut impl TextBackend,
-        _width: f32,
+        width: f32,
         height: f32,
         theme: Theme,
         ops: &mut Vec<DrawOp>,
@@ -585,9 +585,12 @@ impl WorkspacePanel {
         let bounds = Rect {
             x: 0.0,
             y: 0.0,
-            width: self.width(),
-            height,
+            width: width.max(0.0),
+            height: height.max(0.0),
         };
+        // Nothing of the panel, the tree's focus ring included, reaches past
+        // the area it was given.
+        ops.push(DrawOp::PushClip(bounds));
         ops.push(DrawOp::Fill(bounds, theme.surface));
         ops.push(DrawOp::Text {
             origin: Point { x: 16.0, y: 8.0 },
@@ -595,27 +598,31 @@ impl WorkspacePanel {
             size: 13.0,
             color: theme.text,
         });
-        self.tree.bounds = Rect {
-            y: 34.0,
-            height: (height - 62.0).max(0.0),
-            ..bounds
-        };
-        self.tree.paint(&self.model, theme, ops);
         let status = self.message.as_deref().unwrap_or(if self.model.roots.is_empty() {
             "Open a folder to browse files"
         } else {
             ""
         });
-        ops.push(DrawOp::PushClip(bounds));
-        ops.push(DrawOp::Text {
-            origin: Point {
-                x: 10.0,
-                y: (height - 22.0).max(34.0),
-            },
-            text: status.into(),
-            size: 12.0,
-            color: theme.muted,
-        });
+        // The tree fills the rest of the panel; a status line is kept under it
+        // only while there is something to say.
+        let status_line = if status.is_empty() { 0.0 } else { 28.0 };
+        self.tree.bounds = Rect {
+            y: 34.0,
+            height: (height - 34.0 - status_line).max(0.0),
+            ..bounds
+        };
+        self.tree.paint(&self.model, theme, ops);
+        if !status.is_empty() {
+            ops.push(DrawOp::Text {
+                origin: Point {
+                    x: 10.0,
+                    y: (height - 22.0).max(34.0),
+                },
+                text: status.into(),
+                size: 12.0,
+                color: theme.muted,
+            });
+        }
         ops.push(DrawOp::PopClip);
         Ok(Some(bounds))
     }
