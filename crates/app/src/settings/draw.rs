@@ -2,6 +2,8 @@
 //! Settings drawing and layout. Drawing records the hit rects the event and
 //! semantics code reads back; it never performs I/O.
 use super::*;
+/// What the font picker draws in each face beside the face's name.
+const FONT_SAMPLE: &str = "AaBb 0O1l";
 impl SettingsController {
     pub(super) fn reset_dialog_bounds(&self) -> Rect {
         let sidebar = 164.0_f32.min(self.bounds.width * 0.26);
@@ -412,7 +414,7 @@ impl SettingsController {
                     ops,
                     x + 10.0,
                     y + 44.0,
-                    format!("\u{26a0} \u{201c}{missing}\u{201d} is not installed on this PC."),
+                    format!("\u{26a0} \u{201c}{missing}\u{201d} is not installed on this computer."),
                     11.0,
                     color("danger"),
                 );
@@ -640,9 +642,10 @@ impl SettingsController {
                 1.0,
             ));
             if popup.font_preview {
-                // Each entry is shaped in the family it names so the list previews
-                // faces; a family that will not shape falls back to the UI font.
-                // Selected rows use the row selection pair and bar (A11Y-01).
+                // Each entry names its family in the UI font, so a symbol face
+                // (Wingdings, D050000L) stays readable, and previews the face in a
+                // short sample at the row's end; a family that will not shape shows
+                // no sample. Selected rows use the row selection pair and bar (A11Y-01).
                 let row_theme = ui.widgets();
                 let padding = Metrics::COMPACT.padding;
                 let size = Metrics::COMPACT.font_size;
@@ -664,17 +667,23 @@ impl SettingsController {
                         y: row.y + 6.0,
                     };
                     let width = (row.width - padding * 2.0).max(1.0);
-                    let shaped =
-                        family.and_then(|family| backend.shape_with_font_family(label, size, width, family).ok());
-                    if let Some(layout) = shaped {
-                        ops.push(DrawOp::Layout {
-                            origin,
-                            layout,
-                            color: row_text,
-                        });
+                    text(ops, origin.x, origin.y, label.clone(), size, row_text);
+                    let sample =
+                        family.and_then(|family| backend.shape_with_font_family(FONT_SAMPLE, size, width, family).ok());
+                    if let Some(layout) = sample {
+                        // The sample sits at the row's end, and only where it
+                        // clears the name.
+                        let sample_width = backend.layout_size(layout).map_or(f32::INFINITY, |(width, _)| width);
+                        let label_end = origin.x + backend.measure_text(label, size).map_or(width, |(width, _)| width);
+                        let x = row.x + row.width - padding - sample_width;
+                        if x >= label_end + padding {
+                            ops.push(DrawOp::Layout {
+                                origin: Point { x, y: origin.y },
+                                layout,
+                                color: row_text,
+                            });
+                        }
                         shaped_previews.push(layout);
-                    } else {
-                        text(ops, origin.x, origin.y, label.clone(), size, row_text);
                     }
                 }
                 ops.push(DrawOp::PopClip);
@@ -1226,5 +1235,49 @@ mod visual_contract_tests {
                 "popup {index}"
             );
         }
+    }
+    /// Robustness LNX-UI-013: notifications covered the page's status line and
+    /// its Revert, Retry and Reset buttons; the shell keeps them above this.
+    #[test]
+    fn the_open_page_reports_where_its_footer_starts() {
+        let mut controller =
+            SettingsController::new(SettingsDocument::empty(Scope::User), None, SystemAppearance::default());
+        assert_eq!(controller.footer_top(), None);
+        controller.show();
+        let bounds = rect(0.0, 34.0, 1200.0, 660.0);
+        controller
+            .draw(bounds, &mut RecordingBackend::default(), &mut Vec::new())
+            .unwrap();
+        let top = controller.footer_top().expect("an open, drawn page has a footer");
+        assert_eq!(top, controller.revert.y);
+        assert!(top > bounds.y && top + 30.0 <= bounds.y + bounds.height);
+        controller.open = false;
+        assert_eq!(controller.footer_top(), None);
+    }
+    #[test]
+    fn font_picker_names_every_face_in_the_ui_font_and_previews_it_in_a_sample() {
+        let mut controller =
+            SettingsController::new(SettingsDocument::empty(Scope::User), None, SystemAppearance::default());
+        controller.set_font_families(vec![("D050000L".into(), false), ("DejaVu Sans Mono".into(), true)]);
+        controller.show();
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        let bounds = rect(0.0, 34.0, 1200.0, 660.0);
+        // Rows exist once drawn; row 0 is editor.font.family.
+        controller.draw(bounds, &mut backend, &mut ops).unwrap();
+        controller.choose(0);
+        assert!(controller.popup.as_ref().unwrap().font_preview);
+        ops.clear();
+        controller.draw(bounds, &mut backend, &mut ops).unwrap();
+        // A symbol face cannot draw its own name: the name is UI-font text.
+        for name in ["D050000L", "DejaVu Sans Mono  ·  monospaced"] {
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, DrawOp::Text { text, .. } if text.as_str() == name)),
+                "{name} is drawn in the UI font"
+            );
+        }
+        // A face still shows itself, in a sample beside a name it clears.
+        assert!(ops.iter().any(|op| matches!(op, DrawOp::Layout { .. })));
     }
 }

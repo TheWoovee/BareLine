@@ -14,7 +14,7 @@ use crate::{
 use bareline_document::{Budget, DocumentSnapshot, TextOffset};
 use bareline_platform::LocalFileSystem;
 use std::{
-    fs::{self, OpenOptions},
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
@@ -172,14 +172,14 @@ pub fn prepare_resident(
         return Err(FileError::IncompleteSource);
     }
     cancellation.check()?;
-    fs::create_dir_all(cache)?;
+    bareline_platform::private::create_dir_all(cache)?;
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let directory = cache.join(format!(
         "resident-spill-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::create_dir(&directory)?;
+    bareline_platform::private::create_dir(&directory)?;
     if let Err(error) = crate::owned_cache::publish_ownership(
         &directory,
         crate::owned_cache::CacheKind::ResidentSpill,
@@ -190,7 +190,10 @@ pub fn prepare_resident(
     }
     let staging = Staging(directory);
     let path = staging.0.join("input.raw");
-    let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    let output = bareline_platform::private::file_options()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
     // Reserve space for both staged raw input and the durable raw/text/map triplet.
     let mut writer = QuotaWriter {
         output: io::BufWriter::with_capacity(WRITE_BUFFER, output),
@@ -284,12 +287,12 @@ pub fn prepare_segments(
         spill::StoredSegment,
     };
     cancellation.check()?;
-    fs::create_dir_all(cache)?;
+    bareline_platform::private::create_dir_all(cache)?;
     let parent_guard = platform.guard_directory(cache)?;
     static NEXT_OWNED: AtomicU64 = AtomicU64::new(1);
     let serial = NEXT_OWNED.fetch_add(1, Ordering::Relaxed);
     let directory = cache.join(format!("owned-segments-{}-{serial}", std::process::id()));
-    fs::create_dir(&directory)?;
+    bareline_platform::private::create_dir(&directory)?;
     if let Err(error) = crate::owned_cache::publish_ownership(
         &directory,
         crate::owned_cache::CacheKind::OwnedSegments,
@@ -301,7 +304,10 @@ pub fn prepare_segments(
     let cleanup = OwnedDirectory(directory);
     let directory_guard = platform.guard_directory(&cleanup.0)?;
     let path = cleanup.0.join("segments.utf8");
-    let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    let output = bareline_platform::private::file_options()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
     let mut writer = QuotaWriter {
         output: io::BufWriter::with_capacity(WRITE_BUFFER, output),
         directory: &cleanup.0,
@@ -403,7 +409,7 @@ pub fn prepare_original_baseline(
     cancellation: Cancellation,
 ) -> Result<PagedTranscoded, FileError> {
     cancellation.check()?;
-    fs::create_dir_all(cache)?;
+    bareline_platform::private::create_dir_all(cache)?;
     let _parent = platform.guard_directory(cache)?;
     static NEXT_BASELINE: AtomicU64 = AtomicU64::new(1);
     let directory = cache.join(format!(
@@ -411,7 +417,7 @@ pub fn prepare_original_baseline(
         std::process::id(),
         NEXT_BASELINE.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::create_dir(&directory)?;
+    bareline_platform::private::create_dir(&directory)?;
     if let Err(error) = crate::owned_cache::publish_ownership(
         &directory,
         crate::owned_cache::CacheKind::SpillBaseline,
@@ -423,7 +429,10 @@ pub fn prepare_original_baseline(
     let staging = Staging(directory);
     let directory_guard = platform.guard_directory(&staging.0)?;
     let path = staging.0.join("input.raw");
-    let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    let output = bareline_platform::private::file_options()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
     let mut writer = QuotaWriter {
         output: io::BufWriter::with_capacity(WRITE_BUFFER, output),
         directory: &staging.0,
@@ -585,12 +594,12 @@ impl StreamingStoreBuilder {
         cancel
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "owned staging cancelled"))?;
-        fs::create_dir_all(cache)?;
+        bareline_platform::private::create_dir_all(cache)?;
         let parent_guard = platform.guard_directory(cache)?;
         static NEXT_STREAM: AtomicU64 = AtomicU64::new(1);
         let serial = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
         let directory = cache.join(format!("owned-stream-{}-{serial}", std::process::id()));
-        fs::create_dir(&directory)?;
+        bareline_platform::private::create_dir(&directory)?;
         if let Err(error) = crate::owned_cache::publish_ownership(
             &directory,
             crate::owned_cache::CacheKind::OwnedStream,
@@ -601,7 +610,7 @@ impl StreamingStoreBuilder {
         }
         let cleanup = OwnedDirectory(directory);
         let directory_guard = platform.guard_directory(&cleanup.0)?;
-        let output = OpenOptions::new()
+        let output = bareline_platform::private::file_options()
             .write(true)
             .create_new(true)
             .open(cleanup.0.join("segments.utf8"))?;

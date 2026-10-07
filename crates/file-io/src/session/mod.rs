@@ -5,7 +5,7 @@ use bareline_platform::{LocalFileSystem, SerializedPath};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -457,7 +457,10 @@ fn atomic_write(path: &Path, bytes: &[u8], platform: &dyn LocalFileSystem) -> io
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&staged)?;
+    let mut file = bareline_platform::private::file_options()
+        .write(true)
+        .create_new(true)
+        .open(&staged)?;
     let result = (|| {
         file.write_all(bytes)?;
         file.sync_all()?;

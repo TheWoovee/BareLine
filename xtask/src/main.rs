@@ -7,7 +7,6 @@ mod bench_diff;
 mod controller_fixture;
 // SPDX-License-Identifier: MPL-2.0
 mod capture;
-#[cfg(windows)]
 mod journey;
 #[cfg(windows)]
 mod render;
@@ -63,7 +62,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.first().is_some_and(|arg| arg == "render") {
         return render::run(&args[1..]);
     }
-    #[cfg(windows)]
     if args.first().is_some_and(|arg| arg == "journey") {
         return journey::run(&args[1..]);
     }

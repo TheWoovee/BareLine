@@ -1,0 +1,21 @@
+[package]
+name = "bareline-renderer-soft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bareline-renderer = { path = "../renderer" }
+# Shaping, line layout, wrapping, bidi and font fallback; system fonts come from
+# fontdb (the `fontconfig` feature only reads fontconfig's XML on Unix).
+cosmic-text = { version = "=0.19.0", default-features = false, features = ["std", "swash", "fontconfig"] }
+# Rasterization and the PNG codec for offscreen output and goldens.
+tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd", "png-format"] }
+# Presentation to a winit window. KMS (drawing without a display server) is not needed.
+softbuffer = { version = "=0.4.8", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+unicode-segmentation = "=1.13.3"
+winit.workspace = true
+
+[dev-dependencies]
+bareline-ui = { path = "../ui" }

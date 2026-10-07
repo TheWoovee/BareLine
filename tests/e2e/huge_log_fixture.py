@@ -62,7 +62,7 @@ def validate_observations(steps, records):
         if any(type(memory.get(k)) is not int or memory[k] <= 0 for k in ('baseline', 'after')) or memory['after'] - memory['baseline'] > fixture()['private_growth_limit']:
             raise ValueError('Observed editor memory exceeds declared bound')
     if status.get('s2') == 'PASS':
-        if check('log complete search').get('name') != 'Find results: 1 matches' or check('log boundary selection').get('selected') != [NEEDLE]:
+        if check('log complete search').get('name') != 'Find results: 1 match' or check('log boundary selection').get('selected') != [NEEDLE]:
             raise ValueError('Unique global boundary match was not selected')
     if status.get('s3') == 'PASS':
         if APPEND.strip() not in check('log appended viewport').get('visible', ''): raise ValueError('Appended tail missing')

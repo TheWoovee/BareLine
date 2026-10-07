@@ -24,7 +24,7 @@ foreach ($base in @($env:APPDATA, $env:LOCALAPPDATA, $env:ProgramFiles, ${env:Pr
 if (-not $env:LOCALAPPDATA -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs/Bareline'))) { throw 'Existing per-user installation or missing local profile root; lifecycle test refused.' }
 if (Get-Process -Name bareline,bareline-update-helper -ErrorAction SilentlyContinue) { throw 'Existing Bareline process found; lifecycle test refused.' }
 $artifacts = (Resolve-Path -LiteralPath $ArtifactDir).Path
-& (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $artifacts -Version $Version -RequireInstaller
+& (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $artifacts -Version $Version -Platform windows -RequireInstaller
 $scratchBase = if ($hostedRunner) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $scratch = Join-Path $scratchBase ('bareline-installer-check-' + [Guid]::NewGuid().ToString('N'))
 $installed = Join-Path $scratch 'installed'

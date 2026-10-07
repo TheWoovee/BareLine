@@ -19,7 +19,7 @@ light/splitter
 light/scrollbar
 [Fill(Rect { x: 2.0, y: 3.4, width: 12.0, height: 18.0 }, Color(6055280))]
 light/tree
-[PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }), Text { origin: Point { x: 18.0, y: 6.0 }, text: "First", size: 13.0, color: Color(2303787) }, Text { origin: Point { x: 18.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(6055280) }, Text { origin: Point { x: 18.0, y: 62.0 }, text: "Last", size: 13.0, color: Color(2303787) }, PopClip, Stroke(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }, Color(752239), 2.0)]
+[PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }), Text { origin: Point { x: 26.0, y: 6.0 }, text: "First", size: 13.0, color: Color(2303787) }, Text { origin: Point { x: 26.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(6055280) }, Text { origin: Point { x: 26.0, y: 62.0 }, text: "Last", size: 13.0, color: Color(2303787) }, PopClip, Stroke(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }, Color(752239), 2.0)]
 light/variable-list
 [PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 98.0 }), Fill(Rect { x: 0.0, y: 0.0, width: 200.0, height: 28.0 }, Color(13428963)), Fill(Rect { x: 0.0, y: 0.0, width: 3.0, height: 28.0 }, Color(752239)), Text { origin: Point { x: 10.0, y: 6.0 }, text: "First", size: 13.0, color: Color(2303787) }, Text { origin: Point { x: 10.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(2303787) }, Text { origin: Point { x: 10.0, y: 76.0 }, text: "Last", size: 13.0, color: Color(2303787) }, PopClip]
 light/popover
@@ -53,7 +53,7 @@ dark/splitter
 dark/scrollbar
 [Fill(Rect { x: 2.0, y: 3.4, width: 12.0, height: 18.0 }, Color(10134445))]
 dark/tree
-[PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }), Text { origin: Point { x: 18.0, y: 6.0 }, text: "First", size: 13.0, color: Color(15132906) }, Text { origin: Point { x: 18.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(10134445) }, Text { origin: Point { x: 18.0, y: 62.0 }, text: "Last", size: 13.0, color: Color(15132906) }, PopClip, Stroke(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }, Color(3068868), 2.0)]
+[PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }), Text { origin: Point { x: 26.0, y: 6.0 }, text: "First", size: 13.0, color: Color(15132906) }, Text { origin: Point { x: 26.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(10134445) }, Text { origin: Point { x: 26.0, y: 62.0 }, text: "Last", size: 13.0, color: Color(15132906) }, PopClip, Stroke(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }, Color(3068868), 2.0)]
 dark/variable-list
 [PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 98.0 }), Fill(Rect { x: 0.0, y: 0.0, width: 200.0, height: 28.0 }, Color(2247242)), Fill(Rect { x: 0.0, y: 0.0, width: 3.0, height: 28.0 }, Color(3068868)), Text { origin: Point { x: 10.0, y: 6.0 }, text: "First", size: 13.0, color: Color(15132906) }, Text { origin: Point { x: 10.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(15132906) }, Text { origin: Point { x: 10.0, y: 76.0 }, text: "Last", size: 13.0, color: Color(15132906) }, PopClip]
 dark/popover
@@ -87,7 +87,7 @@ highcontrast/splitter
 highcontrast/scrollbar
 [Fill(Rect { x: 2.0, y: 3.4, width: 12.0, height: 18.0 }, Color(16777215))]
 highcontrast/tree
-[PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }), Text { origin: Point { x: 18.0, y: 6.0 }, text: "First", size: 13.0, color: Color(16777215) }, Text { origin: Point { x: 18.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(16777215) }, Text { origin: Point { x: 18.0, y: 62.0 }, text: "Last", size: 13.0, color: Color(16777215) }, PopClip, Stroke(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }, Color(16776960), 2.0)]
+[PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }), Text { origin: Point { x: 26.0, y: 6.0 }, text: "First", size: 13.0, color: Color(16777215) }, Text { origin: Point { x: 26.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(16777215) }, Text { origin: Point { x: 26.0, y: 62.0 }, text: "Last", size: 13.0, color: Color(16777215) }, PopClip, Stroke(Rect { x: 0.0, y: 0.0, width: 200.0, height: 84.0 }, Color(16776960), 2.0)]
 highcontrast/variable-list
 [PushClip(Rect { x: 0.0, y: 0.0, width: 200.0, height: 98.0 }), Fill(Rect { x: 0.0, y: 0.0, width: 200.0, height: 28.0 }, Color(16776960)), Fill(Rect { x: 0.0, y: 0.0, width: 3.0, height: 28.0 }, Color(16776960)), Text { origin: Point { x: 10.0, y: 6.0 }, text: "First", size: 13.0, color: Color(0) }, Text { origin: Point { x: 10.0, y: 34.0 }, text: "Disabled", size: 13.0, color: Color(16777215) }, Text { origin: Point { x: 10.0, y: 76.0 }, text: "Last", size: 13.0, color: Color(16777215) }, PopClip]
 highcontrast/popover

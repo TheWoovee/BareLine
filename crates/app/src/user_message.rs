@@ -256,6 +256,12 @@ mod tests {
                 transaction: None,
                 error: io_error(),
             })),
+            FileError::DeletedOutside { target: path() },
+            FileError::FolderNotWritable { folder: path() },
+            FileError::StorageFull {
+                target: path(),
+                volume: path(),
+            },
         ];
         for displaced in [None, Some(path())] {
             files.push(FileError::CancelledAfterCommit(Box::new(PostCommitCancellation {
@@ -284,7 +290,10 @@ mod tests {
                 | FileError::ConflictAfterCreate { .. }
                 | FileError::CancelledAfterCommit(_)
                 | FileError::VerificationAfterCommit(_)
-                | FileError::Commit(_) => {}
+                | FileError::Commit(_)
+                | FileError::DeletedOutside { .. }
+                | FileError::FolderNotWritable { .. }
+                | FileError::StorageFull { .. } => {}
             }
         }
         check(files);
@@ -531,8 +540,8 @@ mod tests {
     /// Debug formatting that never reaches the user, with the reason.
     const ALLOWED: &[(&str, &str)] = &[
         // Keymap names are winit's key names ("ArrowUp", "KeyA"), not error text.
-        ("apps/bareline/src/windows_app/settings.rs", "Key::Named(named)"),
-        ("apps/bareline/src/windows_app/settings.rs", "PhysicalKey::Code(code)"),
+        ("apps/bareline/src/shell/settings.rs", "Key::Named(named)"),
+        ("apps/bareline/src/shell/settings.rs", "PhysicalKey::Code(code)"),
         // Diagnostic payload: `PagedLifecycleError`'s `Display` never shows it.
         ("crates/file-io/src/paged_service.rs", "SourceUnavailable(format!("),
         // A broken internal invariant; the cache kind is for the diagnostics log.

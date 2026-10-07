@@ -201,7 +201,7 @@ impl TailSession {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let scratch = Scratch(raw_path.clone());
-        let mut output = std::fs::OpenOptions::new()
+        let mut output = bareline_platform::private::file_options()
             .write(true)
             .create_new(true)
             .open(&raw_path)?;
@@ -392,7 +392,10 @@ impl TailSession {
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let mut output = bareline_platform::private::file_options()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
         let scratch = Scratch(path);
         // The decoder restarts at an opaque unit; its bytes come from the sealed
         // predecessor, which ends exactly where the new bytes start.

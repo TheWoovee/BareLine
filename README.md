@@ -1,8 +1,8 @@
 # Bareline
 
-Bareline is a native text and code editor for Windows, written in Rust. It is built not to lose your work or change bytes you did not edit: unsaved text is journaled in the background, files keep their exact bytes and line endings, and files too large to hold in memory still open and save. In the measurements below it starts in about 80 ms and idles at about 23 MB of memory, and it offers a Notepad++ shortcut preset and Notepad++ imports.
+Bareline is a native text and code editor for Windows, with preview builds for Linux and macOS, written in Rust. It is built not to lose your work or change bytes you did not edit: unsaved text is journaled in the background, files keep their exact bytes and line endings, and files too large to hold in memory still open and save. In the measurements below it starts in about 80 ms and idles at about 23 MB of memory, and it offers a Notepad++ shortcut preset and Notepad++ imports.
 
-**Status: preview.** Bareline is in active development. Windows x64 preview builds are published on the [Releases page](https://github.com/TheWoovee/BareLine/releases). They are not code-signed, and automatic updates, extension downloads and extension execution are turned off in these builds. Keep independent backups of important files while you evaluate it.
+**Status: preview.** Bareline is in active development. Preview builds for Windows x64 are published on the [Releases page](https://github.com/TheWoovee/BareLine/releases), and preview releases built by the current release workflow also include Linux x64 and macOS (Apple silicon) downloads, which are earlier in testing (see [Preview limitations](#preview-limitations)). They are not code-signed, and automatic updates, extension downloads and extension execution are turned off in these builds. Keep independent backups of important files while you evaluate it.
 
 Bareline is open source. Most of the code is under the Mozilla Public License 2.0, and the extension SDK is under MIT or Apache-2.0 (see [License](#license)).
 
@@ -58,20 +58,24 @@ Changes since the 0.1.0 previews:
 
 ## Download
 
-Bareline 0.2.0 is published as the preview [v0.2.0-preview.2](https://github.com/TheWoovee/BareLine/releases/tag/v0.2.0-preview.2). Download one of these files:
+Bareline 0.2.0 is published as the preview [v0.2.0-preview.2](https://github.com/TheWoovee/BareLine/releases/tag/v0.2.0-preview.2), which has the Windows files only. Later preview releases also carry the Linux and macOS files. Download one of these files:
 
 | File | Use |
 | --- | --- |
-| `bareline-0.2.0-windows-x64-setup.exe` | The installer. It installs for the current user by default and needs no administrator rights. |
-| `bareline-0.2.0-windows-x64-portable.zip` | The portable copy. Extract it and run `bareline.exe`. Nothing is installed. |
+| `bareline-0.2.0-windows-x64-setup.exe` | The Windows installer. It installs for the current user by default and needs no administrator rights. |
+| `bareline-0.2.0-windows-x64-portable.zip` | The portable Windows copy. Extract it and run `bareline.exe`. Nothing is installed. |
+| `bareline-0.2.0-linux-x64.tar.gz` | Linux on x86-64. Extract it and run `./bareline` in the extracted folder; it keeps its data in that folder. |
+| `bareline-0.2.0-macos-arm64.dmg` | macOS on Apple silicon. Open it and drag Bareline to Applications. It is ad-hoc signed, not notarized. |
 
-The release also contains `SHA-256SUMS`, `PREVIEW-NOTES.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md` and `SBOM.json`. GitHub's automatic **Source code** archives contain the source only, not a program you can run.
+The release also contains `SHA-256SUMS`, `PREVIEW-NOTES.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md` and `SBOM.json`. The separate `THIRD-PARTY-NOTICES.md` and `SBOM.json` describe the Windows build; the Linux tarball and the macOS disk image each carry their own. GitHub's automatic **Source code** archives contain the source only, not a program you can run.
 
 **Check the download.** `SHA-256SUMS` lists the SHA-256 checksum of every other file in the release. Compare the checksum of your download with its line there:
 
 ```powershell
 Get-FileHash .\bareline-0.2.0-windows-x64-setup.exe -Algorithm SHA256
 ```
+
+On Linux, `sha256sum bareline-0.2.0-linux-x64.tar.gz` prints the checksum; on macOS, `shasum -a 256 bareline-0.2.0-macos-arm64.dmg`.
 
 Every file in the release also has a build-provenance attestation from the GitHub workflow that built it. With the [GitHub CLI](https://cli.github.com/), this command checks that a file was built by the repository's release workflow:
 
@@ -80,6 +84,8 @@ gh attestation verify .\bareline-0.2.0-windows-x64-setup.exe --repo TheWoovee/Ba
 ```
 
 **Windows SmartScreen.** Preview builds are not code-signed, so Windows may show **Windows protected your PC** or an unknown-publisher warning. Check the checksum or the attestation first, then choose **More info > Run anyway**. See [Unsigned builds and SmartScreen](#unsigned-builds-and-smartscreen).
+
+**macOS Gatekeeper.** The app is signed ad hoc, without a Developer ID, and is not notarized, so macOS refuses the first launch of a downloaded copy. Check the checksum or the attestation first, then Control-click the app and choose **Open**. On macOS 15 and later, try to open it once, then choose **Open Anyway** in **System Settings > Privacy & Security**. Alternatively, remove the quarantine attribute in Terminal: `xattr -dr com.apple.quarantine /Applications/Bareline.app`.
 
 ## Features
 
@@ -101,13 +107,28 @@ Bareline also has multiple carets, rectangular selection with a column editor, b
 
 ## System requirements
 
+**Windows**
+
 - **Windows 10 22H2 (build 19045) or later, including Windows 11, 64-bit (x64).** The installer refuses older builds and computers that cannot run x64 programs (`MinVersion=10.0.19045`, `ArchitecturesAllowed=x64compatible` in [`packaging/windows/bareline.iss`](packaging/windows/bareline.iss)). The portable ZIP does not check the Windows version, and older builds are untested and unsupported. Windows 11 on Arm can run the x64 build, but this has not been tested.
 - No Visual C++ Redistributable is needed, because the C and C++ runtime is linked statically.
-- No builds are available for Linux, macOS, ARM64 or 32-bit Windows.
+
+**Linux (preview)**
+
+- **64-bit x86 (x86-64) with glibc 2.39 or later.** The tarball is built on Ubuntu 24.04 (GitHub's `ubuntu-latest`) and needs its glibc. That covers Ubuntu 24.04 and later (and distributions based on it, such as Linux Mint 22), Debian 13, Fedora 40 and later, RHEL, AlmaLinux and Rocky Linux 10, and current rolling distributions such as Arch Linux and openSUSE Tumbleweed. Older releases such as Ubuntu 22.04, Debian 12 and RHEL 9 cannot run it; [build from source](#building-on-linux-and-macos-preview) there instead.
+- **An X11 or Wayland desktop session.** Bareline loads libxkbcommon, plus libwayland-client on Wayland or libX11, libX11-xcb, libXcursor, libXi and libxkbcommon-x11 on X11, and links the C++ runtime (libstdc++); desktop installations include them.
+- **The XDG desktop portal** (`xdg-desktop-portal` with a backend such as `xdg-desktop-portal-gtk`, `-gnome` or `-kde`) for the native Open and Save dialogs. Without a portal, Bareline asks for the path inside its window instead.
+- **Fonts.** Bareline uses the installed fonts and falls back to the DejaVu Sans Mono face it bundles. Colour emoji need a colour emoji font such as Noto Color Emoji (`fonts-noto-color-emoji`).
+
+**macOS (preview)**
+
+- **macOS 13 Ventura or later on Apple silicon (M1 or later).** The disk image holds an arm64 build only; there is no build for Intel Macs.
+- The app is ad-hoc signed and not notarized, so Gatekeeper blocks its first launch (see [macOS Gatekeeper](#download)).
+
+No builds are available for Windows on Arm (native) or 32-bit Windows, for Linux on Arm, or for Intel Macs.
 
 ## Install and run
 
-Download the installer or the portable ZIP as described in [Download](#download), and check it against `SHA-256SUMS` before you run it. Later previews are listed on the [Releases page](https://github.com/TheWoovee/BareLine/releases). Their files follow the same pattern, `bareline-<version>-windows-x64-setup.exe` and `bareline-<version>-windows-x64-portable.zip`.
+Download the file for your system as described in [Download](#download), and check it against `SHA-256SUMS` before you run it. Later previews are listed on the [Releases page](https://github.com/TheWoovee/BareLine/releases). Their files follow the same pattern: `bareline-<version>-windows-x64-setup.exe`, `bareline-<version>-windows-x64-portable.zip`, `bareline-<version>-linux-x64.tar.gz` and `bareline-<version>-macos-arm64.dmg`.
 
 ### Installer
 
@@ -123,6 +144,25 @@ The installer installs Bareline for the current user by default, which needs no 
 
 Bareline runs in portable mode when an empty file named `bareline.portable` is next to `bareline.exe`, and the ZIP includes this file. In portable mode, settings, sessions, recovery journals and other profile data are stored in a `data` folder next to the executable. If that folder cannot be written, for example on write-protected media, Bareline shows a warning and does not save the session. It keeps recovery journals under `%LOCALAPPDATA%\Bareline\portable-recovery` until the folder can be written again.
 
+### Linux tarball
+
+1. Extract the archive into a writable folder, then run `bareline` from the folder it creates:
+
+   ```bash
+   tar -xzf bareline-0.2.0-linux-x64.tar.gz
+   cd bareline-0.2.0-linux-x64
+   ./bareline
+   ```
+
+2. Optionally, add Bareline to your desktop's application menu: put the executable on your `PATH` (for example `ln -s "$PWD/bareline" ~/.local/bin/bareline`), copy `bareline.desktop` to `~/.local/share/applications/` and `bareline.png` to `~/.local/share/icons/hicolor/256x256/apps/`.
+
+The tarball includes `bareline.portable`, so, as with the Windows portable ZIP, settings, sessions, recovery journals and logs are kept in a `data` folder next to the executable. Delete `bareline.portable` to use your per-user folders instead (see [Settings and local data](#settings-and-local-data)).
+
+### macOS disk image
+
+1. Open `bareline-0.2.0-macos-arm64.dmg` and drag **Bareline** onto **Applications**. The disk image also holds `LICENSE`, `THIRD-PARTY-NOTICES.md` and `SBOM.json`, which are inside the app as well.
+2. Start Bareline from Applications. The first launch is blocked by Gatekeeper because the app is not notarized; open it as described under [macOS Gatekeeper](#download).
+
 ### Unsigned builds and SmartScreen
 
 Preview executables are not Authenticode-signed. Windows SmartScreen may show **Windows protected your PC** or an unknown-publisher warning. Check the release source and the SHA-256 checksum before you choose **More info > Run anyway**. Builds published by the release workflow also carry GitHub build-provenance attestations, which you can check with `gh attestation verify <file> --repo TheWoovee/BareLine`. The [code signing policy](CODE_SIGNING.md) explains the current status.
@@ -133,23 +173,27 @@ Previews are updated by hand: download a newer release and follow its notes. The
 
 | Launch | Profile folder |
 | --- | --- |
-| Installed copy, or a copy built from source | `%LOCALAPPDATA%\Bareline` |
-| Portable copy (`bareline.portable` next to the executable) | `<folder of bareline.exe>\data` |
+| Windows: installed copy, or a copy built from source | `%LOCALAPPDATA%\Bareline` |
+| Windows or Linux: portable copy (`bareline.portable` next to the executable, as in the ZIP and the tarball) | `<folder of the executable>/data`, with the logs in `data/diagnostics` |
+| Linux without `bareline.portable`, or built from source | Settings in `~/.config/bareline`, sessions and recovery in `~/.local/share/bareline`, logs in `~/.local/state/bareline/logs`; the `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` variables move them |
+| macOS | `~/Library/Application Support/Bareline`, with the logs in `~/Library/Logs/Bareline` |
 
 The profile holds `settings.toml`, `keymap.toml`, `session.json`, and the `recovery`, `macros` and `diagnostics` folders. The `recovery` folder holds the recovery journals and Replace in Files backups and receipts, and the `diagnostics` folder holds local logs. A profile from an older version in `%APPDATA%\Bareline` is migrated. If `LOCALAPPDATA` is not set, Bareline uses `%APPDATA%\Bareline`. Open **Settings** from the **Settings** menu or the Command Palette. From there you can also open the underlying TOML file. The [privacy policy](PRIVACY.md) lists everything Bareline keeps locally.
 
 ### Uninstall
 
-Close Bareline first. To remove an installed copy, open **Settings > Apps > Installed apps** (Windows 11) or **Apps & features** (Windows 10), select Bareline and choose **Uninstall**. This removes the program files and the optional Explorer integration but keeps your profile, so your settings and recovery data survive a reinstall. To remove the profile too, delete `%LOCALAPPDATA%\Bareline` (and `%APPDATA%\Bareline` if it exists) after you have saved anything you need from it. To remove a portable copy, delete its folder. Its `data` folder can hold unsaved work, so check it first.
+Close Bareline first. To remove an installed copy, open **Settings > Apps > Installed apps** (Windows 11) or **Apps & features** (Windows 10), select Bareline and choose **Uninstall**. This removes the program files and the optional Explorer integration but keeps your profile, so your settings and recovery data survive a reinstall. To remove the profile too, delete `%LOCALAPPDATA%\Bareline` (and `%APPDATA%\Bareline` if it exists) after you have saved anything you need from it. To remove a portable copy, delete its folder. Its `data` folder can hold unsaved work, so check it first. On Linux, delete the extracted folder the same way (and the per-user folders above, if you used them). On macOS, move Bareline from Applications to the Trash, and delete `~/Library/Application Support/Bareline` to remove the profile.
 
 ## Command line
 
 ```text
 Usage: bareline [OPTIONS] [--] [FILE ...]
 
-Opens up to 16 files on top of the restored session; further files are listed
-as not opened. A file that does not exist opens as a new document and is
-created when you save it. Use -- before file names that begin with '-'.
+Opens up to 16 files on top of the restored session; File > Recent Files >
+Open Remaining Command-Line Files opens the rest, and a launch handed to a
+running window lists them as not opened. A file that does not exist opens as
+a new document and is created when you save it. Use -- before file names
+that begin with '-'.
 
 Options:
   -                 Read standard input into a new Untitled document, for at
@@ -212,9 +256,9 @@ Some of the default shortcuts are listed below. To see or change every binding, 
 
 ## Build from source
 
-Bareline builds on Windows x64 with the MSVC toolchain.
+On Windows, Bareline builds for x64 with the MSVC toolchain, as described here. For Linux and macOS, see [Building on Linux and macOS (preview)](#building-on-linux-and-macos-preview).
 
-Requirements:
+Requirements on Windows:
 
 - **Rust 1.98.1.** [`rust-toolchain.toml`](rust-toolchain.toml) pins it, with rustfmt and Clippy, and rustup installs it automatically. The workspace `rust-version` is also 1.98.1. Install Rust with [rustup](https://rustup.rs/), using the default `x86_64-pc-windows-msvc` host.
 - **Visual Studio 2022 Build Tools** (or Visual Studio 2022) with the **Desktop development with C++** workload. This workload includes the MSVC x64/x86 build tools (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`) and a Windows SDK. The build compiles the bundled Lexilla lexers (C++17) and PCRE2 (C) with `cc`. CI runs on GitHub's `windows-2022` image.
@@ -250,15 +294,75 @@ pwsh -File .\packaging\windows\build-preview.ps1 -Installer -Iscc "<path to ISCC
 
 The script builds an unsigned release of `bareline` and `bareline-update-helper` with default features off. It also generates `THIRD-PARTY-NOTICES.md` and `SBOM.json`, and writes the packages, `PREVIEW-NOTES.md` and `SHA-256SUMS` to `dist/preview`.
 
-**Linux and macOS.** The application runs only on Windows. On Linux and macOS, `bareline` prints a message and exits. CI builds and tests the shared crates on `ubuntu-latest` and `macos-latest` to keep them platform-neutral. `crates/platform-linux` and `crates/platform-macos` are compile-only adapters, not ports.
+The Linux and macOS packages are built on their own systems with [`packaging/linux/build-preview.sh`](packaging/linux/build-preview.sh) (the tarball) and [`packaging/macos/build-preview.sh`](packaging/macos/build-preview.sh) (the app and disk image, through [`bundle.sh`](packaging/macos/bundle.sh)). Both build `bareline` and `bareline-extension-host` and generate their notices and SBOM with `pwsh` and cargo-cyclonedx 0.5.9, or take them from `--documents <folder>`. The [preview workflow](.github/workflows/preview-release.yml) runs all three packaging scripts, combines the downloads and writes one `SHA-256SUMS` over them (`assemble-preview.ps1`); `verify-preview.ps1 -Platform windows`, `linux` or `macos` checks one platform's files on their own.
+
+**Linux and macOS.** The editor also runs on Linux (x86-64) and macOS as a preview; see the next section to build it. CI builds and tests the shared crates on `ubuntu-latest` and `macos-latest`. `crates/platform-linux` and `crates/platform-macos` hold the platform services of those ports, on top of `crates/platform-posix` and the software renderer in `crates/renderer-soft`.
+
+### Building on Linux and macOS (preview)
+
+This describes building the Linux and macOS ports from source, for contributors. The published Linux and macOS previews are built the same way by the preview workflow (see **Building the packages** above).
+
+**Linux.** On Ubuntu 24.04 (CI uses `ubuntu-latest`), install the build packages and the X11 runtime libraries, then build with Cargo as on Windows:
+
+```bash
+sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-x11-0 libxcursor1
+cargo build -p bareline --release --locked
+```
+
+The smoke run below also uses `xvfb xauth scrot xdotool x11-utils at-spi2-core fonts-dejavu-core fonts-noto-cjk`.
+
+For colour emoji, install `fonts-noto-color-emoji`: the editor draws emoji sequences with the first installed colour emoji font (Noto Color Emoji, Twemoji, JoyPixels or OpenMoji). Without one, each part of an emoji falls back to any installed font that has it (for example Noto Sans Symbols2 from `fonts-noto-core`), and a part that no font has is shown as one box.
+
+**macOS.** Install the Xcode Command Line Tools (`xcode-select --install`) for the C and C++ parts, then run the same `cargo build`.
+
+**Cross type-check for Apple silicon.** From Windows or Linux, crates without a C or C++ build step can be checked for macOS:
+
+```bash
+rustup target add aarch64-apple-darwin
+cargo check --target aarch64-apple-darwin --locked -p bareline-platform-macos -p bareline-platform-posix -p bareline-renderer-soft
+```
+
+The whole editor cannot be checked this way: the Lexilla bridge and PCRE2 compile C and C++ and need the macOS SDK. The `macos-latest` runners build it instead.
+
+**Smoke workflow.** [`port-smoke.yml`](.github/workflows/port-smoke.yml) runs on every push to `port-integration` and on manual dispatch, on `ubuntu-latest` (under Xvfb) and `macos-latest`. It builds the release editor, renders `soft_probe --offscreen`, and launches the editor with a sample file. It waits for the editor's window, then records the launch-to-window time and resident memory and takes a screenshot. Finally it quits the editor with SIGTERM, checks that the exit was clean, and runs the tests of the port crates. [`scripts/port_smoke.py`](scripts/port_smoke.py) does the launch and the measurements, and also runs locally (for example `xvfb-run -a python3 scripts/port_smoke.py --label linux --executable target/debug/bareline --sample <file> --evidence evidence --profile <scratch folder>`). To download the evidence (screenshots, `<os>-metrics.json`, editor output and JUnit test logs) with the GitHub CLI:
+
+```bash
+gh run list --workflow port-smoke.yml --branch port-integration --limit 5
+gh run download <run-id> --name port-smoke-linux --dir port-smoke/linux
+gh run download <run-id> --name port-smoke-macos --dir port-smoke/macos
+```
+
+When `packaging/macos/bundle.sh` exists, the macOS job also uploads the `.app` zip and `.dmg` as `port-smoke-macos-bundle`.
+
+**Journeys workflow.** [`port-journeys.yml`](.github/workflows/port-journeys.yml) runs the 11 ordinary journeys of `tests/e2e/journeys.json` on the same triggers, under Xvfb on `ubuntu-latest` and in the GUI session of `macos-latest`, with an `attempts` input on manual dispatch. `cargo xtask journey <name|ordinary>` drives the release editor: xdotool and ImageMagick on X11, Quartz events and `screencapture` on macOS. Where the Windows procedure reads text through UI Automation, the Linux one checks the bytes the editor saves, the tab's modified marker and visible changes, and lists the reads it could not make. Each step passes, fails with a class (`service_not_wired` names the service the shell has not wired yet), or is skipped with a reason; the summary job collects the failing steps per platform. Locally, from a Linux checkout with a release build (each run writes to its own timestamped folder, so the same command can be repeated, for example after a service is wired):
+
+```bash
+cargo run -p xtask -- journey ordinary --executable=target/release/bareline --attempts=3 --output=target/port-journeys/$(date -u +%Y%m%dT%H%M%SZ) --no-fail
+```
+
+On Linux every attempt runs on a display of its own: the harness starts `Xvfb -displayfd 1 -noreset` (the server picks a free display, so parallel runs never race for one, and it does not reset between an editor's exit and the next launch), and a private session bus with `tests/e2e/fake_portal.py`, a stand-in for the XDG desktop portal that answers each file chooser with the path the journey stages. The chooser window itself is therefore not driven and is listed as a substituted check; the editor's portal request, its "Waiting for the file dialog" state and what it does with the answer are. This needs `xvfb xdotool imagemagick x11-utils dbus python3-gi`; the editor never opens on your own screen. `BARELINE_QA_DISPLAY=inherit` runs on the caller's `DISPLAY` and session bus instead (a real portal's chooser is then driven by typing its location), and `BARELINE_QA_PORTAL=none` leaves the private bus out, so the dialog steps are skipped with that reason. An editor launch the X server refuses is retried twice and then reported with the `environment` class, never as a product failure.
+
+The runner never reuses an existing `<journey>-<attempt>` folder: pointing `--output` at an earlier run's folder fails each journey as a `harness_setup` refusal. A passing journey that did not exercise part of its feature (for example the Replace in Files preview, which needs the folder chooser) is reported as `pass, reduced coverage`, and the missing part is listed under the summary table.
+
+The macOS run needs three privacy permissions for the process that runs the journeys (on a hosted runner, the runner's shell and its Python; locally, the terminal):
+
+| Permission | Used for | When it is missing |
+| --- | --- | --- |
+| Accessibility | posting keystrokes to the editor (`CGEventPostToPid`) | every journey fails its first step with the `environment` class (`AXIsProcessTrusted is false`) |
+| Screen Recording | `screencapture -l` window captures and window titles | every journey fails its first step with the `environment` class (`CGPreflightScreenCaptureAccess is false`) |
+| Automation (System Events) | bringing the editor to the front | not fatal: the first refusal or unanswered prompt (15 s) is recorded under `platform.desktop.automation` and later focus requests are skipped; keystrokes still go to the editor's process |
+
+Every tool the harness waits on (the desktop helper, `osascript`, `screencapture`, `sips`, `ps`, the Python fixtures and, on Linux, xdotool, ImageMagick and `dbus-send`) runs under a deadline, so a permission prompt nobody answers ends as a `timeout` instead of a hang; only `kill` and the editor itself run without one, and the editor is bounded by each step's own waits. The shell still reads its keymap's `Ctrl` from the Control key (the Command mapping in `crates/platform-macos` is not wired yet), so the harness posts the neutral `Primary` as Control. It switches to Command by itself once `apps/bareline/src/shell/settings.rs` stops reading `control_key()` for `Ctrl`; `BARELINE_QA_MAC_PRIMARY=command|control` overrides the choice, which is recorded under `platform.desktop.primary_modifier`.
+
+Each attempt's `result.json` keeps the Windows runner's fields (`journey`, `status` that is `PASS` only when every step passed, `error` for a failure outside the product, and `steps` with `id`, `status` and `observed`), so `tests/e2e/journey_matrix.py` scores it as it scores Windows attempts. The port's own reading is in `outcome` (`passed`, `failed` or `skipped`), each step's `class` and `service`, and the gaps.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `apps/bareline` | The Windows editor application: window, menus, panels and launch handling. |
+| `apps/bareline` | The editor application: window, menus, panels and launch handling, with its Windows, Linux and macOS shells. |
 | `apps/update-helper` | Update helper for configured releases. Its update functions are disabled in preview builds. |
-| `apps/extension-host` | Separate Wasmtime/WASI extension host process. It is not included in preview builds. |
+| `apps/extension-host` | Separate Wasmtime/WASI extension host process. The Windows preview does not include it; the Linux and macOS previews do, with extension loading turned off. |
 | `crates/document` | Text storage, including the paged large-file document model. |
 | `crates/file-io` | Encodings, loading and saving, recovery journals, sessions and profile migration. |
 | `crates/editor-surface` | Editing behavior: carets, selections and line and text transforms. |
@@ -268,13 +372,13 @@ The script builds an unsigned release of `bareline` and `bareline-update-helper`
 | `crates/app`, `crates/ui`, `crates/commands`, `crates/settings` | Application model, view tree and widgets, command registry and keymaps, settings. |
 | `crates/renderer`, `crates/renderer-recording` | Platform-neutral drawing operations, and a recording backend for tests. |
 | `crates/platform`, `crates/platform-windows` | Platform interface and the Windows implementation, including software and Direct2D rendering, UI Automation, spell check and the clipboard. |
-| `crates/platform-linux`, `crates/platform-macos` | Compile-only adapters used to keep shared code portable. |
+| `crates/platform-linux`, `crates/platform-macos`, `crates/platform-posix`, `crates/renderer-soft` | Linux and macOS platform services (file dialogs, clipboard, file watching, appearance), the POSIX services they share, and the portable software renderer. |
 | `crates/macros`, `crates/diagnostics`, `crates/distribution`, `crates/unicode-fold` | Macros and external commands, logging and crash handling, release and update contracts, Unicode case folding. |
 | `crates/extension-sdk`, `crates/extensions-protocol` | Extension SDK and protocol (MIT OR Apache-2.0). |
 | `extensions/` | JSON, XML and Hex components (`json-tools`, `xml-tools`, `hex-view`, `common`). The editor's built-in tools use them. |
 | `native/lexilla-bridge` | C++ bridge to the bundled Lexilla and Scintilla sources. |
 | `vendor/accesskit_windows-0.35.0` | Patched copy of `accesskit_windows`, substituted through `[patch.crates-io]` (see its `PATCHES.md`). |
-| `packaging/` | Windows packaging (Inno Setup script, build, verification, notices and SBOM scripts) and a Scoop manifest. |
+| `packaging/` | Windows packaging (Inno Setup script, build, verification, notices and SBOM scripts), the Linux tarball and macOS app bundle scripts, and a Scoop manifest. |
 | `release/` | Release configuration schema, preview configuration and release-note templates. |
 | `build-support/` | Code shared by the applications' build scripts. |
 | `scripts/` | Release and packaging helpers and their Python tests. |
@@ -284,8 +388,10 @@ The script builds an unsigned release of `bareline` and `bareline-update-helper`
 
 ## Preview limitations
 
-- Builds are not code-signed, so Windows SmartScreen may warn before the first launch (see [Unsigned builds and SmartScreen](#unsigned-builds-and-smartscreen)).
-- Bareline runs only on 64-bit Windows (x64). There are no Linux, macOS, ARM64 or 32-bit builds.
+- Builds are not code-signed, so Windows SmartScreen may warn before the first launch (see [Unsigned builds and SmartScreen](#unsigned-builds-and-smartscreen)). The macOS app is signed ad hoc and not notarized, so Gatekeeper blocks its first launch (see [macOS Gatekeeper](#download)).
+- The Windows build is x64 only, the Linux build x86-64 only and the macOS build Apple silicon only. There are no native Windows on Arm, 32-bit, Linux on Arm or Intel Mac builds.
+- **Linux and macOS are earlier in testing than Windows.** On Linux, the release build has been driven by scripted UI runs: 10 of the 11 ordinary end-to-end journeys pass (the eleventh needs the external-process runner below), and saving, recovery after a forced kill, session restore, the file dialogs (through a stand-in XDG portal and without a portal), file watching and the single-instance hand-off have been checked. Two intermittent failures seen once in those runs, a save race and a portable-mode recovery defect, have not been reproduced since and are still open. On macOS, the editor builds, its tests pass, and it starts, draws its window and quits cleanly on GitHub's hosted runners, but its user interface has not been verified by hand; scripted UI runs there are blocked because the hosted runner refuses synthetic input.
+- **Not yet available on Linux and macOS:** **Run** (F5) and other features that start external programs, printing, spell checking, the system tray and in-app updates. On a Wayland session without the data-control protocol and without XWayland, copy and paste do not work.
 - Clean-machine qualification on each supported Windows version, testing with physical screen readers and input method editors, and final recovery acceptance are still pending.
 - The user interface is in English only.
 - Bareline 1.0 does not load third-party plugins. The JSON, XML and Hex tools are built in. Updates, extension downloads and extension execution are turned off in preview builds.
@@ -309,7 +415,7 @@ The script builds an unsigned release of `bareline` and `bareline-update-helper`
 - **A restored recovery stays listed after you save it.** **Restore** opens the recovered text as a separate document and keeps the recovery. After you save that document, the Recovery Center still lists the recovery at the next start until you choose **Delete**.
 - **Some settings have no effect yet.** They are shown in Settings but not applied. They include **Auto-save interval**, **Keep a backup copy on save** and the Search defaults. Use the options in the Find panel instead.
 
-Please include the text from **Help > About Bareline > Copy diagnostics**, your Windows build, the steps to reproduce and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues). Local logs are in the `diagnostics` folder of your profile.
+Please include the text from **Help > About Bareline > Copy diagnostics**, your Windows build (or your Linux distribution and desktop session, or your macOS version), the steps to reproduce and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues). Local logs are in the `diagnostics` folder of your profile, or on Linux and macOS in the log folder listed under [Settings and local data](#settings-and-local-data).
 
 ## Contributing
 
@@ -328,7 +434,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before you op
 | [MPL-2.0](LICENSE) | All Bareline files not listed in the next row, including `apps/`, the other crates in `crates/`, `native/lexilla-bridge` (the bridge code), `packaging/`, `scripts/`, `tests/`, `xtask/`, `fuzz/` and the documentation. This is the workspace `license` in `Cargo.toml`. |
 | MIT ([LICENSE-MIT](LICENSE-MIT)) OR Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option | `crates/extension-sdk`, `crates/extensions-protocol` and everything in `extensions/`, as stated in [LICENSE-SDK](LICENSE-SDK) and in those crates' `Cargo.toml`. A file whose SPDX header names another license is covered by that license. |
 
-Bundled third-party code keeps its own license: Lexilla and Scintilla (`native/lexilla-bridge/bundled/*/License.txt`), `vendor/accesskit_windows-0.35.0` (MIT OR Apache-2.0), and the Unicode data in `crates/search/data` and `crates/unicode-fold/data` (`LICENSE-UNICODE`). License texts for PCRE2 and sljit, and for crates whose packages omit a license file, are under `packaging/windows/native-licenses` and `packaging/windows/license-overrides`.
+Bundled third-party code keeps its own license: Lexilla and Scintilla (`native/lexilla-bridge/bundled/*/License.txt`), `vendor/accesskit_windows-0.35.0` (MIT OR Apache-2.0), the Unicode data in `crates/search/data` and `crates/unicode-fold/data` (`LICENSE-UNICODE`), and the DejaVu Sans Mono 2.37 font that `crates/renderer-soft` embeds (Bitstream Vera and Arev Fonts licenses, `crates/renderer-soft/fonts/LICENSE-DejaVu.txt`; `packaging/windows/generate-notices.ps1` adds it to the notices of any package that links that crate). License texts for PCRE2 and sljit, and for crates whose packages omit a license file, are under `packaging/windows/native-licenses` and `packaging/windows/license-overrides`.
 
 **Third-party notices.** Release packages include `THIRD-PARTY-NOTICES.md`. [`packaging/windows/generate-notices.ps1`](packaging/windows/generate-notices.ps1) generates it from the locked dependency graph for `x86_64-pc-windows-msvc` and these license texts, and it fails if a license text is missing. `build-preview.ps1` runs it, and you can also run it on its own:
 

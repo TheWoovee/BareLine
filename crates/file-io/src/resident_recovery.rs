@@ -391,14 +391,14 @@ impl ResidentRecovery {
         let job: Job = crate::recovery_seal::tracked(move || {
             let result = (|| -> Result<PagedRecovery, String> {
                 cancel.check().map_err(|e| e.to_string())?;
-                std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+                bareline_platform::private::create_dir_all(&root).map_err(|e| e.to_string())?;
                 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
                 let raw_path = root.join(format!(
                     "resident-input-{}-{}.tmp",
                     std::process::id(),
                     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 ));
-                let mut raw = std::fs::OpenOptions::new()
+                let mut raw = bareline_platform::private::file_options()
                     .create_new(true)
                     .write(true)
                     .open(&raw_path)

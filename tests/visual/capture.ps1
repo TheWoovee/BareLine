@@ -22,7 +22,7 @@ $env:BARELINE_VISUAL_OUTPUT = $Output
 Push-Location $root
 try {
     # The capture test is ignored by default: its pixels depend on the system fonts.
-    cargo test -p bareline --locked --bin bareline -- --ignored --exact windows_app::visual_baselines::capture_whole_window_cells
+    cargo test -p bareline --locked --bin bareline -- --ignored --exact shell::visual_baselines::capture_whole_window_cells
     if ($LASTEXITCODE) { throw 'Offscreen visual capture failed' }
 } finally {
     Pop-Location

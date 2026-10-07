@@ -7,6 +7,51 @@ rust-version.workspace = true
 
 [dependencies]
 bareline-platform = { path = "../platform" }
+# Empty off Unix; the Linux and macOS adapters share its filesystem services.
+bareline-platform-posix = { path = "../platform-posix" }
+# Menu plans read the command registry, menu model and keymap; the extension
+# host's isolation takes its limits from the execution budget and returns the
+# shared process-tree guard. All three are portable workspace crates.
+bareline-commands = { path = "../commands" }
+bareline-extensions-protocol = { path = "../extensions-protocol" }
+bareline-macros = { path = "../macros" }
+
+# AppKit through the same objc2 releases winit 0.30.13 uses, so one copy of
+# each is linked. The features only enable bindings; none adds a dependency.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.5.2"
+objc2-foundation = { version = "=0.2.2", features = [
+    "NSArray",
+    "NSData",
+    "NSGeometry",
+    "NSLocale",
+    "NSObject",
+    "NSString",
+    "NSThread",
+    "NSURL",
+] }
+objc2-app-kit = { version = "=0.2.2", features = [
+    "NSAccessibility",
+    "NSAlert",
+    "NSAppearance",
+    "NSApplication",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSEvent",
+    "NSMenu",
+    "NSMenuItem",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSPasteboard",
+    "NSResponder",
+    "NSSavePanel",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+libc = "=0.2.189"
+rustix = { version = "=1.1.4", features = ["event", "fs", "process"] }
 
 [dev-dependencies]
 winit.workspace = true
@@ -14,7 +59,23 @@ bareline-renderer = { path = "../renderer" }
 bareline-renderer-recording = { path = "../renderer-recording" }
 bareline-ui = { path = "../ui" }
 
+[target.'cfg(unix)'.dev-dependencies]
+bareline-document = { path = "../document" }
+bareline-file-io = { path = "../file-io" }
+
 [[example]]
 name = "recording_probe_macos"
 path = "../platform/recording_probe.rs"
 
+# The end-to-end save test is shared with the Linux adapter.
+[[test]]
+name = "save_pipeline"
+path = "../platform-linux/tests/save_pipeline.rs"
+
+# AppKit objects must be created on the main thread, which the default test
+# harness never runs tests on; this target runs its checks from `main` on
+# macOS and does nothing elsewhere.
+[[test]]
+name = "appkit"
+path = "tests/appkit.rs"
+harness = false

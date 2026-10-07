@@ -61,6 +61,7 @@ impl Workspace {
                             for cleanup in found.cleanups {
                                 self.record_save_cleanup(cleanup);
                             }
+                            self.record_reclaimed_leftovers(found.reclaimed);
                             if count != 0 {
                                 self.message = Some(format!(
                                     "{count} interrupted save transaction(s) are available for compare, Save Elsewhere, or retention."
@@ -146,6 +147,7 @@ impl Workspace {
         result: Result<bareline_file_io::lifecycle::SaveRecovery, FileError>,
     ) {
         if let Ok(found) = result {
+            self.record_reclaimed_leftovers(found.reclaimed);
             self.merge_save_recovery(found.conflicts);
             for cleanup in found.cleanups {
                 self.record_save_cleanup(cleanup);

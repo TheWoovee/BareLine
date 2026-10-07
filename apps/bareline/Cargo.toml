@@ -21,7 +21,6 @@ bareline-app = { path = "../../crates/app" }
 bareline-commands = { path = "../../crates/commands" }
 bareline-diagnostics = { path = "../../crates/diagnostics" }
 bareline-platform = { path = "../../crates/platform" }
-bareline-platform-windows = { path = "../../crates/platform-windows" }
 bareline-renderer = { path = "../../crates/renderer" }
 bareline-settings = { path = "../../crates/settings" }
 bareline-ui = { path = "../../crates/ui" }
@@ -37,14 +36,27 @@ bareline-extensions-protocol = { path = '../../crates/extensions-protocol' }
 
 
 bareline-diff = { path = "../../crates/diff" }
-
-[target.'cfg(windows)'.dependencies]
 winit.workspace = true
+
+# The shell reaches each platform only through `src/shell/native`.
+[target.'cfg(windows)'.dependencies]
+bareline-platform-windows = { path = "../../crates/platform-windows" }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(not(windows))'.dependencies]
+# The portable software renderer (PR-029) and the POSIX file system, process
+# identity, trash and data folders (PR-030).
+bareline-renderer-soft = { path = "../../crates/renderer-soft" }
+bareline-platform-posix = { path = "../../crates/platform-posix" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bareline-platform-linux = { path = "../../crates/platform-linux" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+bareline-platform-macos = { path = "../../crates/platform-macos" }
 
 
 [target.'cfg(windows)'.dev-dependencies]

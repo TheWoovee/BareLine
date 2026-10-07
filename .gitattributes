@@ -5,8 +5,21 @@ crates/distribution/tests/fixtures/authority/** -text
 packaging/windows/license-overrides/cranelift*/** -text
 packaging/windows/license-overrides/pulley*/** -text
 packaging/windows/license-overrides/wasmtime*/** -text
+packaging/windows/license-overrides/block2*/** -text
+packaging/windows/license-overrides/dispatch*/** -text
+packaging/windows/license-overrides/objc*/** -text
 # Fuzz seed corpora are raw bytes; line-ending conversion would change the inputs.
 fuzz/corpus/** -text
 packaging/windows/native-licenses/*/LICEN* -text
 vendor/accesskit_windows-0.35.0/AUTHORS -text
 vendor/accesskit_windows-0.35.0/LICENSE* -text
+# The bundled font and raster goldens are compared byte for byte.
+crates/renderer-soft/fonts/*.ttf -text
+crates/renderer-soft/tests/golden/** -text
+# Shell scripts run on macOS and Linux, also from a Windows checkout.
+packaging/macos/*.sh text eol=lf
+packaging/linux/*.sh text eol=lf
+packaging/preview-identity.sh text eol=lf
+# The desktop entry and icon ship in the Linux tarball unchanged.
+packaging/linux/*.desktop text eol=lf
+packaging/linux/*.png binary

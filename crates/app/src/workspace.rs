@@ -100,6 +100,9 @@ struct ClosedCheck {
 /// Whether a closed document's file is still on disk; runs on a worker only.
 type ClosedPathProbe = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 const MAX_CLOSED_DOCUMENTS: usize = 20;
+/// The message bar's band above the status strip (or the bottom panel): a
+/// 30-pixel bar and its gap. The text view ends above it.
+const MESSAGE_BAND: f32 = 34.0;
 const MAX_OPEN_OUTCOMES: usize = 256;
 /// Unresolved save conflicts and cleanups stay listed (their files remain on disk),
 /// but a burst of failures cannot grow the lists without bound.
@@ -862,6 +865,9 @@ pub struct Workspace {
     failed_save_recovery: std::collections::BTreeSet<PathBuf>,
     replacement_registry: bareline_search::replace_disk::OpenFileRegistry,
     pub message: Option<String>,
+    /// Where the last `draw` put the message bar, in view coordinates; the
+    /// shell keeps notifications above it.
+    pub message_bar: Option<Rect>,
     pub find: crate::find::FindController,
     pub search_panel: crate::search_panel::SearchPanel,
     pub search_focus: bool,
@@ -907,6 +913,12 @@ pub struct Workspace {
     eol_status: std::cell::RefCell<encoding::EolTracker>,
     encoding_failures: Vec<EncodingFailure>,
     save_conflicts: Vec<SaveConflict>,
+    /// Destinations a save found deleted outside Bareline, until the shell takes
+    /// them for the document's banner (LNX-FILE-003).
+    deleted_destinations: Vec<PathBuf>,
+    /// Leftovers of interrupted saves removed when their folder was inspected,
+    /// until the shell reports them (LNX-FILE-007).
+    reclaimed_leftovers: Vec<PathBuf>,
     selected_save_conflict: Option<(PathBuf, (u64, u64))>,
     save_cleanups: Vec<SaveCleanup>,
     selected_save_cleanup: Option<PathBuf>,
@@ -1043,6 +1055,14 @@ pub enum LaunchOpenOutcome {
 pub fn missing_file_message(path: &std::path::Path) -> String {
     format!("File not found: {}", path.display())
 }
+/// The plain notice for an open of a folder: no failed-open tab offers file
+/// actions for it (LNX-CLI-010).
+pub fn folder_path_message(path: &std::path::Path) -> String {
+    format!(
+        "{} is a folder, not a file. Open it with File > Open Workspace Folder…",
+        path.display()
+    )
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecoveryRestoreOutcome {
     Restored { request_id: u64, document: (u64, u64) },
@@ -1070,7 +1090,7 @@ impl Workspace {
         });
         let mut editor = PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone())?;
         editor.configure_owned_spill(
-            std::env::temp_dir().join("Bareline-owned-spill"),
+            self.owned_cache_root("Bareline-owned-spill")?,
             self.file_system.clone(),
             self.source_options(),
         );
@@ -1098,13 +1118,12 @@ impl Workspace {
         self.page_cache_bytes = settings.page_cache_bytes.min(settings.aggregate_cache_bytes);
         self.page_size_bytes = settings.page_size_bytes.min(self.page_cache_bytes);
         let options = self.source_options();
+        let spill = self.owned_cache_root("Bareline-owned-spill");
         for editor in &mut self.editors {
-            if let WorkspaceEditor::Paged(paged) = editor {
-                paged.configure_owned_spill(
-                    std::env::temp_dir().join("Bareline-owned-spill"),
-                    self.file_system.clone(),
-                    options,
-                );
+            if let WorkspaceEditor::Paged(paged) = editor
+                && let Ok(cache) = &spill
+            {
+                paged.configure_owned_spill(cache.clone(), self.file_system.clone(), options);
             }
         }
     }
@@ -1196,6 +1215,7 @@ impl Workspace {
             failed_save_recovery: std::collections::BTreeSet::new(),
             replacement_registry: Default::default(),
             message: None,
+            message_bar: None,
             find: crate::find::FindController::default(),
             search_panel: Default::default(),
             search_focus: false,
@@ -1228,6 +1248,8 @@ impl Workspace {
             eol_status: Default::default(),
             encoding_failures: Vec::new(),
             save_conflicts: Vec::new(),
+            deleted_destinations: Vec::new(),
+            reclaimed_leftovers: Vec::new(),
             selected_save_conflict: None,
             save_cleanups: Vec::new(),
             selected_save_cleanup: None,
@@ -1454,7 +1476,7 @@ impl Workspace {
             captured,
             encoding,
             original,
-            cache: std::env::temp_dir().join("Bareline-owned-spill"),
+            cache: self.owned_cache_root("Bareline-owned-spill")?,
             quota: self.transcode_quota_bytes,
             options: self.source_options(),
             bytes: self.bytes.clone(),
@@ -1520,6 +1542,9 @@ impl Workspace {
         if !self.ensure_io() {
             return false;
         }
+        let Ok(cache) = self.owned_cache_root("Bareline-owned-spill") else {
+            return false;
+        };
         let file = self.tabs[index].file.as_ref().unwrap();
         let Some(service) = self.editors[index].document_service() else {
             return false;
@@ -1534,7 +1559,7 @@ impl Workspace {
             captured: self.editors[index].snapshot().clone(),
             encoding: file.encoding.clone(),
             original: Some((file.path.clone(), file.fingerprint.clone())),
-            cache: std::env::temp_dir().join("Bareline-owned-spill"),
+            cache,
             quota: self.transcode_quota_bytes,
             options: self.source_options(),
             bytes: self.bytes.clone(),
@@ -1759,6 +1784,34 @@ impl Workspace {
     /// the shell moves the closed tab's pin, position and view to it (WSP-05).
     pub fn take_reopened_tabs(&mut self) -> Vec<(u64, u64)> {
         std::mem::take(&mut self.reopened)
+    }
+    /// Paths whose save found the file deleted outside Bareline since the last
+    /// call; the shell shows each document's Recreate banner (LNX-FILE-003).
+    pub fn take_deleted_destinations(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.deleted_destinations)
+    }
+    /// Leftover stages and transactions of interrupted saves removed since the
+    /// last call, for the shell to report (LNX-FILE-007).
+    pub fn take_reclaimed_leftovers(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.reclaimed_leftovers)
+    }
+    fn record_reclaimed_leftovers(&mut self, reclaimed: Vec<PathBuf>) {
+        for removed in reclaimed {
+            eprintln!("event=save_leftover_removed path={}", removed.display());
+            self.reclaimed_leftovers.push(removed);
+        }
+    }
+    /// Keep the path of a save that found its file deleted outside Bareline,
+    /// when it is the document's own path (`own`): a Save As destination that
+    /// vanished is reported by its message only, so no other path gets a
+    /// Recreate banner.
+    fn record_deleted_destination(deleted: &mut Vec<PathBuf>, error: &FileError, own: Option<&std::path::Path>) {
+        if let FileError::DeletedOutside { target } = error
+            && own == Some(target.as_path())
+            && !deleted.contains(target)
+        {
+            deleted.push(target.clone());
+        }
     }
     pub fn open_recovery_tracked(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
         self.open_for_launch(path, Some(request_id), false, true)
@@ -2037,18 +2090,33 @@ impl Workspace {
     pub fn failed_save_recovery(&self) -> Option<&std::path::Path> {
         self.failed_save_recovery.iter().next().map(PathBuf::as_path)
     }
-    fn paged_open_request(&self, path: PathBuf, interpret: Option<bareline_file_io::codecs::Encoding>) -> IoRequest {
-        IoRequest::OpenPagedEncoded(bareline_file_io::lifecycle::PagedOpenRequest {
-            path,
-            bytes: self.bytes.clone(),
-            history: self.history.clone(),
-            cache: std::env::temp_dir().join("Bareline-transcode"),
-            options: bareline_file_io::codecs::disk::DiskOptions {
-                temp_quota_bytes: self.transcode_quota_bytes,
-                interpret,
+    /// `name`, a registered owned-cache root, inside the platform's private
+    /// per-user cache folder (LNX-SEC-002). A folder the platform cannot prove
+    /// private is refused, so no copy of a document is written to a shared one.
+    pub(crate) fn owned_cache_root(&self, name: &str) -> Result<PathBuf, String> {
+        self.file_system
+            .private_cache_root()
+            .map(|root| root.join(name))
+            .map_err(|error| format!("Bareline's private cache folder is unavailable: {error}"))
+    }
+    fn paged_open_request(
+        &self,
+        path: PathBuf,
+        interpret: Option<bareline_file_io::codecs::Encoding>,
+    ) -> Result<IoRequest, String> {
+        Ok(IoRequest::OpenPagedEncoded(
+            bareline_file_io::lifecycle::PagedOpenRequest {
+                path,
+                bytes: self.bytes.clone(),
+                history: self.history.clone(),
+                cache: self.owned_cache_root("Bareline-transcode")?,
+                options: bareline_file_io::codecs::disk::DiskOptions {
+                    temp_quota_bytes: self.transcode_quota_bytes,
+                    interpret,
+                },
+                source_options: self.source_options(),
             },
-            source_options: self.source_options(),
-        })
+        ))
     }
     fn submit_paged(&mut self, request: IoRequest, path: PathBuf, launch_request: Option<u64>, allow_duplicate: bool) {
         self.submit_paged_open(request, path, launch_request, allow_duplicate, None, false);
@@ -2249,7 +2317,13 @@ impl Workspace {
             return Err(error);
         }
         let request = if paged {
-            self.paged_open_request(path.clone(), None)
+            match self.paged_open_request(path.clone(), None) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.failed_opens[position].error.clone_from(&error);
+                    return Err(error);
+                }
+            }
         } else {
             IoRequest::OpenStreaming {
                 path: path.clone(),
@@ -2649,7 +2723,7 @@ impl Workspace {
             return Err("File service unavailable".into());
         }
         let request = if matches!(self.editors[index], WorkspaceEditor::Paged(_)) {
-            self.remote_open_request(path.clone())
+            self.remote_open_request(path.clone())?
         } else {
             IoRequest::OpenStreaming {
                 path: path.clone(),
@@ -3179,6 +3253,22 @@ impl Workspace {
             },
         )
     }
+    /// Save a document whose file was deleted outside Bareline at its own path
+    /// again. The save creates the file only while the name is still free, so a
+    /// file that reappeared meanwhile is never replaced (LNX-FILE-003).
+    pub fn recreate(&mut self, index: usize) -> bool {
+        let (Some(editor), Some(path)) = (self.editors.get(index), self.path(index)) else {
+            return false;
+        };
+        let destination = PreparedDestination {
+            path: path.to_path_buf(),
+            condition: DestinationCondition::MustBeAbsent,
+            consent: DestinationConsent::NotRequired,
+            document: editor.document_identity(),
+            operation: SaveOperation::Save,
+        };
+        self.save_prepared(index, destination)
+    }
     pub fn save_copy(&mut self, index: usize, path: PathBuf) -> bool {
         let Some(editor) = self.editors.get(index) else {
             return false;
@@ -3343,22 +3433,23 @@ impl Workspace {
         }
     }
     pub fn titles(&self) -> Vec<String> {
-        self.editors
-            .iter()
-            .enumerate()
-            .map(|(i, editor)| {
-                let mut title = self.tabs[i]
-                    .file
-                    .as_ref()
-                    .and_then(|file| file.path.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| self.tabs[i].label.clone());
-                if editor.dirty() {
-                    title.push_str(" •");
-                }
-                title
-            })
-            .collect()
+        (0..self.editors.len()).filter_map(|i| self.title(i)).collect()
+    }
+    /// The tab title of the document at `index`: its file name, or its label
+    /// while it has no file, and " •" while it has unsaved changes.
+    pub fn title(&self, index: usize) -> Option<String> {
+        let editor = self.editors.get(index)?;
+        let tab = self.tabs.get(index)?;
+        let mut title = tab
+            .file
+            .as_ref()
+            .and_then(|file| file.path.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| tab.label.clone());
+        if editor.dirty() {
+            title.push_str(" •");
+        }
+        Some(title)
     }
     /// Drain only navigation commands whose target selection has actually been applied.
     pub fn take_acknowledged_commands(&mut self) -> Vec<(String, std::collections::BTreeMap<String, String>)> {
@@ -3712,6 +3803,15 @@ impl Workspace {
             .map(|(path, error)| (path.to_path_buf(), error.to_owned()));
         let banner_band = self.banner_band(active);
         let file_bytes = self.file_bytes(active);
+        let panel_inset = if self.external_search_panel {
+            self.bottom_panel_height
+        } else {
+            self.search_panel.height()
+        };
+        // The message bar takes its own band above the bottom panel instead of
+        // covering the last text lines, so the caret and a match revealed
+        // there stay visible (LNX-EDIT-011).
+        let message_band = if self.message.is_some() { MESSAGE_BAND } else { 0.0 };
         let mut result = match self.editors.get_mut(active) {
             Some(editor) => {
                 match editor {
@@ -3724,11 +3824,7 @@ impl Workspace {
                 editor.viewport_mut().top_inset = find_height + banner_band + notice_band;
                 editor.viewport_mut().file_bytes = file_bytes;
                 editor.viewport_mut().not_loaded = failed_open.is_some();
-                editor.viewport_mut().bottom_inset = if self.external_search_panel {
-                    self.bottom_panel_height
-                } else {
-                    self.search_panel.height()
-                };
+                editor.viewport_mut().bottom_inset = panel_inset + message_band;
                 let language = self
                     .tabs
                     .get(active)
@@ -3885,13 +3981,13 @@ impl Workspace {
         {
             result = Ok(Some(caret));
         }
+        self.message_bar = None;
         if let Some(message) = &self.message {
-            let y = (height - 58.0).max(34.0);
-            ops.push(DrawOp::Fill(
-                bareline_ui::rect(50.0, y, width - 66.0, 30.0),
-                bareline_ui::ELEVATED,
-            ));
+            let y = (height - bareline_ui::STATUS_HEIGHT - panel_inset - MESSAGE_BAND).max(34.0);
+            let bar = bareline_ui::rect(50.0, y, width - 66.0, 30.0);
+            ops.push(DrawOp::Fill(bar, bareline_ui::ELEVATED));
             bareline_ui::text(ops, 64.0, y + 6.0, message, 13.0, bareline_ui::TEXT);
+            self.message_bar = Some(bar);
         }
         result
     }
@@ -3935,6 +4031,49 @@ mod tests {
         }
     }
     use super::*;
+    /// Temporary copies of documents go to the platform's private cache folder,
+    /// never to a shared temporary folder, and a folder the platform refuses
+    /// stops the copy (LNX-SEC-002).
+    #[test]
+    fn document_copies_use_the_platform_private_cache_root() {
+        struct PrivateRoot(Option<PathBuf>);
+        impl LocalFileSystem for PrivateRoot {
+            fn identity(&self, _: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+                Err(std::io::ErrorKind::Unsupported.into())
+            }
+            fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &std::path::Path, _: &std::path::Path, _: bool) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::Unsupported.into())
+            }
+            fn private_cache_root(&self) -> std::io::Result<PathBuf> {
+                self.0.clone().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "other users can change the private folder",
+                    )
+                })
+            }
+        }
+        let root = PathBuf::from("private-cache");
+        let workspace = Workspace::new(Arc::new(|| {}), Arc::new(PrivateRoot(Some(root.clone())))).unwrap();
+        assert_eq!(
+            workspace.owned_cache_root("Bareline-owned-spill").unwrap(),
+            root.join("Bareline-owned-spill")
+        );
+        let Ok(IoRequest::OpenPagedEncoded(request)) = workspace.paged_open_request(PathBuf::from("big.log"), None)
+        else {
+            panic!("a paged open request");
+        };
+        assert_eq!(request.cache, root.join("Bareline-transcode"));
+        let refused = Workspace::new(Arc::new(|| {}), Arc::new(PrivateRoot(None))).unwrap();
+        let error = refused
+            .paged_open_request(PathBuf::from("big.log"), None)
+            .err()
+            .unwrap();
+        assert!(error.contains("private cache folder"), "{error}");
+    }
     pub(super) struct PagedFileSystem;
     impl LocalFileSystem for PagedFileSystem {
         fn cache_directory_guard(
@@ -4232,6 +4371,28 @@ mod tests {
         assert_eq!(workspace.selected_save_conflict(0).unwrap().transaction, transaction);
         drop(workspace);
         remove_test_directory(parent);
+    }
+
+    /// LNX-FILE-003: only a Save of the document's own path that found the file
+    /// deleted offers Recreate; a Save As destination that vanished does not.
+    #[test]
+    fn deleted_destination_is_kept_only_for_the_documents_own_path() {
+        let own = std::path::Path::new("/docs/note.txt");
+        let elsewhere = std::path::PathBuf::from("/other/copy.txt");
+        let mut deleted = Vec::new();
+        let save_as = FileError::DeletedOutside {
+            target: elsewhere.clone(),
+        };
+        super::Workspace::record_deleted_destination(&mut deleted, &save_as, Some(own));
+        super::Workspace::record_deleted_destination(&mut deleted, &save_as, None);
+        assert!(deleted.is_empty());
+        let save = FileError::DeletedOutside {
+            target: own.to_path_buf(),
+        };
+        super::Workspace::record_deleted_destination(&mut deleted, &save, Some(own));
+        super::Workspace::record_deleted_destination(&mut deleted, &save, Some(own));
+        super::Workspace::record_deleted_destination(&mut deleted, &FileError::Cancelled, Some(own));
+        assert_eq!(deleted, vec![own.to_path_buf()]);
     }
 
     #[test]
@@ -4692,6 +4853,31 @@ mod tests {
         assert!(matches!(workspace.closed.last(), Some(ClosedDocument::Reopen(reopen)) if reopen.path == missing));
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
+    }
+    /// LNX-EDIT-011: the message bar covered the last text lines, so the caret
+    /// after Ctrl+End or a match near the end was hidden behind it.
+    #[test]
+    fn the_message_bar_takes_its_own_band_below_the_text() {
+        let (directory, mut workspace) = failed_open_fixture("message-band");
+        workspace.new_document().unwrap();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(workspace.editors[0].viewport().bottom_inset, 0.0);
+        assert_eq!(workspace.message_bar, None);
+        workspace.message = Some("This system does not support spell checking yet".into());
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let bar = workspace.message_bar.expect("the message bar is drawn");
+        let view = workspace.editors[0].viewport();
+        assert_eq!(view.bottom_inset, MESSAGE_BAND);
+        // The text ends at the bar's band; the bar sits on the status strip.
+        let text_bottom = 600.0 - bareline_ui::STATUS_HEIGHT - view.bottom_inset;
+        assert!(bar.y >= text_bottom && bar.y + bar.height <= 600.0 - bareline_ui::STATUS_HEIGHT);
+        workspace.message = None;
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(workspace.editors[0].viewport().bottom_inset, 0.0);
+        assert_eq!(workspace.message_bar, None);
+        drop(workspace);
+        remove_test_directory(directory);
     }
     /// WSP-01: Rename keeps the document itself. A saved document is retargeted
     /// in place, keeping its tab position, identity and undo history; an
@@ -5419,6 +5605,199 @@ mod tests {
         assert!(!source.exists());
         drop(workspace);
         remove_test_directory(root);
+    }
+    /// LNX-PERF-001: a paged view's styling pass styles the view and gathers
+    /// folds a bounded margin (2 MiB) past it, then ends; it no longer lexes to
+    /// the end of the file. Plain text is not lexed at all.
+    #[test]
+    fn paged_styling_pass_ends_a_bounded_margin_past_the_view() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-styling-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.py");
+        // About 3.5 MB of 1 KB functions: fewer folds than one pass keeps.
+        let function = format!("def f():\n{}", "    x = 1\n".repeat(100));
+        std::fs::write(&path, function.repeat(3_500)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            workspace.pump();
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let WorkspaceEditor::Paged(paged) = &workspace.editors[0] else {
+            panic!("the file opens paged")
+        };
+        let view_end = paged.viewport_start().0 + paged.viewport().snapshot().len();
+        let configuration = || crate::language::LanguageConfiguration {
+            policy: Default::default(),
+            definition: None,
+        };
+        let mut styling = crate::styling::Styling::default();
+        styling.refresh_paged(
+            paged.read_handle(),
+            paged.viewport().snapshot(),
+            paged.viewport_start(),
+            bareline_syntax::Language::Python,
+            configuration(),
+            Arc::new(|| {}),
+        );
+        let started = std::time::Instant::now();
+        while !styling.paged_pass_ended() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(120),
+                "the styling pass did not end"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(styling.receipt().unwrap().ready);
+        let (folds, _, partial) = styling.paged_folds.clone().expect("folds near the view");
+        assert!(partial, "folds past the margin are left for a later view");
+        assert!(!folds.is_empty());
+        // The pass ends within one lexer window (256 KiB) past the margin.
+        let reach = view_end + (2 << 20) + bareline_syntax::MAX_REQUEST_BYTES;
+        assert!(folds.iter().all(|fold| fold.body.end.0 <= reach));
+        styling.refresh_paged(
+            paged.read_handle(),
+            paged.viewport().snapshot(),
+            paged.viewport_start(),
+            bareline_syntax::Language::PlainText,
+            configuration(),
+            Arc::new(|| {}),
+        );
+        assert_eq!(styling.receipt(), None);
+        drop(workspace);
+        remove_test_directory(directory);
+    }
+    /// LNX-PERF-001 (ADR-17): a paged view deep in a file is styled. After an
+    /// edit there, its next pass continues from the last verified resume point
+    /// before the view instead of lexing the whole text again, with the colours
+    /// of a pass from byte 0. An edit before the points drops them.
+    #[test]
+    fn paged_styling_resumes_a_deep_view_after_an_edit() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-resume-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.rs");
+        // About 2.6 MB: block comments long enough that many resume points
+        // fall inside one, so the carried lexer state matters.
+        let function = format!(
+            "fn f() {{\n    /* note\n{}    */\n    1\n}}\n",
+            "     * x = 1;\n".repeat(60)
+        );
+        std::fs::write(&path, function.repeat(3_000)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        fn settle(workspace: &mut Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                workspace.pump();
+                if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        settle(&mut workspace);
+        assert!(workspace.editors[0].paged());
+        workspace.editors[0].enqueue(Input::DocumentEnd(false));
+        settle(&mut workspace);
+        // The native grammar styles from byte 0, so its passes leave resume
+        // points from the first window on.
+        let configuration = || crate::language::LanguageConfiguration {
+            policy: bareline_settings::LanguagePolicy {
+                lexer: bareline_settings::LexerPreference::Native,
+                ..Default::default()
+            },
+            definition: None,
+        };
+        let style = |workspace: &Workspace, styling: &mut crate::styling::Styling| {
+            let WorkspaceEditor::Paged(paged) = &workspace.editors[0] else {
+                panic!("the file opens paged")
+            };
+            styling.refresh_paged(
+                paged.read_handle(),
+                paged.viewport().snapshot(),
+                paged.viewport_start(),
+                bareline_syntax::Language::Rust,
+                configuration(),
+                Arc::new(|| {}),
+            );
+            let start = styling.paged_pass_start().expect("a styling pass");
+            let started = std::time::Instant::now();
+            while !styling.paged_pass_ended() {
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(120),
+                    "the styling pass did not end"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let receipt = styling.receipt().unwrap();
+            assert!(receipt.ready && !receipt.unavailable, "the deep view is styled");
+            let spans = styling.result.as_ref().unwrap().spans.clone();
+            assert!(
+                spans
+                    .iter()
+                    .any(|span| span.kind == bareline_syntax::StyleKind::Comment)
+            );
+            (start, paged.viewport_start(), spans)
+        };
+        let document = workspace.editors[0].document_identity().0;
+        let (start, view, _) = style(&workspace, &mut crate::styling::Styling::default());
+        assert_eq!(start, bareline_document::TextOffset(0));
+        assert!(view.0 > 2 << 20, "the view is deep in the file");
+        // Typing at the end keeps every resume point before the view.
+        workspace.editors[0].enqueue(Input::Insert("x".into()));
+        settle(&mut workspace);
+        let (start, view, resumed) = style(&workspace, &mut crate::styling::Styling::default());
+        assert!(start.0 > 0 && start <= view, "{start:?} {view:?}");
+        assert!(
+            view.0 - start.0 <= 2 * bareline_syntax::MAX_REQUEST_BYTES,
+            "{start:?} {view:?}"
+        );
+        crate::styling::Styling::forget_paged_resume_points(document);
+        let (start, _, from_zero) = style(&workspace, &mut crate::styling::Styling::default());
+        assert_eq!(start, bareline_document::TextOffset(0));
+        assert_eq!(resumed, from_zero);
+        // An edit near the start leaves no point before the view.
+        let WorkspaceEditor::Paged(paged) = &mut workspace.editors[0] else {
+            panic!("the file opens paged")
+        };
+        paged
+            .restore_global_selection(
+                bareline_document::TextOffset(3),
+                bareline_document::TextOffset(3),
+                false,
+            )
+            .unwrap();
+        settle(&mut workspace);
+        workspace.editors[0].enqueue(Input::Insert("g".into()));
+        settle(&mut workspace);
+        workspace.editors[0].enqueue(Input::DocumentEnd(false));
+        settle(&mut workspace);
+        let (start, _, _) = style(&workspace, &mut crate::styling::Styling::default());
+        assert_eq!(start, bareline_document::TextOffset(0));
+        drop(workspace);
+        remove_test_directory(directory);
     }
     #[test]
     fn paged_workspace_edits_undoes_navigates_and_saves() {

@@ -208,7 +208,7 @@ impl PagedRecovery {
         status: Arc<Mutex<PagedRecoveryStatus>>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
-        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        bareline_platform::private::create_dir_all(root).map_err(|e| e.to_string())?;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let directory = root.join(format!(
             "paged-{}-{}-{}",
@@ -238,7 +238,7 @@ impl PagedRecovery {
             std::fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
         }
         if let Some(parent) = directory.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            bareline_platform::private::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let writer = RecoveryWriter::create(
             &directory,
@@ -350,23 +350,39 @@ impl PagedRecovery {
                             source_path.display()
                         )
                     })?;
-                    let text = retained.sealed_text_reader(&cancel).map_err(|e| {
-                        format!(
-                            "Recovery could not read the original text of {}: {e}",
-                            source_path.display()
+                    // An unedited baseline is the retained text itself (LNX-DISK-004).
+                    let preparation = if whole_original(&baseline, &store) {
+                        preparation.try_share(
+                            &retained.text_path(),
+                            retained.text_len,
+                            retained.sealed_text_hash(),
+                            platform.as_ref(),
                         )
-                    })?;
-                    let mut text = SnapshotRead {
-                        source: text,
-                        store: store.clone(),
-                        foreign_readers: std::collections::BTreeMap::new(),
-                        snapshot: baseline,
-                        offset: 0,
-                        cancellation: cancel.clone(),
+                    } else {
+                        Err(preparation)
                     };
-                    let prepared = preparation
-                        .copy(&mut text, || Ok(true), &cancel)
-                        .map_err(|e| format!("Copy paged baseline into {}: {e}", directory.display()))?;
+                    let prepared = match preparation {
+                        Ok(prepared) => prepared,
+                        Err(preparation) => {
+                            let text = retained.sealed_text_reader(&cancel).map_err(|e| {
+                                format!(
+                                    "Recovery could not read the original text of {}: {e}",
+                                    source_path.display()
+                                )
+                            })?;
+                            let mut text = SnapshotRead {
+                                source: text,
+                                store: store.clone(),
+                                foreign_readers: std::collections::BTreeMap::new(),
+                                snapshot: baseline,
+                                offset: 0,
+                                cancellation: cancel.clone(),
+                            };
+                            preparation
+                                .copy(&mut text, || Ok(true), &cancel)
+                                .map_err(|e| format!("Copy paged baseline into {}: {e}", directory.display()))?
+                        }
+                    };
                     crate::session::publish_json(
                         &directory.join("paged-source.json"),
                         &serde_json::to_vec(&serde_json::json!({"version":1,"source":name}))
@@ -1396,7 +1412,7 @@ fn prepare_recipe<'a>(
             Some(continued) => continued,
             None => {
                 let store = Box::new(OwnedStore::new(revision));
-                let file = std::fs::OpenOptions::new()
+                let file = bareline_platform::private::file_options()
                     .create_new(true)
                     .write(true)
                     .open(directory.join(&store.name))?;
@@ -1426,7 +1442,7 @@ fn prepare_recipe<'a>(
         let mut next_index = std::collections::BTreeMap::new();
         let name = format!("root-{revision}.json");
         let mut file = RecipeQuotaFile {
-            file: std::fs::OpenOptions::new()
+            file: bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(directory.join(&name))?,
@@ -2226,6 +2242,24 @@ fn read_pieces(bytes: &[u8]) -> Result<Vec<RootPiece>, serde_json::Error> {
     Ok(pieces)
 }
 
+/// `snapshot` is exactly the sealed text of `store`: its own original pieces, in
+/// order, over all of it, so a copy of that text is a copy of the snapshot.
+fn whole_original(snapshot: &bareline_document::paged::PagedSnapshot, store: &DiskDecoded) -> bool {
+    if store.text_len == 0 || snapshot.len() as u64 != store.text_len {
+        return false;
+    }
+    let mut next = 0;
+    for piece in snapshot.pieces_from(0).1 {
+        let bareline_document::paged::PagedPiece::Original { source, range } = piece else {
+            return false;
+        };
+        if range.start != next || !matches!(store.foreign_source(source.generation()), Ok(None)) {
+            return false;
+        }
+        next = range.end;
+    }
+    next == store.text_len
+}
 struct SnapshotRead {
     source: crate::codecs::disk::SealedStoreRead,
     store: DiskDecoded,
@@ -2759,6 +2793,9 @@ mod sweep_tests {
         for directory in [&retired, &referenced, &live] {
             crate::recovery::discard(directory, &Platform).unwrap();
         }
+        // An exit while the cleanup proof was being published leaves its staged
+        // file in the retired journal; the next start still removes the journal.
+        fs::write(retired.join(".bareline-session-424244-6.tmp"), b"").unwrap();
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join("manifest.json"), b"{}").unwrap();
         let references: std::collections::HashSet<PathBuf> = [referenced.clone()].into_iter().collect();

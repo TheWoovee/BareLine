@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: MPL-2.0
-# Generate local notices from the exact locked Windows dependency graph and vendored
-# license texts. Refuses missing evidence; does not invent third-party license grants.
+# Generate local notices from the exact locked dependency graph of one target (Windows
+# x64 unless -Target names the Linux or macOS preview) and vendored license texts.
+# Refuses missing evidence; does not invent third-party license grants.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$OutputFile,
     [string]$SdkOutputFile,
     [ValidateNotNullOrEmpty()][ValidateSet('bareline','bareline-update-helper','bareline-extension-host')]
-    [string[]]$Roots = @('bareline','bareline-update-helper','bareline-extension-host')
+    [string[]]$Roots = @('bareline','bareline-update-helper','bareline-extension-host'),
+    [ValidateSet('x86_64-pc-windows-msvc','x86_64-unknown-linux-gnu','aarch64-apple-darwin')]
+    [string]$Target = 'x86_64-pc-windows-msvc'
 )
 $ErrorActionPreference = 'Stop'
-$metadataText = & cargo metadata --format-version 1 --locked --offline --filter-platform x86_64-pc-windows-msvc
+$platformName = @{ 'x86_64-pc-windows-msvc' = 'Windows x64'; 'x86_64-unknown-linux-gnu' = 'Linux x64'; 'aarch64-apple-darwin' = 'macOS arm64' }[$Target]
+$metadataText = & cargo metadata --format-version 1 --locked --offline --filter-platform $Target
 if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
 $metadata = ($metadataText -join "`n") | ConvertFrom-Json
 foreach ($name in $roots) { if (-not ($metadata.packages | Where-Object name -eq $name)) { throw "Missing packaged Cargo root: $name" } }
@@ -27,7 +31,7 @@ while ($pending.Count) {
 $parts = [Collections.Generic.List[string]]::new()
 $parts.Add('# Third-party notices')
 $parts.Add('Packaged Cargo roots: ' + (($Roots | Sort-Object -Unique) -join ', ') + '.')
-$parts.Add('Generated from Cargo.lock and registry package license files for Windows x64. This is local source-license evidence; release review and SBOM remain required.')
+$parts.Add("Generated from Cargo.lock and registry package license files for $platformName. This is local source-license evidence; release review and SBOM remain required.")
 $missing = [Collections.Generic.List[string]]::new()
 # Cargo path patches have no registry source, but still require upstream notices.
 $vendorRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../vendor')) + [IO.Path]::DirectorySeparatorChar
@@ -72,6 +76,26 @@ foreach ($component in $native.Components) {
         $parts.Add("### $(Split-Path -Leaf $relative)")
         $parts.Add([IO.File]::ReadAllText((Resolve-Path -LiteralPath $license).Path))
     }
+}
+# Data files that workspace crates embed with include_bytes! have no registry
+# license file either; each is listed once its embedding crate is packaged.
+$bundledData = @(
+    @{
+        Name = 'DejaVu Sans Mono 2.37 font'
+        License = 'Bitstream Vera and Arev Fonts licenses; DejaVu changes are in the public domain'
+        LicenseFile = 'crates/renderer-soft/fonts/LICENSE-DejaVu.txt'
+        CargoPackage = 'bareline-renderer-soft'
+    }
+)
+foreach ($data in $bundledData) {
+    if (-not ($metadata.packages | Where-Object name -eq $data.CargoPackage)) { throw "Unknown Cargo package for bundled $($data.Name): $($data.CargoPackage)" }
+    if (-not @($metadata.packages | Where-Object { $ids.Contains($_.id) -and $_.name -eq $data.CargoPackage }).Count) { continue }
+    $license = Join-Path $PSScriptRoot "../../$($data.LicenseFile)"
+    if (-not (Test-Path -LiteralPath $license -PathType Leaf)) { $missing.Add("bundled $($data.Name)"); continue }
+    $parts.Add("## Bundled $($data.Name)")
+    $parts.Add("Declared license: $($data.License). Embedded by $($data.CargoPackage).")
+    $parts.Add("### $(Split-Path -Leaf $data.LicenseFile)")
+    $parts.Add([IO.File]::ReadAllText((Resolve-Path -LiteralPath $license).Path))
 }
 if ($missing.Count) { throw ('Missing upstream license texts: ' + ($missing -join ', ')) }
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputFile), ($parts -join "`n`n"), [Text.UTF8Encoding]::new($false))

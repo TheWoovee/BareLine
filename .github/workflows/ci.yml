@@ -170,6 +170,10 @@ jobs:
       # Use the actual host compiler (including native C++ build scripts), not
       # --cfg simulation. Covers helpers/host and every neutral workspace target.
       - run: cargo check --workspace --all-targets --locked
+      # The application shell builds on every OS (PR-028); on Linux and macOS it
+      # paints with the software renderer and saves through the POSIX file
+      # system, with stand-ins for the services the adapters do not provide yet.
+      - run: cargo build -p bareline --locked
       - name: Complete Clippy census and exact debt ratchet
         shell: pwsh
         run: |
@@ -196,7 +200,9 @@ jobs:
             target/clippy-census.stderr.log
             target/clippy-ratchet.log
       - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
-      # Includes shared RecordingBackend UI and portable state/path tests.
+      # Includes shared RecordingBackend UI and portable state/path tests, and
+      # the shell's own tests (its native seam among them) on the POSIX file
+      # system and path trust.
       - name: Workspace tests (all failures reported)
         id: workspace_tests
         shell: pwsh

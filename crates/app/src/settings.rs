@@ -130,6 +130,19 @@ impl SettingsController {
         }
         Some(entries)
     }
+    /// The top of the open page's footer (its status line and Revert, Retry
+    /// and Reset, with the external-change row above them when shown), as
+    /// last drawn; notifications stay above it.
+    pub fn footer_top(&self) -> Option<f32> {
+        if !self.open || self.revert == Rect::default() {
+            return None;
+        }
+        Some(if self.external_reload == Rect::default() {
+            self.revert.y
+        } else {
+            self.external_reload.y.min(self.revert.y)
+        })
+    }
     /// True when the saved font family is not among the installed families.
     pub fn missing_font(&self) -> Option<String> {
         let family = self.effective().editor_font_family;

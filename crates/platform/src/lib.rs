@@ -77,6 +77,10 @@ pub enum SaveStrategy {
     RenameReplace,
     /// Rewrite the existing file object so hard and symbolic links stay intact.
     InPlace,
+    /// The file is writable but its folder accepts no new entries: rewrite the
+    /// file in place and keep the previous version in a private folder outside
+    /// it (the profile) until the save is verified.
+    InPlaceLockedFolder,
     /// Saving here is unavailable; Save Copy to another location still works.
     CopyOnly,
 }
@@ -106,11 +110,18 @@ impl CapabilityReport {
             SaveStrategy::InPlace => Some(
                 "This file has other links. Saving rewrites it in place so every link sees the change; the previous version is kept until the save is verified.",
             ),
+            SaveStrategy::InPlaceLockedFolder => Some(
+                "This folder is not writable; saving rewrites the file in place and keeps the previous version in Bareline's recovery folder until the save is verified.",
+            ),
             SaveStrategy::RenameReplace => Some(
                 "This drive cannot replace files atomically. Saving goes through a temporary file and keeps the previous version until the save is verified.",
             ),
-            SaveStrategy::Transactional if self.redirected => {
+            // Junctions exist only on Windows (LNX-EDIT-010).
+            SaveStrategy::Transactional if self.redirected && cfg!(windows) => {
                 Some("Opened through a junction or symbolic link. Saving writes to the linked location.")
+            }
+            SaveStrategy::Transactional if self.redirected => {
+                Some("Opened through a symbolic link. Saving writes to the linked location.")
             }
             SaveStrategy::Transactional => None,
         }
@@ -405,6 +416,37 @@ pub trait LocalFileSystem: Send + Sync {
         ))
     }
 
+    /// The per-user folder that holds this user's temporary copies of documents:
+    /// the registered owned-cache roots (`Bareline-transcode`, spill and staging)
+    /// are created inside it, and startup sweeps it for copies whose process ended.
+    /// It must be private to the user; an implementation refuses a folder it cannot
+    /// prove private rather than fall back to a shared one. The default is the
+    /// system temporary folder, which on Windows is `%LOCALAPPDATA%\Temp` with a
+    /// user-only ACL.
+    fn private_cache_root(&self) -> std::io::Result<PathBuf> {
+        Ok(std::env::temp_dir())
+    }
+
+    /// Give the new file `target` the exact bytes of the sealed file `source`
+    /// without writing them again: a copy-on-write clone where the file system has
+    /// one, or another link to the same file. Both names stay sealed: nobody may
+    /// write either of them afterwards. Once this returns, `target` is as durable
+    /// as the synced `source` (a clone is synced), so a manifest naming it may be
+    /// published at once. `Unsupported` (the default) or any other
+    /// error leaves no `target` behind, and the caller copies the bytes instead.
+    fn share_sealed_file(&self, _source: &Path, _target: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "sealed file sharing unavailable",
+        ))
+    }
+    /// `share_sealed_file` is expected to succeed between files in one folder, so
+    /// a producer may skip writing a copy as it goes and share it once sealed. A
+    /// failed share still falls back to copying.
+    fn shares_sealed_files(&self) -> bool {
+        false
+    }
+
     /// Keep bytes and directory identity immutable against write/delete until handle drop.
     /// Platforms without this capability must refuse sealed-store export.
     fn open_sealed_read(&self, _: &Path) -> std::io::Result<std::fs::File> {
@@ -500,6 +542,34 @@ pub trait LocalFileSystem: Send + Sync {
     /// Reacquire exact cleanup ownership for a verified interrupted cleanup.
     fn resume_commit_cleanup(&self, _: &CommitRecovery) -> std::io::Result<Option<CommitReceipt>> {
         Ok(None)
+    }
+    /// A private folder outside every document folder for the stage and the
+    /// retained previous version of a save whose destination folder accepts no
+    /// new entries ([`SaveStrategy::InPlaceLockedFolder`]), created private when
+    /// missing if `create` (a save), otherwise only where it exists (an
+    /// inspection). `None` where the platform never saves that way. Inspecting a
+    /// document's folder also reports the transactions kept here for its files.
+    fn locked_folder_stage(&self, _create: bool) -> Option<PathBuf> {
+        None
+    }
+    /// `folder` is on storage only this machine writes (no network, cloud or
+    /// shared mount), so a save stage whose owner process is provably gone and
+    /// that no process holds may be reclaimed without waiting.
+    fn local_storage(&self, _: &Path) -> bool {
+        false
+    }
+    /// Remove save transactions in `parent` that an ended process left before
+    /// they held a complete editor version (never one a live process holds), and
+    /// return the folders removed. Transactions [`Self::locked_folder_stage`]
+    /// holds for files of `parent` count as the folder's.
+    fn reclaim_commit_transactions(&self, _: &Path) -> std::io::Result<Vec<PathBuf>> {
+        Ok(Vec::new())
+    }
+    /// `path` is a save stage that no process holds: a live save keeps an
+    /// exclusive lock on its stage. The name is never followed and a FIFO never
+    /// waited on. `false` where the platform cannot tell; the age guard decides.
+    fn stage_unheld(&self, _: &Path) -> bool {
+        false
     }
     /// Compatibility primitive for platform adapters that do not participate in document saves.
     fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()>;
@@ -853,6 +923,25 @@ mod tests {
             assert!(!RestrictedPaths.permits(&path, op));
         }
     }
+
+    /// LNX-EDIT-010: junctions are a Windows concept; elsewhere the link is
+    /// a symbolic link.
+    #[test]
+    fn a_redirected_location_is_named_with_this_systems_link_kind() {
+        let report = CapabilityReport {
+            atomic_replace: Support::Supported,
+            acl: Support::Supported,
+            ads: Support::Supported,
+            hard_links: Support::Supported,
+            storage: StorageKind::Local,
+            save: SaveStrategy::Transactional,
+            redirected: true,
+            cloud: false,
+        };
+        let notice = report.notice().unwrap();
+        assert!(notice.contains("symbolic link"), "{notice}");
+        assert_eq!(notice.contains("junction"), cfg!(windows), "{notice}");
+    }
 }
 
 mod paths;
@@ -866,3 +955,5 @@ pub use watch::{WatchEvent, WatchKind};
 pub mod accessibility;
 
 pub mod printing;
+
+pub mod private;

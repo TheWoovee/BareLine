@@ -154,6 +154,14 @@ impl Workspace {
             {
                 self.complete_missing_launch(pending)
             }
+            // Reading a folder fails with EISDIR on Linux and macOS.
+            IoCompletion::Open(Err(FileError::Io(error)))
+                if error.kind() == std::io::ErrorKind::IsADirectory
+                    && pending.open_path.is_some()
+                    && pending.recovery_restore_request.is_none() =>
+            {
+                self.complete_folder_open(pending)
+            }
             IoCompletion::Open(Err(error)) | IoCompletion::Save(Err(error)) => self.complete_io_failure(pending, error),
             IoCompletion::SaveRecoveryInspection { result, .. } => self.complete_queued_save_recovery(result),
             IoCompletion::SaveCleanupRetried { .. } => {}
@@ -205,7 +213,17 @@ impl Workspace {
             // Interpret As keeps its chosen encoding on the paged path.
             Some(path) => {
                 let interpret = pending.reload.as_ref().and_then(|reload| reload.interpret);
-                let request = self.paged_open_request(path.clone(), interpret);
+                let request = match self.paged_open_request(path.clone(), interpret) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.resume_abandoned_reload(pending.reload.as_ref());
+                        self.settle_failed_open(pending.preview.as_ref(), Some(path), pending.keep_failed_tab, &error);
+                        self.message = Some(error.clone());
+                        self.record_launch_open(launch_request, Err(error.clone()));
+                        self.record_recovery_restore(pending.recovery_restore_request, Err(error));
+                        return;
+                    }
+                };
                 let before = self.pending_io.len();
                 self.submit_paged_open(
                     request,
@@ -246,6 +264,17 @@ impl Workspace {
         };
         self.record_launch_open(launch_request, result);
     }
+    /// An open of a folder: a plain notice instead of a failed-open tab whose
+    /// Retry and large-file actions cannot help (LNX-CLI-010). A failed tab
+    /// that was retried closes too, since its path now names a folder.
+    fn complete_folder_open(&mut self, pending: PendingIo) {
+        self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
+        self.resume_abandoned_reload(pending.reload.as_ref());
+        self.discard_preview(pending.preview.as_ref());
+        let error = folder_path_message(pending.open_path.as_deref().unwrap_or(std::path::Path::new("")));
+        self.message = Some(error.clone());
+        self.record_launch_open(pending.launch_request, Err(error));
+    }
     /// An open or save that failed.
     pub(super) fn complete_io_failure(&mut self, pending: PendingIo, error: FileError) {
         let launch_request = pending.launch_request;
@@ -258,6 +287,13 @@ impl Workspace {
         if let Some(conflict) = error.save_conflict() {
             self.record_save_conflict(conflict);
         }
+        let own = pending
+            .save
+            .as_ref()
+            .and_then(|(tab, _, _)| self.tab_index(*tab))
+            .and_then(|index| self.path(index))
+            .map(std::path::Path::to_path_buf);
+        Self::record_deleted_destination(&mut self.deleted_destinations, &error, own.as_deref());
         self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
         self.resume_abandoned_reload(pending.reload.as_ref());
         // A user-cancelled open drops its tab; any other failure keeps it.
