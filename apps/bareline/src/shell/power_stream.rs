@@ -35,6 +35,11 @@ enum Operation {
     Input(Input),
     Clipboard(bool),
 }
+/// The progress message shown while `operation` is staged, if any: only a copy
+/// or cut reads the selected text first (LNX-EDIT-006).
+fn preparation_status(operation: &Operation) -> Option<&'static str> {
+    matches!(operation, Operation::Clipboard(_)).then_some("Preparing selected text…")
+}
 #[derive(Clone)]
 struct Target {
     index: usize,
@@ -709,13 +714,18 @@ impl Shell {
             notify();
         })
         .map_err(|_| POOL_BUSY.to_string())?;
+        // Only a clipboard read of the selection reports progress here; typing
+        // and the other staged edits show their result when it lands, so no
+        // message is left behind once they finish (LNX-EDIT-006).
+        if let Some(status) = preparation_status(&operation) {
+            self.power.status = status.into();
+        }
         self.power.stream.worker = Some(Worker {
             target,
             operation,
             cancel,
             result,
         });
-        self.power.status = "Preparing selected text…".into();
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
@@ -1308,6 +1318,8 @@ impl Shell {
                     Err(error) => self.power.status = error,
                     Ok(()) => {
                         self.power.copied(&text);
+                        // The copy is done: its progress message goes with it.
+                        self.power.status.clear();
                         if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
                             self.power.status = warning;
                         }
@@ -1565,5 +1577,91 @@ mod replay_terminal_tests {
             runtime.stream.replay.as_ref().unwrap().terminal,
             Some(Err("Staging quota exceeded".into()))
         );
+    }
+}
+
+#[cfg(test)]
+mod paged_typing_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn settle(shell: &mut Shell) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let workspace = shell.workspace.as_mut().unwrap();
+            workspace.pump();
+            let idle = !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy);
+            shell.power_pump();
+            // The staged keystroke's progress is never reported (LNX-EDIT-006).
+            assert_ne!(shell.power.status, "Preparing selected text…");
+            assert_ne!(
+                shell.workspace.as_ref().unwrap().message.as_deref(),
+                Some("Preparing selected text…")
+            );
+            if idle
+                && shell.power.stream.worker.is_none()
+                && shell.power.stream.receipt.is_none()
+                && !shell
+                    .workspace
+                    .as_ref()
+                    .unwrap()
+                    .editors
+                    .iter()
+                    .any(WorkspaceEditor::busy)
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{:?}", shell.power.status);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// LNX-EDIT-006: keystrokes in a paged document go through the power stream.
+    /// They leave no "Preparing selected text…" message, and each one is drawn
+    /// where it was typed at the end of a full window (Ctrl+End), with the caret
+    /// after it and the window where it was.
+    #[test]
+    fn paged_typing_echoes_in_place_without_a_preparing_message() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-typing-{}-{}",
+            std::process::id(),
+            power::consumer::next_receipt_sequence()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("big.txt");
+        std::fs::write(&path, "abc\n".repeat(40_000)).unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        settle(&mut shell);
+        assert!(shell.workspace.as_ref().unwrap().editors[0].paged());
+        shell.workspace.as_mut().unwrap().editors[0].enqueue(Input::DocumentEnd(false));
+        settle(&mut shell);
+        let start = match &shell.workspace.as_ref().unwrap().editors[0] {
+            WorkspaceEditor::Paged(paged) => paged.viewport_start(),
+            WorkspaceEditor::Resident(_) => unreachable!(),
+        };
+        for (typed, shown) in [("A", "A"), ("B", "AB"), ("C", "ABC")] {
+            shell.workspace.as_mut().unwrap().editors[0].enqueue(Input::Insert(typed.into()));
+            settle(&mut shell);
+            let WorkspaceEditor::Paged(paged) = &shell.workspace.as_ref().unwrap().editors[0] else {
+                unreachable!()
+            };
+            assert_eq!(paged.viewport_start(), start);
+            let local = paged.viewport().snapshot();
+            let last = local.line_range(local.line_count() - 1).unwrap();
+            assert_eq!(local.read(last.clone(), 64).unwrap(), shown);
+            assert_eq!(paged.viewport().selection.caret - last.start.0, shown.len());
+        }
+        assert!(shell.power.status.is_empty());
+        assert_eq!(shell.workspace.as_ref().unwrap().message, None);
+        shell.workspace = None;
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

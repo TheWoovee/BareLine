@@ -774,12 +774,23 @@ impl Shell {
         true
     }
     pub(super) fn power_pump(&mut self) -> bool {
+        let progress = self.power.status.clone();
         let drag_changed = self.power_drag_pump();
         let streaming_changed = self.power_stream_pump() | drag_changed;
         if streaming_changed && !self.power.status.is_empty() {
             if let Some(workspace) = self.workspace.as_mut() {
                 workspace.message = Some(self.power.status.clone());
             }
+        }
+        // A progress message the finished operation cleared is not left in the
+        // message bar either (LNX-EDIT-006).
+        if streaming_changed
+            && self.power.status.is_empty()
+            && !progress.is_empty()
+            && let Some(workspace) = self.workspace.as_mut()
+            && workspace.message.as_deref() == Some(progress.as_str())
+        {
+            workspace.message = None;
         }
         if let Some((snapshot, args, mut next, last, selection)) = self.power.metric_job.take() {
             let Some(workspace) = self.workspace.as_mut() else {

@@ -26,6 +26,8 @@ use std::{
     },
 };
 const WINDOW: usize = 64 * 1024;
+/// Bytes after the caret an edit's window keeps loaded (LNX-EDIT-006).
+const EDIT_ECHO_TAIL: usize = 4 * 1024;
 /// Number of shared I/O threads. A long-running job (e.g. a full-file Save) occupies
 /// one thread, so other paged documents keep making progress on the remaining threads
 /// instead of waiting behind a single global queue.
@@ -3533,6 +3535,8 @@ impl PagedEditorSurface {
                         let mut retry_recovery = false;
                         let mut recovery_edits = Vec::new();
                         let mut streaming_protected = false;
+                        // Typing and prepared edits keep the window where it is.
+                        let in_place = matches!(&action, Action::Edit { .. } | Action::Prepared(..));
                         match action {
                             Action::Tail {
                                 platform,
@@ -4035,12 +4039,26 @@ impl PagedEditorSurface {
                         }
                         start = start.min(snapshot.len());
                         caret = caret.min(snapshot.len());
+                        // An edit's window keeps its start and grows to show the caret
+                        // and what follows it, so text typed past the end of a full
+                        // window is drawn where it was typed instead of the view
+                        // re-centring on the caret (LNX-EDIT-006). Past twice a window
+                        // it re-centres on the caret, as Undo does.
+                        let mut count = WINDOW;
+                        if in_place {
+                            let reach = caret.saturating_sub(start).saturating_add(EDIT_ECHO_TAIL);
+                            if reach > 2 * WINDOW {
+                                start = caret.saturating_sub(WINDOW / 2);
+                            } else {
+                                count = count.max(reach);
+                            }
+                        }
                         let window = read_window(
                             &mut opened,
                             &mut tail,
                             &snapshot,
                             start,
-                            WINDOW,
+                            count,
                             true,
                             &budget,
                             &cancellation,
@@ -4247,6 +4265,11 @@ impl PagedEditorSurface {
                         // The commit's window shows its text without folds until
                         // the projection queued below lands; carried folds keep
                         // their state meanwhile (PED-07).
+                        // A commit that keeps an unmapped window's start keeps its
+                        // scroll too: the text stays where it was and only scrolls
+                        // when the caret leaves the screen (LNX-EDIT-006).
+                        let keep_scroll =
+                            moves_selection && self.mapped.is_none() && window.range().start.0 == self.viewport_start;
                         self.mapped = None;
                         self.mapping_job = None;
                         self.reveal_mapping = false;
@@ -4255,11 +4278,16 @@ impl PagedEditorSurface {
                         self.viewport_start = window.range().start.0;
                         self.surface.snapshot = snapshot;
                         self.surface.layout_revision = None;
-                        self.surface.scroll_y = 0.0;
+                        if !keep_scroll {
+                            self.surface.scroll_y = 0.0;
+                        }
                         if std::mem::take(&mut self.resnap_selection) {
                             self.snap_selection_to_window();
                         }
                         self.project_global_selection();
+                        if keep_scroll && self.caret_in_viewport() {
+                            self.surface.reveal_caret = true;
+                        }
                         if std::mem::take(&mut self.reveal_after_read) && self.caret_in_viewport() {
                             self.surface.reveal_caret = true;
                         }
@@ -7731,6 +7759,88 @@ mod peer_tests {
         drain(&mut view);
         assert_eq!(document_text(&view, &budget), "abtext\n");
         assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        drop(view);
+        remove_fixture_root(&root);
+    }
+    /// The last line of the displayed window, and the caret's local offset.
+    fn last_displayed_line(view: &PagedEditorSurface) -> (String, usize) {
+        let local = view.surface.snapshot();
+        let last = local.line_range(local.line_count() - 1).unwrap();
+        let text = local.read(last.clone(), 64).unwrap();
+        (text, view.surface.selection.caret - last.start.0)
+    }
+    /// LNX-EDIT-006: typing at the end of a full window (Ctrl+End in a large
+    /// file) shows every typed character where it was typed, with the caret
+    /// after it. The window keeps its start and its scroll and grows over the
+    /// caret, instead of the caret falling past its end.
+    #[test]
+    fn typing_past_a_full_window_echoes_every_character_in_place() {
+        let (root, mut view, budget) = paged_fixture("echo-direct", &"abc\n".repeat(40_000));
+        let length = view.snapshot().len();
+        view.enqueue(Input::DocumentEnd(false));
+        drain(&mut view);
+        let start = view.viewport_start();
+        assert_eq!(start, TextOffset(length - WINDOW));
+        view.surface.scroll_y = 120.0;
+        for (typed, shown) in [("A", "A"), ("B", "AB"), ("C", "ABC")] {
+            view.enqueue(Input::Insert(typed.into()));
+            drain(&mut view);
+            assert_eq!(view.viewport_start(), start);
+            assert!(view.caret_in_viewport());
+            assert_eq!(last_displayed_line(&view), (shown.to_owned(), shown.len()));
+            assert_eq!(view.surface.scroll_y, 120.0);
+        }
+        assert_eq!(
+            view.global_selection(),
+            (TextOffset(length + 3), TextOffset(length + 3))
+        );
+        assert!(document_text(&view, &budget).ends_with("abc\nABC"));
+        drop(view);
+        remove_fixture_root(&root);
+    }
+    /// LNX-EDIT-006: the same through staged power input, as the composition
+    /// root (power_stream.rs) drives every paged keystroke: prepare, apply,
+    /// install the prepared selections, acknowledge. The window stays put; it is
+    /// never re-requested at the caret, which hid the first typed character.
+    #[test]
+    fn staged_typing_past_a_full_window_echoes_every_character_in_place() {
+        let (root, mut view, budget) = paged_fixture("echo-staged", &"abc\n".repeat(40_000));
+        let options = staging(&root, &budget);
+        let length = view.snapshot().len();
+        view.enqueue(Input::DocumentEnd(false));
+        drain(&mut view);
+        let start = view.viewport_start();
+        view.enable_power_input();
+        for (typed, shown) in [("A", "A"), ("B", "AB"), ("C", "ABC")] {
+            view.enqueue(Input::Insert(typed.into()));
+            let input = view.take_power_input().expect("the keystroke is staged");
+            let before = view.snapshot().clone();
+            let mut prepared =
+                crate::paged_power::prepare_input(view.capture_power(), input.clone(), &options).unwrap();
+            let edit = prepared
+                .materialized
+                .take()
+                .expect("a keystroke is applied from memory");
+            view.finish_power_preparation();
+            let receipt = view.apply_materialized_power_tracked(&before, edit).unwrap();
+            drain(&mut view);
+            let revision = receipt.terminal().unwrap().unwrap();
+            view.install_power_state(
+                &prepared.source,
+                revision,
+                prepared.selections,
+                prepared.state,
+                &prepared.hidden_lines,
+            )
+            .unwrap();
+            view.acknowledge_power_input(Some(&receipt), &before, input).unwrap();
+            drain(&mut view);
+            assert_eq!(view.viewport_start(), start);
+            assert!(view.caret_in_viewport());
+            assert_eq!(last_displayed_line(&view), (shown.to_owned(), shown.len()));
+        }
+        assert_eq!(view.global_selection().1, TextOffset(length + 3));
+        assert!(document_text(&view, &budget).ends_with("abc\nABC"));
         drop(view);
         remove_fixture_root(&root);
     }
