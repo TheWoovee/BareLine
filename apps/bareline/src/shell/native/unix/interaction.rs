@@ -21,7 +21,9 @@
 //! 3. When the answer is in, it is armed together with the answers that run
 //!    had already consumed, and the shell runs the owner again: every question
 //!    now returns its armed answer in order, so the code continues as it does
-//!    after a modal dialog returns on Windows.
+//!    after a modal dialog returns on Windows. An answer that comes while the
+//!    asking run is still inside its scopes (a dialog that fails at once, as
+//!    with no portal) waits until the owning scope ends, then is armed.
 //! 4. Answers that run did not consume are dropped ([`Interactions::settle`]),
 //!    so an answer is never reused by a later, unrelated question.
 //!
@@ -40,13 +42,23 @@ use bareline_platform_linux::{
     dialogs::{DialogRequest, DialogResult, PendingDialog},
     prompts::CANCEL_ID,
 };
-use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+};
 
 /// What the shell asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Question {
     Prompt(InAppPrompt),
     Dialog(DialogRequest),
+    /// Where to save, typed into the shell's prompt because the save dialog
+    /// is unsupported; the path is the field's first value.
+    Destination(PathBuf),
 }
 impl Question {
     /// Whether an armed answer to `self` answers `asked`. A Save dialog's
@@ -62,6 +74,9 @@ impl Question {
                     && armed.default_name == asked.default_name
                     && armed.app_confirms_overwrite == asked.app_confirms_overwrite
             }
+            // The same holds for the destination prompt that stands in for
+            // the dialog: its folder may differ, the document's name may not.
+            (Self::Destination(armed), Self::Destination(asked)) => armed.file_name() == asked.file_name(),
             _ => self == asked,
         }
     }
@@ -74,6 +89,7 @@ impl Question {
             Self::Dialog(DialogRequest::Save(_)) => "save-dialog".to_string(),
             Self::Dialog(DialogRequest::Open { .. }) => "open-dialog".to_string(),
             Self::Dialog(DialogRequest::PickFolder) => "folder-dialog".to_string(),
+            Self::Destination(_) => "destination-prompt".to_string(),
         }
     }
 }
@@ -107,6 +123,8 @@ enum Waiting {
     Dialog(PendingDialog),
     /// A message that only needs to be read; nothing waits for it.
     Notice(InAppPrompt),
+    /// The save destination prompt, with the path it starts at.
+    Destination(PathBuf),
 }
 struct Open {
     question: Option<Question>,
@@ -115,6 +133,10 @@ struct Open {
     earlier: Vec<(Question, Answer)>,
     /// What the shell runs again once the answer is in.
     owner: Option<Box<dyn Any>>,
+    /// An answer that came while the asking run had not decided the owner
+    /// yet (a dialog that fails at once, such as a missing portal); it is
+    /// armed when the owning scope ends.
+    answer: Option<Answer>,
 }
 
 #[derive(Default)]
@@ -136,6 +158,39 @@ struct State {
     chain: usize,
 }
 const MAX_CHAIN: usize = 16;
+impl State {
+    /// Arms `answer` together with the answers its run consumed, so the
+    /// open question's owner runs again.
+    fn arm(&mut self, answer: Answer) {
+        if self.unclaimed
+            && let Some(open) = &mut self.open
+            && open.question.is_some()
+            && open.owner.is_none()
+        {
+            // The scope that owns the question has not ended yet: the answer
+            // waits for it instead of being lost.
+            open.answer = Some(answer);
+            return;
+        }
+        let Some(open) = self.open.take() else {
+            return;
+        };
+        let Some(question) = open.question else {
+            // A notice: nothing runs again.
+            return;
+        };
+        let Some(owner) = open.owner else {
+            eprintln!(
+                "event=interaction_answer_dropped reason=no-owner question={}",
+                question.describe()
+            );
+            return;
+        };
+        self.armed = open.earlier.into_iter().collect();
+        self.armed.push_back((question, answer));
+        self.ready = Some(owner);
+    }
+}
 
 /// The questions of one editor window.
 pub(super) struct Interactions {
@@ -173,13 +228,24 @@ impl Drop for Scope {
         state.depth = state.depth.saturating_sub(1);
         if state.unclaimed && self.entered_with == 0 {
             state.unclaimed = false;
+            let mut early = None;
             if let Some(open) = &mut state.open {
                 open.owner = self.owner.take();
+                early = open.answer.take();
+            }
+            if let Some(answer) = early {
+                state.arm(answer);
             }
         }
         if state.depth == 0 {
             state.consumed.clear();
-            state.unclaimed = false;
+            if std::mem::take(&mut state.unclaimed) && state.open.as_ref().is_some_and(|open| open.answer.is_some()) {
+                let question = state.open.take().and_then(|open| open.question);
+                eprintln!(
+                    "event=interaction_answer_dropped reason=no-scope question={}",
+                    question.as_ref().map_or_else(|| "none".to_string(), Question::describe)
+                );
+            }
         }
     }
 }
@@ -245,6 +311,7 @@ impl Interactions {
             Question::Dialog(request) => {
                 Waiting::Dialog(self.dialogs.borrow().begin(request.clone(), self.notify.clone()))
             }
+            Question::Destination(default) => Waiting::Destination(default.clone()),
         };
         let earlier = state.consumed.clone();
         state.open = Some(Open {
@@ -252,6 +319,7 @@ impl Interactions {
             waiting,
             earlier,
             owner: None,
+            answer: None,
         });
         state.unclaimed = true;
         None
@@ -265,6 +333,7 @@ impl Interactions {
                 waiting: Waiting::Notice(prompt),
                 earlier: Vec::new(),
                 owner: None,
+                answer: None,
             });
         }
     }
@@ -272,7 +341,14 @@ impl Interactions {
     fn poll(&self) {
         let answer = {
             let mut state = self.state.borrow_mut();
-            match state.open.as_mut().map(|open| &mut open.waiting) {
+            // A dialog whose answer is already kept for its owner has
+            // answered; it is not asked again.
+            match state
+                .open
+                .as_mut()
+                .filter(|open| open.answer.is_none())
+                .map(|open| &mut open.waiting)
+            {
                 Some(Waiting::Dialog(pending)) => pending.try_result(),
                 _ => None,
             }
@@ -282,17 +358,7 @@ impl Interactions {
         }
     }
     fn arm(&self, answer: Answer) {
-        let mut state = self.state.borrow_mut();
-        let Some(open) = state.open.take() else {
-            return;
-        };
-        let (Some(question), Some(owner)) = (open.question, open.owner) else {
-            // A notice, or a question no scope owns: nothing runs again.
-            return;
-        };
-        state.armed = open.earlier.into_iter().collect();
-        state.armed.push_back((question, answer));
-        state.ready = Some(owner);
+        self.state.borrow_mut().arm(answer);
     }
     /// Whether a question is open or its answer still waits for its run. The
     /// shell keeps queued work (a close) queued meanwhile.
@@ -324,6 +390,7 @@ impl Interactions {
         Some(match &state.open.as_ref()?.waiting {
             Waiting::Prompt(prompt) | Waiting::Notice(prompt) => PromptView::from_prompt(prompt),
             Waiting::Dialog(_) => PromptView::waiting_for_dialog(CANCEL_ID),
+            Waiting::Destination(default) => PromptView::destination(default),
         })
     }
     /// The button the person pressed in the shell's prompt. For a dialog this
@@ -334,7 +401,8 @@ impl Interactions {
             let mut state = self.state.borrow_mut();
             match state.open.as_ref().map(|open| &open.waiting) {
                 Some(Waiting::Prompt(_)) => Some(Answer::Button(id)),
-                Some(Waiting::Dialog(_)) => Some(Answer::Paths(Ok(Vec::new()))),
+                // Without the field's text, a destination prompt is cancelled.
+                Some(Waiting::Dialog(_) | Waiting::Destination(_)) => Some(Answer::Paths(Ok(Vec::new()))),
                 Some(Waiting::Notice(_)) => {
                     state.open = None;
                     None
@@ -348,7 +416,68 @@ impl Interactions {
     }
 }
 
+/// The destination prompt's Save button (the Windows `IDOK`).
+const DESTINATION_SAVE_ID: i32 = 1;
+/// The path a destination prompt's answer names: the typed text with `~/`
+/// for the home folder, and a bare name or relative path taken in the folder
+/// of the path it started at. Cancel, or nothing typed, names none.
+fn typed_destination(default: &Path, id: i32, text: &str) -> Option<PathBuf> {
+    let text = text.trim();
+    if id != DESTINATION_SAVE_ID || text.is_empty() {
+        return None;
+    }
+    let typed = match text.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+        None => PathBuf::from(text),
+    };
+    Some(if typed.is_absolute() {
+        typed
+    } else {
+        default.parent().unwrap_or(Path::new("/")).join(typed)
+    })
+}
+impl Interactions {
+    /// A button pressed in a prompt with a text field, with what it held.
+    pub(super) fn answer_text(&self, id: i32, text: &str) {
+        let answer = match self.state.borrow().open.as_ref().map(|open| &open.waiting) {
+            Some(Waiting::Destination(default)) => Some(Answer::Paths(Ok(typed_destination(default, id, text)
+                .into_iter()
+                .collect()))),
+            _ => None,
+        };
+        match answer {
+            Some(answer) => self.arm(answer),
+            None => self.answer(id),
+        }
+    }
+}
+
 impl PromptView {
+    /// Asks where to save when no save dialog can (LNX-EDIT-002).
+    fn destination(default: &Path) -> Self {
+        Self {
+            title: "Save As".into(),
+            instruction: "Where should Bareline save this document?".into(),
+            content: "This system has no save dialog Bareline can use. Type the full path of the file; an existing file is replaced only after you confirm.".into(),
+            footer: None,
+            level: PromptLevel::Question,
+            buttons: vec![
+                PromptButtonView {
+                    id: DESTINATION_SAVE_ID,
+                    label: "Save".into(),
+                    access_key: Some('s'),
+                },
+                PromptButtonView {
+                    id: CANCEL_ID,
+                    label: "Cancel".into(),
+                    access_key: Some('c'),
+                },
+            ],
+            default_id: DESTINATION_SAVE_ID,
+            cancel_id: CANCEL_ID,
+            field: Some(default.display().to_string()),
+        }
+    }
     fn from_prompt(prompt: &InAppPrompt) -> Self {
         use bareline_platform_linux::prompts::PromptSeverity;
         Self {
@@ -373,6 +502,7 @@ impl PromptView {
                 .collect(),
             default_id: prompt.default_id,
             cancel_id: prompt.cancel_id,
+            field: None,
         }
     }
     /// Shown while a portal dialog is open in its own window: the editor stays
@@ -392,6 +522,7 @@ impl PromptView {
             }],
             default_id: stop,
             cancel_id: stop,
+            field: None,
         }
     }
 }
@@ -617,6 +748,107 @@ mod tests {
         );
         let _scope = slow.scope(Box::new("pick"));
         assert_eq!(slow.ask(folder), Some(Answer::Paths(Ok(Vec::new()))));
+    }
+
+    #[test]
+    fn an_answer_that_comes_before_the_owning_scope_ends_is_kept_for_it() {
+        let interactions = interactions(Err(PortalError::Unavailable("no portal".into())));
+        let dialog = Question::Dialog(DialogRequest::Save(bareline_platform::SaveDialogOptions::new(
+            bareline_platform::SaveFileKind::Text,
+        )));
+        {
+            let _outer = interactions.scope(Box::new("save-as"));
+            assert_eq!(interactions.ask(dialog.clone()), None);
+            // The run looks whether a question waits (as the shell's close and
+            // save paths do) while the missing portal already answered.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while interactions
+                .state
+                .borrow()
+                .open
+                .as_ref()
+                .is_none_or(|open| open.answer.is_none())
+            {
+                assert!(interactions.waiting(), "the early answer is kept, not dropped");
+                assert!(std::time::Instant::now() < deadline, "the dialog never answered");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(interactions.take_ready().is_none(), "the owner is not decided yet");
+        }
+        assert_eq!(ready(&interactions), Some("save-as"));
+        let _scope = interactions.scope(Box::new("save-as"));
+        let Some(Answer::Paths(Err(message))) = interactions.ask(dialog) else {
+            panic!("the replay receives the early answer");
+        };
+        assert!(message.starts_with("This system does not support"), "{message}");
+    }
+
+    /// LNX-EDIT-002: with no portal, Save As asks for a path in the shell's
+    /// own prompt, and the replay receives what was typed.
+    #[test]
+    fn the_destination_prompt_answers_with_the_typed_path() {
+        let interactions = interactions(Err(PortalError::Unavailable("no portal".into())));
+        let default = PathBuf::from("/home/ada/notes/r.txt");
+        let question = Question::Destination(default.clone());
+        {
+            let _scope = interactions.scope(Box::new("save-as"));
+            assert_eq!(interactions.ask(question.clone()), None);
+        }
+        let view = interactions.view().expect("the prompt is shown");
+        assert_eq!(view.field.as_deref(), Some("/home/ada/notes/r.txt"));
+        assert_eq!(view.default_id, DESTINATION_SAVE_ID);
+        interactions.answer_text(DESTINATION_SAVE_ID, "  r-recovered.txt ");
+        assert_eq!(
+            interactions
+                .take_ready()
+                .map(|owner| *owner.downcast::<&str>().unwrap()),
+            Some("save-as")
+        );
+        {
+            let _scope = interactions.scope(Box::new("save-as"));
+            // A changed folder still finds the answer; the name must match.
+            assert_eq!(
+                interactions.ask(Question::Destination(PathBuf::from("/elsewhere/r.txt"))),
+                Some(Answer::Paths(Ok(vec![PathBuf::from(
+                    "/home/ada/notes/r-recovered.txt"
+                )])))
+            );
+        }
+        interactions.settle();
+        // Cancel, or Save with nothing typed, chooses nothing.
+        {
+            let _scope = interactions.scope(Box::new("save-as"));
+            assert_eq!(interactions.ask(question.clone()), None);
+        }
+        interactions.answer_text(CANCEL_ID, "/tmp/x.txt");
+        assert!(interactions.take_ready().is_some());
+        let _scope = interactions.scope(Box::new("save-as"));
+        assert_eq!(interactions.ask(question), Some(Answer::Paths(Ok(Vec::new()))));
+        assert!(
+            !Question::Destination(PathBuf::from("/a/x.txt"))
+                .answers(&Question::Destination(PathBuf::from("/a/y.txt")))
+        );
+    }
+
+    #[test]
+    fn a_typed_destination_is_absolute() {
+        let default = Path::new("/home/ada/notes/r.txt");
+        assert_eq!(
+            typed_destination(default, DESTINATION_SAVE_ID, "/srv/out.txt"),
+            Some(PathBuf::from("/srv/out.txt"))
+        );
+        assert_eq!(
+            typed_destination(default, DESTINATION_SAVE_ID, "sub/out.txt"),
+            Some(PathBuf::from("/home/ada/notes/sub/out.txt"))
+        );
+        assert_eq!(typed_destination(default, DESTINATION_SAVE_ID, "   "), None);
+        assert_eq!(typed_destination(default, CANCEL_ID, "/srv/out.txt"), None);
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(
+                typed_destination(default, DESTINATION_SAVE_ID, "~/out.txt"),
+                Some(PathBuf::from(home).join("out.txt"))
+            );
+        }
     }
 
     /// A chooser that never answers within the test.

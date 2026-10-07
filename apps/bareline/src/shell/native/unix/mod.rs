@@ -51,8 +51,9 @@ pub use error::Result;
 pub use files::{FileSystem, PathTrust, RECYCLED, SessionPathTrust, recycle_entry};
 pub use launch::{installed_folders, user_home, valid_launch_path};
 pub use platform::{
-    AboutAction, CommandMessage, Platform, SaveChoice, SavePromptOutcome, answer_prompt, command_window, in_app_prompt,
-    interaction_replay, interaction_scope, interaction_settle, interaction_waiting, save_destination_settled,
+    AboutAction, CommandMessage, Platform, SaveChoice, SavePromptOutcome, answer_prompt, answer_prompt_text,
+    command_window, in_app_prompt, interaction_replay, interaction_scope, interaction_settle, interaction_waiting,
+    save_destination_prompt, save_destination_settled,
 };
 pub use process::{ProcessLauncher, alive, handle_counters, monotonic_ns, private_bytes, resolve_program};
 pub use renderer::{Renderer, create_renderer, installed_font_families};

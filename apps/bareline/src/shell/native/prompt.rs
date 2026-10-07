@@ -40,4 +40,8 @@ pub struct PromptView {
     pub buttons: Vec<PromptButtonView>,
     pub default_id: i32,
     pub cancel_id: i32,
+    /// A one-line text field above the buttons, with its first value (the
+    /// save destination asked for where no save dialog exists). The buttons
+    /// answer with what it holds then.
+    pub field: Option<String>,
 }

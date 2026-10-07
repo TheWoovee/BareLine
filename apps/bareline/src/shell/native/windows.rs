@@ -64,6 +64,12 @@ pub fn in_app_prompt(_platform: Option<&Platform>) -> Option<super::PromptView> 
     None
 }
 pub fn answer_prompt(_platform: Option<&Platform>, _id: i32) {}
+pub fn answer_prompt_text(_platform: Option<&Platform>, _id: i32, _text: &str) {}
+/// The common item dialog always exists on Windows, so the shell never needs
+/// to ask for a save path itself.
+pub fn save_destination_prompt(_platform: Option<&Platform>, _default: &Path) -> Option<PathBuf> {
+    None
+}
 
 /// Logoff and shutdown reach the window as WM_QUERYENDSESSION/WM_ENDSESSION,
 /// which the monitor routes as a close request, and Windows ends the process

@@ -22,6 +22,7 @@ pub(super) const PROMPT_BUTTON_ID: u64 = 91_000_310;
 const PANEL_WIDTH: f32 = 520.0;
 const PADDING: f32 = 20.0;
 const BUTTON_HEIGHT: f32 = 30.0;
+const FIELD_HEIGHT: f32 = 28.0;
 const BUTTON_GAP: f32 = 8.0;
 
 /// What the shell runs again once a prompt or dialog started inside it has
@@ -83,6 +84,9 @@ pub(super) struct PromptRuntime {
     bounds: Rect,
     text_bounds: Rect,
     buttons: Vec<Rect>,
+    /// The view's text field (`PromptView::field`); typing goes to it.
+    field: bareline_ui::text_field::TextField,
+    field_bounds: Rect,
     /// The launch or instance pump left work queued while a question waited
     /// (`Shell::interaction_hold`); it runs once the question is settled.
     held: bool,
@@ -125,8 +129,11 @@ impl PromptRuntime {
     /// technology.
     pub(super) fn semantics(&self) -> Option<PromptSemantics> {
         let view = self.view.as_ref()?;
+        // The field's current value is read with the text it belongs to.
+        let field = view.field.as_ref().map(|_| self.field.value());
         let text = [view.instruction.as_str(), view.content.as_str()]
             .into_iter()
+            .chain(field)
             .chain(view.footer.as_deref())
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -161,6 +168,7 @@ impl PromptRuntime {
     ) {
         let Some(view) = &self.view else {
             self.buttons.clear();
+            self.field.release(renderer);
             return;
         };
         let palette = theme.toast(match view.level {
@@ -186,7 +194,8 @@ impl PromptRuntime {
             .map(|footer| super::toast::wrap_measured(renderer, footer, 11.0, text_width))
             .unwrap_or_default();
         let lines = instruction.len() as f32 * 22.0 + content.len() as f32 * 18.0 + footer.len() as f32 * 15.0;
-        let wanted = PADDING + 22.0 + lines + 12.0 + BUTTON_HEIGHT + PADDING;
+        let field = if view.field.is_some() { FIELD_HEIGHT + 12.0 } else { 0.0 };
+        let wanted = PADDING + 22.0 + lines + 12.0 + field + BUTTON_HEIGHT + PADDING;
         let panel_height = wanted.min((height - 16.0).max(BUTTON_HEIGHT + 2.0 * PADDING));
         let bounds = bareline_ui::rect(
             (width - panel_width).max(0.0) / 2.0,
@@ -203,8 +212,23 @@ impl PromptRuntime {
             bounds.x + PADDING,
             text_top,
             text_width,
-            (buttons_top - text_top - 8.0).max(0.0),
+            (buttons_top - field - text_top - 8.0).max(0.0),
         );
+        if view.field.is_some() {
+            self.field_bounds = bareline_ui::rect(
+                bounds.x + PADDING,
+                buttons_top - 12.0 - FIELD_HEIGHT,
+                text_width,
+                FIELD_HEIGHT,
+            );
+            // A layout failure leaves the field undrawn for this frame only.
+            let _ = self
+                .field
+                .draw_with_theme(renderer, self.field_bounds, true, theme, ops);
+        } else {
+            self.field_bounds = Rect::default();
+            self.field.release(renderer);
+        }
         ops.push(DrawOp::PushClip(self.text_bounds));
         bareline_ui::text(ops, bounds.x + PADDING, text_top, &view.title, 12.0, palette.muted);
         let mut y = text_top + 22.0;
@@ -267,6 +291,17 @@ impl PromptRuntime {
     }
 }
 
+/// The diagnostic line for a prompt coming up: its level and button ids only.
+/// Prompt text names documents and paths, which stay out of diagnostics.
+fn prompt_shown_diagnostic(view: &PromptView) -> String {
+    format!(
+        "event=prompt_shown level={:?} buttons={:?} default={}",
+        view.level,
+        view.buttons.iter().map(|button| button.id).collect::<Vec<_>>(),
+        view.default_id
+    )
+}
+
 impl Shell {
     /// Shows the question the seam has open, or retires the modal once it was
     /// answered.
@@ -279,20 +314,15 @@ impl Shell {
             Some(view) => {
                 let changed = self.prompt.view.as_ref() != Some(&view);
                 if changed {
-                    eprintln!(
-                        "event=prompt_shown title={:?} instruction={:?} buttons={:?}",
-                        view.title,
-                        view.instruction,
-                        view.buttons
-                            .iter()
-                            .map(|button| button.label.as_str())
-                            .collect::<Vec<_>>()
-                    );
+                    eprintln!("{}", prompt_shown_diagnostic(&view));
                     self.prompt.focus = view
                         .buttons
                         .iter()
                         .position(|button| button.id == view.default_id)
                         .unwrap_or(0);
+                    // The field starts with the view's value, caret at its end.
+                    self.prompt.field.select_all();
+                    self.prompt.field.insert(view.field.as_deref().unwrap_or_default());
                     self.prompt.view = Some(view);
                 }
                 if !showing {
@@ -329,8 +359,55 @@ impl Shell {
     }
     fn prompt_answer(&mut self, id: i32) {
         eprintln!("event=prompt_answered id={id}");
-        native::answer_prompt(self.platform.as_ref(), id);
+        if self.prompt.view.as_ref().is_some_and(|view| view.field.is_some()) {
+            let text = self.prompt.field.value().to_string();
+            native::answer_prompt_text(self.platform.as_ref(), id, &text);
+        } else {
+            native::answer_prompt(self.platform.as_ref(), id);
+        }
         self.prompt_sync();
+    }
+    /// Editing keys for the prompt's text field; true when the key was one.
+    fn prompt_field_key(&mut self, key: &Key, text: Option<&str>) -> bool {
+        if !self.prompt.view.as_ref().is_some_and(|view| view.field.is_some()) {
+            return false;
+        }
+        let shift = self.modifiers.shift_key();
+        let field = &mut self.prompt.field;
+        match key {
+            Key::Named(NamedKey::Backspace) => {
+                field.delete(false);
+            }
+            Key::Named(NamedKey::Delete) => {
+                field.delete(true);
+            }
+            Key::Named(NamedKey::ArrowLeft) => field.horizontal(false, shift),
+            Key::Named(NamedKey::ArrowRight) => field.horizontal(true, shift),
+            Key::Named(NamedKey::Home) => field.edge(false, shift),
+            Key::Named(NamedKey::End) => field.edge(true, shift),
+            Key::Character(value) if self.modifiers.control_key() && !self.modifiers.alt_key() => {
+                match value.to_lowercase().as_str() {
+                    "a" => field.select_all(),
+                    "v" => {
+                        if let Some(platform) = &self.platform
+                            && let Ok(Some(pasted)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
+                        {
+                            // A path is one line.
+                            let line = pasted.lines().next().unwrap_or_default().to_string();
+                            self.prompt.field.insert(&line);
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+            Key::Character(_) | Key::Named(NamedKey::Space) => {
+                if let Some(text) = text.filter(|text| !text.chars().any(char::is_control)) {
+                    field.insert(text);
+                }
+            }
+            _ => return false,
+        }
+        true
     }
     /// Focus from assistive technology.
     pub(super) fn prompt_focus(&mut self, id: u64) {
@@ -358,6 +435,12 @@ impl Shell {
     pub(super) fn prompt_event(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if self.prompt_field_key(&event.logical_key, event.text.as_deref()) {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return true;
+                }
                 let answer = match &event.logical_key {
                     Key::Named(NamedKey::Escape) => self.prompt.view.as_ref().map(|view| view.cancel_id),
                     Key::Named(NamedKey::Enter) => self.prompt.button_id(self.prompt.focus),
@@ -564,7 +647,20 @@ mod tests {
             ],
             default_id: 1101,
             cancel_id: 2,
+            field: None,
         }
+    }
+
+    #[test]
+    fn the_prompt_diagnostic_names_no_document_or_path() {
+        let mut shown = view();
+        shown.content = "/home/ada/private/notes.txt was changed.".into();
+        let line = prompt_shown_diagnostic(&shown);
+        assert_eq!(
+            line,
+            "event=prompt_shown level=Question buttons=[1101, 1102, 2] default=1101"
+        );
+        assert!(!line.contains("notes") && !line.contains("/home") && !line.contains("Save"));
     }
 
     #[test]
