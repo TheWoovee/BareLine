@@ -1039,7 +1039,9 @@ impl Shell {
                 }
             );
             // A press on a line number selects that line, Shift+press extends
-            // the selection by lines, and a drag extends it (Notepad++).
+            // the selection by lines, and a drag extends it (Notepad++). Only
+            // in a resident document: a paged one's surface holds a window of
+            // its lines, so there the press stays a plain press.
             if pressed
                 && let Some(target) = target.filter(|target| !target.paged())
                 && local.y < bounds.height - 24.0
@@ -1091,7 +1093,8 @@ impl Shell {
                 };
                 self.power.last_click = Some((pane, now, local, count));
                 // The third press in a row selects the whole line with its
-                // line ending, as in Notepad++ (LNX-UI-012).
+                // line ending, as in Notepad++ (LNX-UI-012); in a resident
+                // document only, as in the line-number column.
                 if count == 3 && !target.paged() {
                     let lines = target
                         .snapshot()
