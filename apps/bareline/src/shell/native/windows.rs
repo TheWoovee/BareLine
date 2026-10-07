@@ -142,6 +142,9 @@ pub struct InstalledFolders {
     /// `%LOCALAPPDATA%\Bareline`: settings, session, recovery journals,
     /// extensions and macros.
     pub local: Option<PathBuf>,
+    /// Settings live in the profile folder on Windows; there is no separate
+    /// configuration folder.
+    pub config: Option<PathBuf>,
     /// Diagnostics live in the profile folder on Windows.
     pub logs: Option<PathBuf>,
 }
@@ -150,6 +153,7 @@ pub fn installed_folders() -> InstalledFolders {
     InstalledFolders {
         roaming: std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline")),
         local: std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Bareline")),
+        config: None,
         logs: None,
     }
 }

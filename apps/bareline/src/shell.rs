@@ -917,31 +917,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Recent Files live next to the other machine-local data (portable keeps them
     // in the portable data folder); the OS shell MRU is handled separately. The
     // list is read by a worker after the first frame (ADR-33).
-    shell.shell_integration.recent_files.configure(
-        launch
-            .settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("recent.json")),
-    );
+    shell
+        .shell_integration
+        .recent_files
+        .configure(launch.profile_root.as_ref().map(|root| root.join("recent.json")));
     shell.shell_integration.recent_folders =
         shell_integration::RecentFiles::with_cap(shell_integration::RECENT_FOLDER_CAP);
     shell.shell_integration.recent_folders.configure(
         launch
-            .settings_path
+            .profile_root
             .as_ref()
-            .and_then(|path| path.parent())
             .map(|root| root.join("recent-folders.json")),
     );
     shell.performance.configure(launch.performance.clone());
-    if let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent()) {
+    if let Some(root) = launch.profile_root.as_ref() {
         shell.language.pending_catalog = Some(bareline_app::language::catalog::Store::new(
             root.join("languages"),
             std::sync::Arc::new(crate::shell::native::FileSystem),
         ));
     }
     if launch.portable
-        && let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent())
+        && let Some(root) = launch.profile_root.as_ref()
     {
         // Portable media may be read-only: journals wait until a worker has
         // checked the folder after the first frame (APP-13).
@@ -951,13 +947,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         shell.recovery.configure(launch.recovery_path.clone(), true);
     }
-    shell.macros.configure(
-        launch
-            .settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("macros")),
-    );
+    shell
+        .macros
+        .configure(launch.profile_root.as_ref().map(|root| root.join("macros")));
     shell.settings =
         settings::SettingsRuntime::new(settings_document, launch.settings_path.clone(), shell.notify.clone());
     shell.profile.settings_revision = shell.settings.controller.revision;

@@ -8,7 +8,8 @@ use super::*;
 #[derive(Default)]
 pub(super) struct ProfileRuntime {
     initialization: super::launch::ProfileInitializationRuntime,
-    settings_path: Option<PathBuf>,
+    /// Session, macros and the other profile items (`LaunchConfig::profile_root`).
+    profile_root: Option<PathBuf>,
     /// The settings revision the migrated settings are reconciled against.
     pub(super) settings_revision: u64,
     extensions_path: Option<PathBuf>,
@@ -21,7 +22,7 @@ impl ProfileRuntime {
     pub(super) fn new(launch: &mut super::launch::LaunchConfig) -> Self {
         Self {
             initialization: super::launch::ProfileInitializationRuntime::new(launch.profile_initialization.take()),
-            settings_path: launch.settings_path.clone(),
+            profile_root: launch.profile_root.clone(),
             settings_revision: 0,
             extensions_path: launch.extensions_path.clone(),
             legacy_settings_path: launch.legacy_settings_path.clone(),
@@ -131,12 +132,7 @@ impl Shell {
             }
         }
 
-        let local_session = self
-            .profile
-            .settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("session.json"));
+        let local_session = self.profile.profile_root.as_ref().map(|root| root.join("session.json"));
         let session_path = Self::migrated_item_path(
             &authorities,
             "session.json",
@@ -171,12 +167,7 @@ impl Shell {
         self.extensions
             .set_profile_root_before_restore(extensions_root, extensions_local);
 
-        let local_macros = self
-            .profile
-            .settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("macros"));
+        let local_macros = self.profile.profile_root.as_ref().map(|root| root.join("macros"));
         let legacy_macros = self
             .profile
             .legacy_settings_path

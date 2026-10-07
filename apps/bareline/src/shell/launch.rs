@@ -1373,6 +1373,10 @@ pub struct LaunchConfig {
     pub(super) profile_initialization: Option<ProfileInitialization>,
     pub portable: bool,
     pub settings_path: Option<PathBuf>,
+    /// The profile folder: session, recovery journals, recent files, languages,
+    /// macros and extensions. Settings are kept there too, except where the
+    /// system has a separate configuration folder (XDG, LNX-XDG-006).
+    pub(super) profile_root: Option<PathBuf>,
     pub(super) legacy_settings_path: Option<PathBuf>,
     pub session_path: Option<PathBuf>,
     pub(super) legacy_session_path: Option<PathBuf>,
@@ -1536,7 +1540,11 @@ pub(super) fn prepare(
     } else {
         Default::default()
     };
-    let (roaming, local) = (installed_folders.roaming, installed_folders.local);
+    let (roaming, local, config_folder) = (
+        installed_folders.roaming,
+        installed_folders.local,
+        installed_folders.config,
+    );
     let installed = local.clone().or_else(|| roaming.clone());
     let root = match mode {
         LaunchMode::Performance => performance.as_ref().map(|config| config.root.clone()),
@@ -1562,7 +1570,11 @@ pub(super) fn prepare(
         mode,
         profile_initialization,
         portable,
-        settings_path: root.as_ref().map(|p| p.join("settings.toml")),
+        settings_path: config_folder
+            .as_ref()
+            .or(root.as_ref())
+            .map(|p| p.join("settings.toml")),
+        profile_root: root.clone(),
         legacy_settings_path: legacy.as_ref().map(|p| p.join("settings.toml")),
         session_path: root.as_ref().map(|p| p.join("session.json")),
         legacy_session_path: legacy.as_ref().map(|p| p.join("session.json")),
