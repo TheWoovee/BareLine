@@ -11,7 +11,14 @@
 //! swept by the owned-cache sweep at the next start. Either way the folder is
 //! created 0700 and used only once it is proven a real folder owned by this
 //! user that nobody else can write.
-use crate::sys::{self, DIRECTORY, denied};
+//!
+//! A portable copy uses the same per-user cache, not its `data/cache`:
+//! portable media may be read-only or (FAT, exFAT) unable to keep a folder
+//! private, and copies of documents do not belong on removable media.
+use crate::{
+    paths::{APPLICATION, AppDirectories, Environment, Layout},
+    sys::{self, DIRECTORY, denied},
+};
 use rustix::fs::{CWD, Mode};
 use std::{
     io,
@@ -19,11 +26,34 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The cache root for temporary copies of documents: the per-user cache
-/// folder of the current process (the portable `data/cache` for a portable
-/// copy), made private by [`private_folder`].
+/// The cache root for temporary copies of documents: the user's cache folder,
+/// made private by [`private_folder`], also for a portable copy.
 pub fn cache_root() -> io::Result<PathBuf> {
-    let root = crate::paths::AppDirectories::for_current_process(crate::paths::APPLICATION)?.cache;
+    select_cache_root(
+        Layout::native(),
+        &|name| std::env::var_os(name),
+        rustix::process::getuid().as_raw(),
+    )
+}
+
+/// The per-user cache folder of `layout`, resolved without the portable marker
+/// (no executable folder is given), so a portable copy never keeps document
+/// copies on its media.
+fn select_cache_root(
+    layout: Layout,
+    var: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+    uid: u32,
+) -> io::Result<PathBuf> {
+    let root = AppDirectories::resolve(
+        APPLICATION,
+        layout,
+        &Environment {
+            var,
+            executable_dir: None,
+            uid,
+        },
+    )?
+    .cache;
     private_folder(&root, false)?;
     Ok(root)
 }
@@ -169,6 +199,69 @@ mod tests {
         let file = scratch.0.join("file");
         std::fs::write(&file, b"x").unwrap();
         assert!(private_folder(&file, true).is_err());
+    }
+
+    /// A portable copy keeps its document copies in the user's cache folder:
+    /// its own `data/cache` may be on read-only media, or on a file system
+    /// (FAT, exFAT) whose modes cannot be made private.
+    #[test]
+    fn portable_copies_keep_document_copies_in_the_user_cache() {
+        let scratch = Scratch::new("portable");
+        let (home, cache) = (scratch.0.join("home"), scratch.0.join("xdg-cache"));
+        let executable = scratch.0.join("stick");
+        std::fs::create_dir_all(executable.join("data").join("cache")).unwrap();
+        std::fs::write(executable.join(crate::paths::PORTABLE_MARKER), b"").unwrap();
+        let var = |name: &str| match name {
+            "HOME" => Some(home.clone().into_os_string()),
+            "XDG_CACHE_HOME" => Some(cache.clone().into_os_string()),
+            _ => None,
+        };
+        // The portable layout really does name the media's own cache folder.
+        let portable = AppDirectories::resolve(
+            APPLICATION,
+            Layout::Xdg,
+            &Environment {
+                var: &var,
+                executable_dir: Some(&executable),
+                uid: 1000,
+            },
+        )
+        .unwrap();
+        assert!(portable.portable);
+        assert_eq!(portable.cache, executable.join("data").join("cache"));
+
+        // Media whose cache folder others can write (as FAT and exFAT report),
+        // then read-only media: neither is used.
+        std::fs::set_permissions(
+            executable.join("data").join("cache"),
+            std::fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        for media_mode in [0o777, 0o555] {
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(media_mode)).unwrap();
+            let root = select_cache_root(Layout::Xdg, &var, 1000).unwrap();
+            assert_eq!(root, cache.join(APPLICATION));
+            assert_eq!(mode(&root), 0o700);
+            assert_eq!(mode(&executable.join("data").join("cache")), 0o777);
+            assert_eq!(
+                std::fs::read_dir(executable.join("data").join("cache"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // macOS: ~/Library/Caches/Bareline, whatever the marker says.
+        let macos = select_cache_root(Layout::MacOs, &var, 1000).unwrap();
+        assert_eq!(macos, home.join("Library").join("Caches").join(APPLICATION));
+        // Without a home folder there is no private cache, never a fallback to the media.
+        assert!(select_cache_root(Layout::Xdg, &|_| None, 1000).is_err());
+        // A per-user cache folder others can write is refused, not narrowed.
+        std::fs::set_permissions(cache.join(APPLICATION), std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            select_cache_root(Layout::Xdg, &var, 1000).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]

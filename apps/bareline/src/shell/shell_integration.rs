@@ -1268,6 +1268,24 @@ fn run_portable_probe(root: &std::path::Path, fallback: Option<PathBuf>) -> Port
         .filter(|fallback| std::fs::create_dir_all(fallback).is_ok());
     PortableProbe { writable, fallback }
 }
+/// Sweeps the private cache root for document copies whose process ended.
+fn sweep_document_caches() {
+    let Ok(root) = crate::shell::native::private_cache_root() else {
+        return;
+    };
+    let report = bareline_file_io::owned_cache::sweep(
+        &root,
+        &std::collections::HashSet::new(),
+        &crate::shell::native::FileSystem,
+        &|| false,
+        256,
+        std::time::Duration::from_millis(100),
+    );
+    eprintln!(
+        "event=portable_cache_cleanup roots={} candidates={} removed={} limit={}",
+        report.roots, report.candidates, report.removed, report.limit_reached
+    );
+}
 /// A local profile folder for recovery journals of a read-only portable copy,
 /// one per portable data folder so separate copies never share journals.
 fn portable_fallback_root(portable: &std::path::Path) -> Option<PathBuf> {
@@ -1298,6 +1316,10 @@ impl Shell {
         if self.shell_integration.portable_probe.is_some() {
             return;
         }
+        // A portable copy keeps its document copies in the same per-user cache
+        // folder as an installed one, and sweeps copies an ended process left
+        // there as an installed launch does (LNX-SEC-002). Best effort.
+        let _ = bareline_app::task::execute(sweep_document_caches);
         let fallback = portable_fallback_root(&root);
         let wake = self.wake.clone();
         match bareline_app::task::spawn(

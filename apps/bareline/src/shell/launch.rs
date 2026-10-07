@@ -1202,6 +1202,9 @@ pub(super) struct ProfileInitialization {
     roaming: Option<PathBuf>,
     local: Option<PathBuf>,
     temp: PathBuf,
+    /// The system temporary folder, swept as well where earlier builds kept
+    /// document copies there and `temp` is now another folder (LNX-SEC-002).
+    legacy_temp: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -1300,14 +1303,20 @@ impl ProfileInitializationRuntime {
                     ),
                     _ => Default::default(),
                 };
-                let cleanup = bareline_file_io::owned_cache::sweep(
-                    &initialization.temp,
-                    &std::collections::HashSet::new(),
-                    &crate::shell::native::FileSystem,
-                    &|| cancel.load(std::sync::atomic::Ordering::Acquire),
-                    256,
-                    std::time::Duration::from_millis(100),
-                );
+                let mut cleanup = bareline_file_io::owned_cache::SweepReport::default();
+                for temp in std::iter::once(&initialization.temp).chain(&initialization.legacy_temp) {
+                    merge_sweep(
+                        &mut cleanup,
+                        bareline_file_io::owned_cache::sweep(
+                            temp,
+                            &std::collections::HashSet::new(),
+                            &crate::shell::native::FileSystem,
+                            &|| cancel.load(std::sync::atomic::Ordering::Acquire),
+                            256,
+                            std::time::Duration::from_millis(100),
+                        ),
+                    );
+                }
                 let _ = sender.send(Ok(ProfileInitializationResult {
                     migration,
                     authorities,
@@ -1365,6 +1374,24 @@ impl Drop for ProfileInitializationRuntime {
     fn drop(&mut self) {
         self.cancel.store(true, std::sync::atomic::Ordering::Release);
     }
+}
+
+/// Adds the sweep of another cache root to `total`.
+fn merge_sweep(
+    total: &mut bareline_file_io::owned_cache::SweepReport,
+    report: bareline_file_io::owned_cache::SweepReport,
+) {
+    total.roots += report.roots;
+    total.candidates += report.candidates;
+    total.removed += report.removed;
+    total.removed_entries += report.removed_entries;
+    total.visited_entries += report.visited_entries;
+    for (reason, count) in report.skipped {
+        *total.skipped.entry(reason).or_default() += count;
+    }
+    total.cancelled |= report.cancelled;
+    total.limit_reached |= report.limit_reached;
+    total.authority_restore_failed |= report.authority_restore_failed;
 }
 
 pub struct LaunchConfig {
@@ -1557,12 +1584,21 @@ pub(super) fn prepare(
     };
     let legacy = legacy_root(mode, roaming.clone());
     // An installed launch sweeps the folder that holds this user's temporary
-    // copies of documents for copies whose process ended (LNX-SEC-002).
+    // copies of documents for copies whose process ended (LNX-SEC-002), and the
+    // system temporary folder earlier builds kept them in where that differs.
+    let temp = std::env::temp_dir();
     let cache_root = match mode {
-        LaunchMode::Installed => crate::shell::native::private_cache_root().unwrap_or_else(|_| std::env::temp_dir()),
-        _ => std::env::temp_dir(),
+        LaunchMode::Installed => crate::shell::native::private_cache_root().unwrap_or_else(|_| temp.clone()),
+        _ => temp.clone(),
     };
-    let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), cache_root);
+    let legacy_temp = (cache_root != temp).then_some(temp);
+    let profile_initialization =
+        profile_initialization(mode, roaming.clone(), local.clone(), cache_root).map(|initialization| {
+            ProfileInitialization {
+                legacy_temp,
+                ..initialization
+            }
+        });
     // An unusable argument is reported with its file; it never stops the launch (APP-17).
     let (paths, rejected_paths) = launch_paths(&cwd, parsed.options.paths);
     let stdin = parsed.options.stdin.then(read_stdin);
@@ -1818,7 +1854,12 @@ fn profile_initialization(
     local: Option<PathBuf>,
     temp: PathBuf,
 ) -> Option<ProfileInitialization> {
-    (mode == LaunchMode::Installed).then_some(ProfileInitialization { roaming, local, temp })
+    (mode == LaunchMode::Installed).then_some(ProfileInitialization {
+        roaming,
+        local,
+        temp,
+        legacy_temp: None,
+    })
 }
 
 /// `bareline --diag handles` records the process handle counters so a leak shows
@@ -2116,6 +2157,45 @@ mod tests {
         runtime.retry().unwrap();
         assert!(!runtime.settled());
         std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    /// The startup sweep covers the private cache root and, where earlier builds
+    /// kept document copies in another folder, that folder too (LNX-SEC-002).
+    #[test]
+    fn initialization_sweeps_the_cache_root_and_the_folder_earlier_builds_used() {
+        let temp = std::env::temp_dir().join(format!(
+            "bareline-initialization-sweep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (cache, legacy) = (temp.join("cache"), temp.join("legacy"));
+        std::fs::create_dir_all(cache.join("Bareline-transcode")).unwrap();
+        std::fs::create_dir_all(legacy.join("Bareline-owned-spill")).unwrap();
+        std::fs::create_dir_all(legacy.join("Bareline-compare-staging")).unwrap();
+        let pending = profile_initialization(LaunchMode::Installed, None, None, cache).map(|initialization| {
+            ProfileInitialization {
+                legacy_temp: Some(legacy),
+                ..initialization
+            }
+        });
+        let mut runtime = ProfileInitializationRuntime::new(pending);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(
+            runtime
+                .schedule(std::sync::Arc::new(move || {
+                    let _ = sender.send(());
+                }))
+                .unwrap()
+        );
+        receiver.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(runtime.pump());
+        let completion = runtime.completion().unwrap().as_ref().unwrap();
+        assert_eq!(completion.cleanup.roots, 3, "{:?}", completion.cleanup);
+        drop(runtime);
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]
