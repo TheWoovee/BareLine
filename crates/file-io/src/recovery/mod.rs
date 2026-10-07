@@ -28,11 +28,47 @@ const CHUNK: usize = 64 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryMetadata {
-    #[serde(default)]
+    #[serde(default, with = "native_path")]
     pub original_path: Option<PathBuf>,
     pub source_generation: String,
     pub codec_catalog_version: String,
     pub original_len: u64,
+}
+/// The document path of a recovery record. A path that is valid Unicode is kept
+/// as text, the form every earlier release wrote and reads; any other path keeps
+/// its exact native identity (`SerializedPath`: the bytes of a Unix name, the
+/// UTF-16 units of a Windows one), so a file whose name is not Unicode still
+/// journals and recovers (LNX-EDIT-008).
+mod native_path {
+    use bareline_platform::SerializedPath;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::path::PathBuf;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Text(String),
+        Native(SerializedPath),
+    }
+
+    pub fn serialize<S: Serializer>(path: &Option<PathBuf>, serializer: S) -> Result<S::Ok, S::Error> {
+        match path {
+            None => serializer.serialize_none(),
+            Some(path) => match path.to_str() {
+                Some(text) => serializer.serialize_some(text),
+                None => serializer.serialize_some(&SerializedPath::from_native(path)),
+            },
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PathBuf>, D::Error> {
+        Option::<Stored>::deserialize(deserializer)?
+            .map(|stored| match stored {
+                Stored::Text(text) => Ok(PathBuf::from(text)),
+                Stored::Native(path) => path.to_native().map_err(serde::de::Error::custom),
+            })
+            .transpose()
+    }
 }
 /// Edits are sorted, nonoverlapping offsets in the pre-transaction byte domain.
 /// The caller owns both inserted and inverse bytes before committing its transaction.
@@ -1251,6 +1287,53 @@ mod tests {
             files += 1;
         }
         assert!(files >= 3, "journal, baseline and manifest");
+    }
+    /// POSIX file names are bytes: a name that is not UTF-8 journals and
+    /// recovers like any other (LNX-EDIT-008).
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_document_names_are_journaled_and_recovered() {
+        use std::os::unix::ffi::OsStringExt;
+        let original = PathBuf::from(std::ffi::OsString::from_vec(b"/w/bad-\xff-name.txt".to_vec()));
+        let temp = Temp::new();
+        let mut writer = RecoveryWriter::create(
+            &temp.0.join("item"),
+            RecoveryMetadata {
+                original_path: Some(original.clone()),
+                source_generation: "full-sha256-test".into(),
+                codec_catalog_version: "utf8-v1".into(),
+                original_len: 5,
+            },
+            &FakeFs,
+        )
+        .unwrap();
+        writer
+            .seal_baseline(&mut &b"hello"[..], || Ok(true), &Cancellation::default(), &FakeFs)
+            .unwrap();
+        writer.append(1, &[edit()]).unwrap();
+        writer.checkpoint(&FakeFs).unwrap();
+        let inspection = inspect(&temp.0.join("item"), &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::Complete);
+        assert_eq!(inspection.metadata.original_path, Some(original));
+    }
+    #[test]
+    fn unicode_document_paths_keep_the_text_form_earlier_releases_read() {
+        let metadata = |original_path| RecoveryMetadata {
+            original_path,
+            source_generation: "g".into(),
+            codec_catalog_version: "c".into(),
+            original_len: 1,
+        };
+        let path = PathBuf::from("notes/caf\u{e9}.txt");
+        let stored = serde_json::to_value(metadata(Some(path.clone()))).unwrap();
+        assert_eq!(stored["original_path"], "notes/caf\u{e9}.txt");
+        let read: RecoveryMetadata = serde_json::from_value(stored).unwrap();
+        assert_eq!(read.original_path, Some(path));
+        assert!(serde_json::to_value(metadata(None)).unwrap()["original_path"].is_null());
+        // Records without the field read as having no path.
+        let legacy: RecoveryMetadata =
+            serde_json::from_str(r#"{"source_generation":"g","codec_catalog_version":"c","original_len":1}"#).unwrap();
+        assert_eq!(legacy.original_path, None);
     }
     #[test]
     fn sealed_recovery_is_independent_and_never_overwrites_destination() {
