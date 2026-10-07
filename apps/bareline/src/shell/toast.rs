@@ -130,6 +130,11 @@ pub(super) struct ToastStack {
     hits: Vec<(Rect, Hit)>,
     focus: Option<u64>,
     details_open: Option<u64>,
+    /// The highest bottom edge notifications may use this frame: the top of
+    /// the message bar or a modal's action row, in window coordinates.
+    floor: Option<f32>,
+    /// The last `draw` painted the details panel.
+    details_painted: bool,
     details_scroll: usize,
     overflow_bounds: Rect,
     overflow_painted: bool,
@@ -478,6 +483,17 @@ impl ToastStack {
         self.details_open.is_some()
     }
 
+    /// Keep notifications above window y `floor` (see `ToastStack::floor`).
+    pub(super) fn set_floor(&mut self, floor: Option<f32>) {
+        self.floor = floor;
+    }
+
+    /// Whether the last frame painted the open details panel; the shell
+    /// keeps the details modal only while it does (LNX-UI-001).
+    pub(super) fn details_painted(&self) -> bool {
+        self.details_open.is_some() && self.details_painted
+    }
+
     pub(super) fn open_details(&mut self, id: u64) -> bool {
         if id != OVERFLOW_ID && !self.toasts.iter().any(|toast| toast.accessibility_id == id) {
             return false;
@@ -740,6 +756,7 @@ impl ToastStack {
             );
             self.hits.push((bounds, Hit::Details(OVERFLOW_ID)));
         }
+        self.details_painted = self.details_open.is_some();
         if let Some(id) = self.details_open {
             self.draw_details(renderer, id, width, height, theme, ops);
         }

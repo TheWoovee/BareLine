@@ -4586,6 +4586,15 @@ impl Shell {
             visible_rows,
         );
         self.renderer = Some(renderer);
+        // The details modal holds input only while its panel is on screen: a
+        // frame that skipped the panel closes it (LNX-UI-001).
+        if self
+            .modal
+            .is_some_and(|modal| modal.surface == modal::ModalSurface::NotificationDetails)
+            && !self.toasts.details_painted()
+        {
+            self.dismiss_modal(modal::ModalSurface::NotificationDetails);
+        }
         // Text range geometry needs the renderer's live layouts. Publish only
         // after restoring it; render_frame temporarily borrows it out of Shell.
         self.update_accessibility(size, scale);

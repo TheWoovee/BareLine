@@ -406,10 +406,69 @@ impl Shell {
         changed.is_some()
     }
 
+    /// The notification details panel's share of `modal_event`: whether
+    /// `event` was the panel's input. Only input belongs to it. A redraw,
+    /// resize or focus change reaches the shell, or the panel is never painted
+    /// while it holds every key and click (LNX-UI-001).
+    fn details_modal_event(&mut self, event: &WindowEvent) -> bool {
+        let surface = ModalSurface::NotificationDetails;
+        match event {
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) =>
+            {
+                self.dismiss_modal(surface);
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && (event.logical_key == Key::Named(NamedKey::Enter)
+                        || matches!(&event.logical_key, Key::Character(value) if value == " ")) =>
+            {
+                self.dismiss_modal(surface);
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && matches!(&event.logical_key, Key::Named(NamedKey::PageDown | NamedKey::ArrowDown)) =>
+            {
+                self.toasts.scroll_details(true);
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && matches!(&event.logical_key, Key::Named(NamedKey::PageUp | NamedKey::ArrowUp)) =>
+            {
+                self.toasts.scroll_details(false);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let down = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y < 0.0,
+                    MouseScrollDelta::PixelDelta(point) => point.y < 0.0,
+                };
+                self.toasts.scroll_details(down);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if self.toasts.details_pointer_close(self.pointer) => {
+                self.dismiss_modal(surface);
+            }
+            _ => {}
+        }
+        matches!(
+            event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
+        )
+    }
+
     pub(super) fn modal_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         let Some(modal) = self.modal else {
             return false;
         };
+        // The details modal exists only for its open, painted panel; one left
+        // behind by a notification that went away must not hold input.
+        if modal.surface == ModalSurface::NotificationDetails && !self.toasts.details_open() {
+            self.dismiss_modal(modal.surface);
+            return false;
+        }
         if matches!(event, WindowEvent::CloseRequested) {
             self.dismiss_modal(modal.surface);
             return false;
@@ -454,51 +513,7 @@ impl Shell {
             ModalSurface::CompareOptions => self.compare_event(el, event),
             ModalSurface::Recovery => self.recovery_event(el, event),
             ModalSurface::Prompt => self.prompt_event(event),
-            ModalSurface::NotificationDetails => {
-                match event {
-                    WindowEvent::KeyboardInput { event, .. }
-                        if event.state == ElementState::Pressed
-                            && event.logical_key == Key::Named(NamedKey::Escape) =>
-                    {
-                        self.dismiss_modal(modal.surface);
-                    }
-                    WindowEvent::KeyboardInput { event, .. }
-                        if event.state == ElementState::Pressed
-                            && (event.logical_key == Key::Named(NamedKey::Enter)
-                                || matches!(&event.logical_key, Key::Character(value) if value == " ")) =>
-                    {
-                        self.dismiss_modal(modal.surface);
-                    }
-                    WindowEvent::KeyboardInput { event, .. }
-                        if event.state == ElementState::Pressed
-                            && matches!(&event.logical_key, Key::Named(NamedKey::PageDown | NamedKey::ArrowDown)) =>
-                    {
-                        self.toasts.scroll_details(true);
-                    }
-                    WindowEvent::KeyboardInput { event, .. }
-                        if event.state == ElementState::Pressed
-                            && matches!(&event.logical_key, Key::Named(NamedKey::PageUp | NamedKey::ArrowUp)) =>
-                    {
-                        self.toasts.scroll_details(false);
-                    }
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        let down = match delta {
-                            MouseScrollDelta::LineDelta(_, y) => *y < 0.0,
-                            MouseScrollDelta::PixelDelta(point) => point.y < 0.0,
-                        };
-                        self.toasts.scroll_details(down);
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Left,
-                        ..
-                    } if self.toasts.details_pointer_close(self.pointer) => {
-                        self.dismiss_modal(modal.surface);
-                    }
-                    _ => {}
-                }
-                true
-            }
+            ModalSurface::NotificationDetails => self.details_modal_event(event),
         };
         if handled
             && let Some(focus) = match modal.surface {
@@ -596,6 +611,91 @@ mod tests {
         assert!(
             shell.toasts.key(&Key::Named(NamedKey::Enter), false).is_none(),
             "the first editor key after modal close must not be captured by notifications"
+        );
+    }
+
+    /// A shell with one persistent toast whose Details… was clicked.
+    fn details_shell(renderer: &mut impl bareline_renderer::TextBackend) -> Shell {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.toasts.enqueue(
+            toast::Notification::new(
+                "details-paint",
+                1,
+                bareline_ui::theme::ToastLevel::Error,
+                toast::NotificationKind::Outcome,
+                "Complete message",
+                Some("Why it failed".into()),
+                None,
+                toast::NotificationLifetime::Persistent,
+            ),
+            std::time::Instant::now(),
+        );
+        let theme = shell.settings.ui_theme();
+        shell.toasts.draw(renderer, 800.0, 600.0, theme, &mut Vec::new());
+        let row = shell.toasts.accessibility()[0].bounds;
+        shell.pointer = Point {
+            x: row.x + 24.0,
+            y: row.y + row.height - 12.0,
+        };
+        let Some(toast::ToastAction::OpenDetails(id)) = shell.toasts.hit(shell.pointer) else {
+            panic!("the press lands on Details…");
+        };
+        assert!(shell.toasts.open_details(id));
+        shell.activate_modal(ModalSurface::NotificationDetails);
+        shell
+    }
+
+    /// LNX-UI-001: the details modal took every window event, the redraw that
+    /// would paint its panel included, so it held input with nothing on screen.
+    #[test]
+    fn notification_details_lets_redraws_through_and_keeps_its_input() {
+        let mut shell = details_shell(&mut bareline_renderer_recording::RecordingBackend::default());
+        assert!(!shell.details_modal_event(&WindowEvent::RedrawRequested));
+        assert!(!shell.details_modal_event(&WindowEvent::Resized(winit::dpi::PhysicalSize::new(800, 600))));
+        assert!(!shell.details_modal_event(&WindowEvent::Focused(true)));
+        assert!(shell.details_modal_event(&WindowEvent::MouseWheel {
+            device_id: winit::event::DeviceId::dummy(),
+            delta: MouseScrollDelta::LineDelta(0.0, -1.0),
+            phase: winit::event::TouchPhase::Moved,
+        }));
+        assert_eq!(
+            shell.modal.map(|modal| modal.surface),
+            Some(ModalSurface::NotificationDetails)
+        );
+        // A frame that skipped the panel does not leave its modal behind.
+        shell.toasts.close_details();
+        assert!(!shell.toasts.details_painted());
+    }
+
+    /// LNX-UI-001: the frame after Details… paints the panel (software renderer).
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn notification_details_panel_is_painted_by_the_software_renderer() {
+        use bareline_renderer::{FrameStatus, RenderBackend};
+        let (width, height) = (800u32, 600u32);
+        let mut renderer = crate::shell::native::Renderer::offscreen(width, height, 1.0).unwrap();
+        let mut shell = details_shell(&mut renderer);
+        let theme = shell.settings.ui_theme();
+        let mut ops = bareline_ui::shell_with_theme(width as f32, height as f32, &[], 0, false, theme);
+        shell
+            .toasts
+            .draw(&mut renderer, width as f32, height as f32, theme, &mut ops);
+        assert!(shell.toasts.details_painted());
+        assert_eq!(renderer.render(&ops).unwrap(), FrameStatus::Presented);
+        let pixels = renderer.pixels_bgra().unwrap();
+        let (_, panel, _) = shell.toasts.details_semantics().expect("the panel is open");
+        // Clear of the panel's text, its surface colour shows.
+        let (x, y) = (
+            (panel.x + panel.width - 24.0) as usize,
+            (panel.y + panel.height / 2.0) as usize,
+        );
+        let at = (y * width as usize + x) * 4;
+        let surface = theme.toast(bareline_ui::theme::ToastLevel::Info).surface.0;
+        assert_ne!(surface, theme.editor.0, "the panel differs from the window behind it");
+        assert_eq!(
+            [pixels[at + 2], pixels[at + 1], pixels[at]],
+            [(surface >> 16) as u8, (surface >> 8) as u8, surface as u8],
+            "the details panel is painted"
         );
     }
 }
