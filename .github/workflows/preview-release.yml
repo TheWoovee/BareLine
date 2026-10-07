@@ -1,5 +1,8 @@
-name: Unsigned Windows preview
+name: Unsigned preview
 
+# Builds the unsigned Windows x64, Linux x64 and macOS arm64 previews, combines
+# them into one download set with a single SHA-256SUMS (assemble-preview), and
+# for a pushed v*-preview.* tag attests and publishes exactly that set.
 on:
   push:
     tags: ['v*-preview.*']
@@ -7,6 +10,9 @@ on:
     paths:
       - '.github/workflows/preview-release.yml'
       - 'packaging/windows/**'
+      - 'packaging/linux/**'
+      - 'packaging/macos/**'
+      - 'packaging/preview-identity.sh'
       - 'packaging/scoop/**'
       - 'scripts/scoop_manifest.py'
       - 'Cargo.toml'
@@ -75,7 +81,7 @@ jobs:
         env:
           PACKAGE_VERSION: ${{ steps.identity.outputs.version }}
         run: |
-          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -Platform windows -RequireInstaller -BuildHash $env:GITHUB_SHA
           ./packaging/windows/test-preview-installer-ci.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION
       - name: Fill in and validate the Scoop manifest for the portable ZIP
         env:
@@ -111,11 +117,137 @@ jobs:
           compression-level: 0
           retention-days: 30
 
-  # Build provenance for every published asset, including SHA-256SUMS. Only
-  # this job can request an OIDC token. Minisign signing of SHA-256SUMS follows
-  # once the release key exists (ADR-31).
+  # The Linux x64 tarball: the editor and the extension host as Cargo builds
+  # them on ubuntu-latest (Ubuntu 24.04, glibc 2.39). build-preview.sh packs a
+  # normalized archive, extracts it and runs the editor's --version.
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      tarball_sha256: ${{ steps.package.outputs.sha256 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+      - name: Install the Linux build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev
+      - name: Install pinned SBOM generator
+        run: cargo install --locked cargo-cyclonedx --version =0.5.9
+      - name: Build, package and check the Linux preview
+        id: package
+        run: |
+          # The notices and SBOM come from the PowerShell generators (pwsh is on the runner).
+          bash packaging/linux/build-preview.sh --out dist/linux-preview
+          git diff --exit-code -- Cargo.lock
+          echo "sha256=$(sha256sum dist/linux-preview/*.tar.gz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Retain the Linux preview download
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-linux-preview
+          path: dist/linux-preview/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # The macOS disk image for Apple silicon: build-preview.sh builds for
+  # aarch64-apple-darwin, bundles and ad-hoc signs Bareline.app, then mounts the
+  # disk image and checks its contents, signature and --version. Windows cannot
+  # mount it, so the SHA-256 recorded here identifies the checked file later.
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    outputs:
+      dmg_sha256: ${{ steps.package.outputs.sha256 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+          targets: aarch64-apple-darwin
+      - name: Install pinned SBOM generator
+        run: cargo install --locked cargo-cyclonedx --version =0.5.9
+      - name: Build, bundle and check the macOS preview
+        id: package
+        run: |
+          # The notices and SBOM come from the PowerShell generators (pwsh is on the runner).
+          bash packaging/macos/build-preview.sh --out dist/macos-preview
+          git diff --exit-code -- Cargo.lock
+          echo "sha256=$(shasum -a 256 dist/macos-preview/*.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Retain the macOS preview download
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-macos-preview
+          path: dist/macos-preview/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # The one authoritative download set: the three platform artifacts, release
+  # notes extended for Linux and macOS, and a single SHA-256SUMS over all of
+  # them, verified as a whole. Attestation and publication take exactly this.
+  assemble-preview:
+    needs: [build-and-check, build-linux, build-macos]
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-windows-preview
+          path: dist/parts/windows
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-linux-preview
+          path: dist/parts/linux
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-macos-preview
+          path: dist/parts/macos
+      - name: Combine, inventory and verify the Windows, Linux and macOS downloads
+        env:
+          PACKAGE_VERSION: ${{ needs.build-and-check.outputs.version }}
+          TARBALL_SHA256: ${{ needs.build-linux.outputs.tarball_sha256 }}
+          DMG_SHA256: ${{ needs.build-macos.outputs.dmg_sha256 }}
+        run: ./packaging/windows/assemble-preview.ps1 -WindowsDir dist/parts/windows -LinuxDir dist/parts/linux -MacosDir dist/parts/macos -OutputDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA -TarballSha256 $env:TARBALL_SHA256 -DmgSha256 $env:DMG_SHA256
+      - name: Retain the complete preview download set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-preview
+          path: dist/preview/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # Build provenance for every published asset (the Windows, Linux and macOS
+  # downloads, the documents and the combined SHA-256SUMS). Only this job can
+  # request an OIDC token. Minisign signing of SHA-256SUMS follows once the
+  # release key exists (ADR-31).
   attest-preview:
-    needs: build-and-check
+    needs: [build-and-check, build-macos, assemble-preview]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: windows-2022
     timeout-minutes: 15
@@ -132,22 +264,23 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: unsigned-windows-preview
+          name: unsigned-preview
           path: dist/preview
       - name: Reverify exact downloads before attesting them
         env:
           PACKAGE_VERSION: ${{ needs.build-and-check.outputs.version }}
-        run: ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
+          DMG_SHA256: ${{ needs.build-macos.outputs.dmg_sha256 }}
+        run: ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA -DmgSha256 $env:DMG_SHA256
       - name: Attest preview assets and SHA-256SUMS
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/preview/*
 
   publish-preview:
-    needs: [build-and-check, attest-preview]
+    needs: [build-and-check, build-macos, assemble-preview, attest-preview]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: windows-2022
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write
       actions: read
@@ -178,16 +311,17 @@ jobs:
           }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: unsigned-windows-preview
+          name: unsigned-preview
           path: dist/preview
       - name: Reverify exact downloads before publishing the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PACKAGE_VERSION: ${{ needs.build-and-check.outputs.version }}
+          DMG_SHA256: ${{ needs.build-macos.outputs.dmg_sha256 }}
         run: |
           ./packaging/windows/check-preview-tag.ps1 -Version $env:PACKAGE_VERSION -Tag $env:GITHUB_REF_NAME
-          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA -DmgSha256 $env:DMG_SHA256
           # --verify-tag forbids implicitly creating a tag. Existing releases or
           # drafts fail creation: reruns never overwrite published downloads.
           $assets = @(Get-ChildItem -LiteralPath dist/preview -File | Sort-Object Name | ForEach-Object FullName)
@@ -195,7 +329,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Preview draft creation/upload failed; existing releases are never replaced' }
           gh release download $env:GITHUB_REF_NAME --dir dist/downloaded-preview
           if ($LASTEXITCODE) { throw 'Could not download uploaded preview assets; draft retained for inspection' }
-          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/downloaded-preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/downloaded-preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA -DmgSha256 $env:DMG_SHA256
           foreach ($asset in $assets) {
             $download = Join-Path dist/downloaded-preview ([IO.Path]::GetFileName($asset))
             if ((Get-FileHash -LiteralPath $asset).Hash -ne (Get-FileHash -LiteralPath $download).Hash) { throw 'Uploaded release asset differs; draft retained for inspection' }
