@@ -113,7 +113,10 @@ pub fn share_sealed_file(source: &Path, target: &Path) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let output = sys::open_at(CWD, target, sys::CREATE)?;
-        match rustix::fs::ioctl_ficlone(&output, &input) {
+        // A clone is a new file whose extents are durable only once synced; a
+        // manifest naming it is published right after (the copy it replaces
+        // was synced too).
+        match rustix::fs::ioctl_ficlone(&output, &input).and_then(|()| rustix::fs::fsync(&output)) {
             Ok(()) => return Ok(()),
             Err(_) => {
                 drop(output);

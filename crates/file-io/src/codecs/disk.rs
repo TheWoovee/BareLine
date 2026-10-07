@@ -29,6 +29,9 @@ use std::{
 const CHUNK: usize = 65536;
 /// Buffer for whole-file copies and hashing passes.
 const COPY_BUFFER: usize = 1024 * 1024;
+/// Raw bytes one transcode step copies into the text a broken mirror skipped
+/// (FIO-14): a few copy buffers, with a cancellation check before each.
+const CATCH_UP_STEP: u64 = 4 * COPY_BUFFER as u64;
 /// Provenance records read ahead while a save walks the map.
 const MAP_BUFFER: usize = 8 * 1024;
 const RECORD_BYTES: u64 = 49;
@@ -232,6 +235,13 @@ pub struct TranscodeProgress {
     pub complete: bool,
     pub disk_bytes: u64,
 }
+/// Text a broken mirror still owes the text file: the raw bytes it skipped,
+/// read from `raw`, then the text decoded since.
+struct CatchUp {
+    raw: File,
+    remaining: u64,
+    then: Vec<u8>,
+}
 pub struct DiskTranscoder {
     hash: Sha256,
     text_hash: Sha256,
@@ -248,6 +258,10 @@ pub struct DiskTranscoder {
     /// copy of `original.raw` (LNX-DISK-004). `None` once the text differs, or
     /// where the platform cannot share sealed files.
     mirror: Option<Vec<u8>>,
+    /// The text a broken mirror still owes `text`, written over later steps.
+    catch_up: Option<CatchUp>,
+    /// All input is decoded; the store is sealed once its text is complete.
+    sealing: bool,
     map: File,
     map_buffer: Vec<u8>,
     store: Arc<Directory>,
@@ -390,6 +404,8 @@ impl DiskTranscoder {
             raw,
             text,
             mirror,
+            catch_up: None,
+            sealing: false,
             map,
             map_buffer: Vec::with_capacity(MAP_WRITE_RECORDS * RECORD_BYTES as usize),
             store,
@@ -469,6 +485,9 @@ impl DiskTranscoder {
         if self.complete {
             return Ok(self.progress());
         }
+        if self.catch_up.is_some() || self.sealing {
+            return self.continue_text();
+        }
         if self.pending.is_empty() && !self.eof {
             let limit = self.identity.length.saturating_sub(self.raw_len).min(CHUNK as u64) as usize;
             self.pending.resize(limit, 0);
@@ -545,17 +564,22 @@ impl DiskTranscoder {
                 return Err(DiskError::Changed);
             }
             self.check()?;
-            self.raw.sync_all()?;
-            self.finish_text()?;
-            self.map.sync_all()?;
-            self.eol.push("", true);
-            self.complete = true;
+            if let Err(error) = self.raw.sync_all() {
+                self.failed = true;
+                return Err(error.into());
+            }
+            self.sealing = true;
+            return self.continue_text();
         }
         Ok(self.progress())
     }
     /// Writes this step's decoded text, after its raw bytes, unless the text still
     /// mirrors the raw input.
     fn write_text(&mut self, text: &[u8]) -> io::Result<()> {
+        if let Some(catch_up) = self.catch_up.as_mut() {
+            catch_up.then.extend_from_slice(text);
+            return Ok(());
+        }
         if let Some(unmatched) = self.mirror.as_mut() {
             unmatched.extend_from_slice(&self.pending);
             // A decoder holds back at most an incomplete scalar between steps.
@@ -564,48 +588,110 @@ impl DiskTranscoder {
                 return Ok(());
             }
             self.mirror = None;
-            self.copy_mirrored_text()?;
+            return self.start_catch_up(text.to_vec());
         }
         self.text.write_all(text)
     }
-    /// Writes the text a mirror skipped: the first `text_len` raw bytes.
-    fn copy_mirrored_text(&mut self) -> io::Result<()> {
-        let raw = File::open(self.store.0.join("original.raw"))?;
-        let copied = io::copy(&mut raw.take(self.text_len), &mut self.text)?;
-        if copied != self.text_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "transcode store shrank"));
+    /// Owes `text` the first `text_len` raw bytes a mirror skipped, then `then`.
+    /// They are copied over the following steps, a bounded piece each (FIO-14).
+    fn start_catch_up(&mut self, then: Vec<u8>) -> io::Result<()> {
+        if self.text_len == 0 {
+            return self.text.write_all(&then);
         }
+        self.catch_up = Some(CatchUp {
+            raw: File::open(self.store.0.join("original.raw"))?,
+            remaining: self.text_len,
+            then,
+        });
         Ok(())
     }
-    /// Makes the sealed text durable. A text that mirrored its raw input to the
-    /// end becomes a shared copy of the synced `original.raw`; where sharing fails
-    /// it is copied.
-    fn finish_text(&mut self) -> io::Result<()> {
-        let Some(unmatched) = self.mirror.take() else {
-            return self.text.sync_all();
-        };
-        let path = self.store.0.join("text.utf8");
-        if unmatched.is_empty() && self.text_len == self.raw_len {
-            // The empty text file is closed first: an open file cannot be removed
-            // on every system.
-            self.text = File::open(self.store.0.join("original.raw"))?;
-            fs::remove_file(&path)?;
-            if self
-                .platform
-                .share_sealed_file(&self.store.0.join("original.raw"), &path)
-                .is_ok()
-            {
-                self.text = File::open(&path)?;
-                return Ok(());
+    /// One bounded piece of the text a broken mirror owes, then the seal once all
+    /// input is decoded. A failed write fails the transcoder; a cancelled copy
+    /// resumes where it stopped.
+    fn continue_text(&mut self) -> Result<TranscodeProgress, DiskError> {
+        let mut budget = CATCH_UP_STEP;
+        while let Some(catch_up) = self.catch_up.as_mut() {
+            if catch_up.remaining == 0 {
+                let then = std::mem::take(&mut catch_up.then);
+                self.catch_up = None;
+                if let Err(error) = self.text.write_all(&then) {
+                    self.failed = true;
+                    return Err(error.into());
+                }
+                break;
             }
-            self.text = bareline_platform::private::file_options()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&path)?;
+            if budget == 0 {
+                return Ok(self.progress());
+            }
+            self.cancellation.check().map_err(|_| DiskError::Cancelled)?;
+            let len = catch_up.remaining.min(budget).min(COPY_BUFFER as u64);
+            let copied = io::copy(&mut (&catch_up.raw).take(len), &mut self.text).and_then(|copied| {
+                if copied == len {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "transcode store shrank"))
+                }
+            });
+            if let Err(error) = copied {
+                self.failed = true;
+                return Err(error.into());
+            }
+            catch_up.remaining -= len;
+            budget -= len;
         }
-        self.copy_mirrored_text()?;
-        self.text.sync_all()
+        if self.sealing {
+            match self.seal() {
+                Ok(true) => {
+                    self.eol.push("", true);
+                    self.complete = true;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    self.failed = true;
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(self.progress())
+    }
+    /// Makes the decoded text and the map durable; `false` while text is still
+    /// owed. A text that mirrored its raw input to the end becomes a shared copy
+    /// of the synced `original.raw`; where sharing fails it is copied over the
+    /// following steps like any skipped text.
+    fn seal(&mut self) -> io::Result<bool> {
+        if let Some(unmatched) = self.mirror.take() {
+            let shared = unmatched.is_empty() && self.text_len == self.raw_len && self.share_text()?;
+            if !shared {
+                self.start_catch_up(Vec::new())?;
+                if self.catch_up.is_some() {
+                    return Ok(false);
+                }
+                self.text.sync_all()?;
+            }
+        } else {
+            self.text.sync_all()?;
+        }
+        self.map.sync_all()?;
+        Ok(true)
+    }
+    /// Replaces the empty text file with a shared copy of `original.raw`. `false`
+    /// leaves a new empty text file to copy into.
+    fn share_text(&mut self) -> io::Result<bool> {
+        let (raw, path) = (self.store.0.join("original.raw"), self.store.0.join("text.utf8"));
+        // The empty text file is closed first: an open file cannot be removed on
+        // every system.
+        self.text = File::open(&raw)?;
+        fs::remove_file(&path)?;
+        if self.platform.share_sealed_file(&raw, &path).is_ok() {
+            self.text = File::open(&path)?;
+            return Ok(true);
+        }
+        self.text = bareline_platform::private::file_options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok(false)
     }
     pub fn finish(self) -> Result<DiskDecoded, DiskError> {
         if !self.complete {
@@ -1614,12 +1700,16 @@ mod tests {
         .unwrap()
     }
     /// `Platform` whose file system shares sealed files with hard links and
-    /// records each share by file names.
+    /// records each share by file names; a refusing one claims sharing but every
+    /// share fails, as on a cache without hard links.
     #[derive(Default)]
-    struct Sharing(std::sync::Mutex<Vec<(String, String)>>);
+    struct Sharing(std::sync::Mutex<Vec<(String, String)>>, bool);
     impl Sharing {
         fn shared(&self) -> Vec<(String, String)> {
             self.0.lock().unwrap().clone()
+        }
+        fn refusing() -> Self {
+            Self(Default::default(), true)
         }
     }
     impl LocalFileSystem for Sharing {
@@ -1645,6 +1735,9 @@ mod tests {
             true
         }
         fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+            if self.1 {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "no links here"));
+            }
             fs::hard_link(source, target)?;
             let name = |path: &Path| path.file_name().unwrap().to_string_lossy().into_owned();
             self.0.lock().unwrap().push((name(source), name(target)));
@@ -1653,11 +1746,17 @@ mod tests {
     }
     /// Transcodes `raw` to completion in its own folder of `temp`.
     fn transcode_in(temp: &Temp, name: &str, raw: &[u8], platform: Arc<dyn LocalFileSystem>) -> DiskDecoded {
+        let mut job = start_in(temp, name, raw, platform);
+        while !job.step().unwrap().complete {}
+        job.finish().unwrap()
+    }
+    /// Starts transcoding `raw` in its own folder of `temp`.
+    fn start_in(temp: &Temp, name: &str, raw: &[u8], platform: Arc<dyn LocalFileSystem>) -> DiskTranscoder {
         let folder = temp.0.join(name);
         fs::create_dir(&folder).unwrap();
         let path = folder.join("input");
         fs::write(&path, raw).unwrap();
-        let mut job = DiskTranscoder::new(
+        DiskTranscoder::new(
             FileInput {
                 file: File::open(&path).unwrap(),
                 path,
@@ -1671,9 +1770,88 @@ mod tests {
             Budget::new(8 * 1024 * 1024),
             Cancellation::default(),
         )
-        .unwrap();
-        while !job.step().unwrap().complete {}
-        job.finish().unwrap()
+        .unwrap()
+    }
+    /// Bytes of the store's text file so far.
+    fn text_on_disk(job: &DiskTranscoder) -> u64 {
+        fs::metadata(job.store.0.join("text.utf8")).unwrap().len()
+    }
+    /// The text a mirror skipped is written a bounded piece per step, whether the
+    /// text differs late (an invalid byte near the end of a large UTF-8 file) or
+    /// the cache cannot share it at the seal, and a cancelled copy resumes where
+    /// it stopped (FIO-14). The result is the text written without any mirror.
+    #[test]
+    fn skipped_text_is_written_in_bounded_cancellable_steps() {
+        let temp = Temp::new();
+        let mut late = vec![b'x'; 10 * 1024 * 1024];
+        late.push(0xff);
+        late.extend_from_slice(&[b'x'; 200 * 1024]);
+        let plain = vec![b'y'; 10 * 1024 * 1024];
+        for (name, raw, platform) in [
+            ("late", late, Sharing::default()),
+            ("unshared", plain, Sharing::refusing()),
+        ] {
+            let mut job = start_in(&temp, name, &raw, Arc::new(platform));
+            let cancel = Cancellation::default();
+            job.set_cancellation(cancel.clone());
+            while job.catch_up.is_none() {
+                assert!(!job.step().unwrap().complete, "{name}");
+            }
+            // Nothing was written while the text mirrored the raw bytes.
+            assert_eq!(text_on_disk(&job), 0, "{name}");
+            assert!(job.catch_up.as_ref().unwrap().remaining > 2 * CATCH_UP_STEP, "{name}");
+            assert!(!job.step().unwrap().complete);
+            assert_eq!(text_on_disk(&job), CATCH_UP_STEP, "{name}");
+            cancel.cancel();
+            assert!(matches!(job.step(), Err(DiskError::Cancelled)), "{name}");
+            assert_eq!(text_on_disk(&job), CATCH_UP_STEP, "{name}");
+            job.set_cancellation(Cancellation::default());
+            let mut steps = 1;
+            loop {
+                let before = text_on_disk(&job);
+                let progress = job.step().unwrap();
+                // One piece, then the text decoded after the skipped part.
+                assert!(
+                    text_on_disk(&job) - before <= CATCH_UP_STEP + 4 * CHUNK as u64,
+                    "{name}"
+                );
+                steps += 1;
+                if progress.complete {
+                    break;
+                }
+            }
+            assert!(steps >= 3, "{name}: {steps}");
+            let store = job.finish().unwrap();
+            let written = transcode_in(
+                &temp,
+                &format!("{name}-written"),
+                &raw,
+                Arc::new(Platform { logical_size: None }),
+            );
+            assert_eq!(store.sealed_hashes, written.sealed_hashes, "{name}");
+            assert!(fs::read(store.text_path()).unwrap() == fs::read(written.text_path()).unwrap());
+        }
+    }
+    /// A copy into the text that fails, here because the raw store shrank under it,
+    /// fails the transcoder: a retried step never seals an incomplete text.
+    #[test]
+    fn a_failed_text_copy_fails_the_transcoder() {
+        let temp = Temp::new();
+        let raw = vec![b'z'; 6 * 1024 * 1024];
+        let mut job = start_in(&temp, "shrunk", &raw, Arc::new(Sharing::refusing()));
+        while job.catch_up.is_none() {
+            assert!(!job.step().unwrap().complete);
+        }
+        fs::OpenOptions::new()
+            .write(true)
+            .open(job.store.0.join("original.raw"))
+            .unwrap()
+            .set_len(1024 * 1024)
+            .unwrap();
+        assert!(matches!(job.step(), Err(DiskError::Io(_))));
+        assert!(matches!(job.step(), Err(DiskError::Failed)));
+        assert!(!job.progress().complete);
+        assert!(matches!(job.finish(), Err(DiskError::NotComplete)));
     }
     /// UTF-8 text is its raw bytes: the sealed text is a shared copy of the raw
     /// store, and recovery shares all three files, instead of writing each again

@@ -419,7 +419,9 @@ pub trait LocalFileSystem: Send + Sync {
     /// Give the new file `target` the exact bytes of the sealed file `source`
     /// without writing them again: a copy-on-write clone where the file system has
     /// one, or another link to the same file. Both names stay sealed: nobody may
-    /// write either of them afterwards. `Unsupported` (the default) or any other
+    /// write either of them afterwards. Once this returns, `target` is as durable
+    /// as the synced `source` (a clone is synced), so a manifest naming it may be
+    /// published at once. `Unsupported` (the default) or any other
     /// error leaves no `target` behind, and the caller copies the bytes instead.
     fn share_sealed_file(&self, _source: &Path, _target: &Path) -> std::io::Result<()> {
         Err(std::io::Error::new(
