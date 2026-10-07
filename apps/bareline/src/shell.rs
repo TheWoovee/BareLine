@@ -4293,11 +4293,18 @@ impl Shell {
         event: winit::event::KeyEvent,
         editor_bounds: bareline_renderer::Rect,
     ) {
-        if !self
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.find.has_focus())
-        {
+        // The Find bar keeps only its own keys; Ctrl+S, Ctrl+H, Ctrl+G, Ctrl+W,
+        // Ctrl+Tab and every other shortcut resolve as they do from the editor
+        // (LNX-EDIT-005).
+        if !self.workspace.as_ref().is_some_and(|workspace| {
+            workspace.find.has_focus()
+                && find_field_owns_key(
+                    workspace.find.focused,
+                    &event.logical_key,
+                    event.text.as_deref(),
+                    self.modifiers,
+                )
+        }) {
             let composing = self.workspace.as_ref().is_some_and(|workspace| {
                 (workspace.find.has_focus()
                     && (workspace.find.field.composing() || workspace.find.replacement.composing()))
@@ -5544,6 +5551,31 @@ impl Shell {
         {
             self.layer_failed(el, "menu", error);
         }
+    }
+}
+/// Whether a key pressed while the Find bar has focus is the bar's own: Escape,
+/// Enter, F3, Tab traversal, Space on a focused toggle and, in its text
+/// fields, typing and the caret and deletion keys. Other chords (Ctrl+S,
+/// Ctrl+H, Ctrl+G, Ctrl+W, Ctrl+Tab, Alt and function-key shortcuts) are not:
+/// they resolve through the keymap as from the editor, as Notepad++'s
+/// shortcuts work over its Find dialog. Clipboard, undo and select-all
+/// commands then act on the focused field (`route_text_and_clipboard`).
+fn find_field_owns_key(text_focused: bool, key: &Key, text: Option<&str>, modifiers: ModifiersState) -> bool {
+    let (ctrl, alt) = (modifiers.control_key(), modifiers.alt_key());
+    match key {
+        Key::Named(NamedKey::Escape | NamedKey::Enter | NamedKey::F3) => true,
+        Key::Named(NamedKey::Tab) => !ctrl,
+        Key::Named(NamedKey::Space) => !ctrl || alt,
+        Key::Named(
+            NamedKey::ArrowLeft
+            | NamedKey::ArrowRight
+            | NamedKey::Home
+            | NamedKey::End
+            | NamedKey::Backspace
+            | NamedKey::Delete,
+        ) => text_focused && !alt,
+        // Typed text, AltGr (Ctrl+Alt) included; a bare Alt chord is a shortcut.
+        _ => text_focused && ctrl == alt && text.is_some_and(|text| !text.chars().any(char::is_control)),
     }
 }
 fn find_action(action: bareline_app::find::FindAction) -> Action {

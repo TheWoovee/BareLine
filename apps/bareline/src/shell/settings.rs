@@ -1406,6 +1406,96 @@ mod keymap_cache_tests {
         assert!(runtime.controller.revision > revision);
         let _ = std::fs::remove_dir_all(root);
     }
+    /// LNX-EDIT-005: with the Find field focused, global chords resolve and
+    /// dispatch as from the editor, and the field keeps its own editing keys.
+    #[test]
+    fn find_field_keeps_its_keys_and_passes_global_chords_to_the_keymap() {
+        use crate::shell::find_field_owns_key;
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        super::super::views::accessibility_test_setup(&mut shell, "open");
+        // The commands the running shell registers (Go to Line, the tab commands).
+        crate::shell::register_all_commands(&mut shell.app.commands);
+        let workspace = shell.workspace.as_mut().unwrap();
+        workspace.find.show();
+        workspace.find.focused = true;
+        assert!(workspace.find.has_focus());
+        let ctrl = ModifiersState::CONTROL;
+        let character = |value: &str| Key::Character(value.into());
+        for (chord, key, command) in [
+            ("Ctrl+S", character("s"), "file.save"),
+            ("Ctrl+H", character("h"), "search.replace"),
+            ("Ctrl+G", character("g"), "search.goto"),
+            ("Ctrl+W", character("w"), "file.close"),
+            ("Ctrl+F", character("f"), "search.find"),
+            ("Ctrl+Tab", Key::Named(NamedKey::Tab), "view.tabs.mru"),
+            ("Ctrl+PageDown", Key::Named(NamedKey::PageDown), "view.tabs.next"),
+        ] {
+            assert!(!find_field_owns_key(true, &key, None, ctrl), "{chord} leaves the field");
+            let KeyResolution::Command(id) = shell.settings.resolve_default(
+                &shell.app.commands,
+                &[KeyChord::parse(chord).unwrap()],
+                InputContext::default(),
+            ) else {
+                panic!("{chord} resolves");
+            };
+            assert_eq!(id.0, command, "{chord}");
+            // The command is as available from the field as from the editor.
+            let from_field = shell.app.commands.dispatch_in(id, &shell.command_state_context(id));
+            shell.workspace.as_mut().unwrap().find.focused = false;
+            let from_editor = shell.app.commands.dispatch_in(id, &shell.command_state_context(id));
+            shell.workspace.as_mut().unwrap().find.focused = true;
+            assert_eq!(from_field, from_editor, "{chord}");
+        }
+        // Function keys and bare Alt chords are shortcuts too.
+        assert!(!find_field_owns_key(
+            true,
+            &Key::Named(NamedKey::F2),
+            None,
+            ModifiersState::empty()
+        ));
+        assert!(!find_field_owns_key(
+            true,
+            &character("u"),
+            Some("u"),
+            ModifiersState::ALT
+        ));
+        // The field keeps typing (AltGr included), caret moves, deletion,
+        // traversal and its own Enter, F3 and Escape.
+        let none = ModifiersState::empty();
+        for (key, text, modifiers) in [
+            (character("a"), Some("a"), none),
+            (character("A"), Some("A"), ModifiersState::SHIFT),
+            (character("@"), Some("@"), ModifiersState::CONTROL | ModifiersState::ALT),
+            (Key::Named(NamedKey::Space), Some(" "), none),
+            (Key::Named(NamedKey::Backspace), None, none),
+            (Key::Named(NamedKey::Delete), None, none),
+            (Key::Named(NamedKey::ArrowLeft), None, ctrl),
+            (Key::Named(NamedKey::Home), None, ModifiersState::SHIFT),
+            (Key::Named(NamedKey::Tab), None, ModifiersState::SHIFT),
+            (Key::Named(NamedKey::Enter), None, none),
+            (Key::Named(NamedKey::F3), None, ModifiersState::SHIFT),
+            (Key::Named(NamedKey::Escape), None, none),
+        ] {
+            assert!(
+                find_field_owns_key(true, &key, text, modifiers),
+                "{key:?} {modifiers:?}"
+            );
+        }
+        // On a focused toggle, Space presses it; typing is not the toggle's.
+        assert!(find_field_owns_key(
+            false,
+            &Key::Named(NamedKey::Space),
+            Some(" "),
+            none
+        ));
+        assert!(!find_field_owns_key(false, &character("a"), Some("a"), none));
+        assert!(!find_field_owns_key(
+            true,
+            &Key::Named(NamedKey::Space),
+            Some(" "),
+            ctrl
+        ));
+    }
     #[test]
     fn resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not() {
         let mut shell = super::super::accessibility::tests::headless_shell();
