@@ -692,9 +692,9 @@ impl FindController {
                         return false;
                     }
                     self.status = if results.count_complete {
-                        format!("{} matches", results.count)
+                        match_count(results.count)
                     } else {
-                        format!("{} matches; {}", results.count, results.completeness)
+                        format!("{}; {}", match_count(results.count), results.completeness)
                     };
                     self.paged_results = Some((key, Arc::new(results)));
                     return true;
@@ -743,7 +743,7 @@ impl FindController {
                         if results.is_empty() {
                             "No matches".into()
                         } else {
-                            format!("{} matches", results.count())
+                            match_count(results.count())
                         }
                     }
                     Completeness::Cancelled => "Cancelled".into(),
@@ -1355,9 +1355,25 @@ impl FindController {
     }
 }
 
+/// The find bar's count of matches, singular for one ("1 match").
+fn match_count(count: usize) -> String {
+    if count == 1 {
+        "1 match".into()
+    } else {
+        format!("{count} matches")
+    }
+}
+
 #[cfg(test)]
 mod find_bar_tests {
     use super::*;
+
+    #[test]
+    fn one_match_is_singular_and_other_counts_are_plural() {
+        assert_eq!(match_count(0), "0 matches");
+        assert_eq!(match_count(1), "1 match");
+        assert_eq!(match_count(2), "2 matches");
+    }
     fn snapshot(text: &str) -> DocumentSnapshot {
         bareline_document::Document::from_utf8(
             text,

@@ -19,7 +19,7 @@ RELAUNCHES = 2
 
 
 def fixture():
-    data = dict(initial=INITIAL, query=QUERY, find_status='Find results: 1 matches', untitled=UNTITLED,
+    data = dict(initial=INITIAL, query=QUERY, find_status='Find results: 1 match', untitled=UNTITLED,
                 split_edited='A' + INITIAL + 'Z', busy_bytes=BUSY_BYTES, busy_line=BUSY_LINE, busy_edit=BUSY_EDIT,
                 relaunches=RELAUNCHES)
     data['identity'] = dict(procedure='ui_regressions-v1', fixture_sha256=hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest(), encoding='utf-8', eol='lf')
