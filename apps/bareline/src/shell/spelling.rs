@@ -20,20 +20,18 @@ impl Shell {
     /// A service this system lacks (spell checking on Linux and macOS) is not
     /// news at every launch, nor worth the message bar over the last lines of
     /// text: its notice shows once per profile, as a notification that
-    /// retires itself (LNX-EDIT-011).
+    /// retires itself (LNX-EDIT-011). The profile's record is read and written
+    /// off the UI thread; the notification follows when the check answers.
     pub(super) fn retire_known_gap_notices(&mut self) {
-        self.settings.record_known_gaps();
-        let Some(workspace) = &mut self.workspace else {
-            return;
-        };
-        let Some(&notice) = crate::shell::native::KNOWN_GAP_NOTICES
-            .iter()
-            .find(|notice| workspace.message.as_deref() == Some(**notice))
-        else {
-            return;
-        };
-        workspace.message = None;
-        if self.settings.note_known_gap(notice) {
+        if let Some(workspace) = &mut self.workspace
+            && let Some(&notice) = crate::shell::native::KNOWN_GAP_NOTICES
+                .iter()
+                .find(|notice| workspace.message.as_deref() == Some(**notice))
+        {
+            workspace.message = None;
+            self.settings.note_known_gap(notice);
+        }
+        for notice in self.settings.take_known_gaps() {
             self.toasts.push_typed(
                 format!("known-gap:{notice}"),
                 toast::next_revision(),
@@ -275,19 +273,41 @@ mod tests {
         };
         std::fs::create_dir_all(root.join("a")).unwrap();
         std::fs::create_dir_all(root.join("b")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // The notices a profile shows for `notices`, once its checks answer.
+        let shown = |runtime: &mut super::super::settings::SettingsRuntime, notices: &[&str]| {
+            for notice in notices {
+                runtime.note_known_gap(notice);
+            }
+            let mut shown = runtime.take_known_gaps();
+            while runtime.known_gaps_checking() {
+                assert!(std::time::Instant::now() < deadline, "known-gap check timed out");
+                std::thread::yield_now();
+                shown.extend(runtime.take_known_gaps());
+            }
+            shown
+        };
+        let recorded = |name: &str| std::fs::read_to_string(root.join(name).join("known-gaps.txt")).unwrap_or_default();
         let mut first = profile("a");
-        assert!(first.note_known_gap("gap"));
-        assert!(!first.note_known_gap("gap"));
+        assert_eq!(shown(&mut first, &["gap"]), ["gap"]);
+        // Noted again this run: no new check, nothing to show.
+        first.note_known_gap("gap");
+        assert!(first.take_known_gaps().is_empty());
+        assert_eq!(recorded("a"), "gap\n");
         let mut next_launch = profile("a");
-        assert!(!next_launch.note_known_gap("gap"));
-        assert!(next_launch.note_known_gap("another gap"));
-        // A first launch creates its profile folder later: the record waits.
+        assert_eq!(shown(&mut next_launch, &["gap", "another gap"]), ["another gap"]);
+        assert_eq!(recorded("a").lines().count(), 2);
+        // A first launch creates its profile folder later: the record waits
+        // on the worker, not the UI thread.
         let mut first_launch = profile("c");
-        assert!(first_launch.note_known_gap("gap"));
+        assert_eq!(shown(&mut first_launch, &["gap"]), ["gap"]);
         assert!(!root.join("c").join("known-gaps.txt").exists());
         std::fs::create_dir_all(root.join("c")).unwrap();
-        first_launch.record_known_gaps();
-        assert!(!profile("c").note_known_gap("gap"));
+        while recorded("c").is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the record waits for the folder");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(shown(&mut profile("c"), &["gap"]), Vec::<String>::new());
         // Through the shell: the notice leaves the message bar and becomes a
         // notification the first time only.
         for (launch, shown) in [(1, true), (2, false)] {
@@ -305,6 +325,12 @@ mod tests {
             shell.workspace = Some(workspace);
             shell.retire_known_gap_notices();
             assert_eq!(shell.workspace.as_ref().unwrap().message, None, "launch {launch}");
+            // Later frames show the notification once the check answers.
+            while shell.settings.known_gaps_checking() {
+                assert!(std::time::Instant::now() < deadline, "known-gap check timed out");
+                std::thread::yield_now();
+                shell.retire_known_gap_notices();
+            }
             shell.toasts.draw(
                 &mut bareline_renderer_recording::RecordingBackend::default(),
                 1200.0,
