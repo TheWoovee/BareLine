@@ -1548,7 +1548,13 @@ pub(super) fn prepare(
         LaunchMode::Help | LaunchMode::Version => unreachable!(),
     };
     let legacy = legacy_root(mode, roaming.clone());
-    let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), std::env::temp_dir());
+    // An installed launch sweeps the folder that holds this user's temporary
+    // copies of documents for copies whose process ended (LNX-SEC-002).
+    let cache_root = match mode {
+        LaunchMode::Installed => crate::shell::native::private_cache_root().unwrap_or_else(|_| std::env::temp_dir()),
+        _ => std::env::temp_dir(),
+    };
+    let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), cache_root);
     // An unusable argument is reported with its file; it never stops the launch (APP-17).
     let (paths, rejected_paths) = launch_paths(&cwd, parsed.options.paths);
     let stdin = parsed.options.stdin.then(read_stdin);

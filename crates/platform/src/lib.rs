@@ -405,6 +405,17 @@ pub trait LocalFileSystem: Send + Sync {
         ))
     }
 
+    /// The per-user folder that holds this user's temporary copies of documents:
+    /// the registered owned-cache roots (`Bareline-transcode`, spill and staging)
+    /// are created inside it, and startup sweeps it for copies whose process ended.
+    /// It must be private to the user; an implementation refuses a folder it cannot
+    /// prove private rather than fall back to a shared one. The default is the
+    /// system temporary folder, which on Windows is `%LOCALAPPDATA%\Temp` with a
+    /// user-only ACL.
+    fn private_cache_root(&self) -> std::io::Result<PathBuf> {
+        Ok(std::env::temp_dir())
+    }
+
     /// Keep bytes and directory identity immutable against write/delete until handle drop.
     /// Platforms without this capability must refuse sealed-store export.
     fn open_sealed_read(&self, _: &Path) -> std::io::Result<std::fs::File> {
@@ -866,3 +877,5 @@ pub use watch::{WatchEvent, WatchKind};
 pub mod accessibility;
 
 pub mod printing;
+
+pub mod private;

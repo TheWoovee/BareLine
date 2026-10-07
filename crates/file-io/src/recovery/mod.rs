@@ -6,7 +6,7 @@ use bareline_platform::LocalFileSystem;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -163,7 +163,10 @@ impl BaselinePreparation {
         cancel: &Cancellation,
     ) -> io::Result<PreparedBaseline> {
         let path = self.directory.join("baseline.bin");
-        let mut file = OpenOptions::new().create_new(true).write(true).open(&path)?;
+        let mut file = bareline_platform::private::file_options()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
         let result = (|| {
             let mut hash = Sha256::new();
             let mut len = 0u64;
@@ -226,7 +229,7 @@ impl RecoveryWriter {
             return Err(invalid("recovery metadata limit"));
         }
         // create_dir, not create_dir_all: existing recovery directories cannot acquire a second writer.
-        fs::create_dir(directory)?;
+        bareline_platform::private::create_dir(directory)?;
         let manifest = Manifest {
             version: VERSION,
             metadata,
@@ -234,7 +237,7 @@ impl RecoveryWriter {
             durable: None,
             retired: false,
         };
-        let journal = OpenOptions::new()
+        let journal = bareline_platform::private::file_options()
             .create_new(true)
             .read(true)
             .append(true)
@@ -364,7 +367,7 @@ impl RecoveryWriter {
         let next_len = edited_len(self.current_len, &refs)?;
         let result = (|| {
             let name = format!("segment-{revision}.bin");
-            let mut segment = OpenOptions::new()
+            let mut segment = bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(self.directory.join(&name))?;
@@ -471,7 +474,10 @@ fn publish_file(
     let staged = PathBuf::from(staged_name);
     platform.validate_target(path)?;
     let bytes = serde_json::to_vec(manifest).map_err(io::Error::other)?;
-    let mut file = OpenOptions::new().create_new(true).write(true).open(&staged)?;
+    let mut file = bareline_platform::private::file_options()
+        .create_new(true)
+        .write(true)
+        .open(&staged)?;
     let result = (|| {
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -909,7 +915,10 @@ pub fn recover_to(directory: &Path, destination: &Path, cancel: &Cancellation) -
         return Err(invalid("complete recovery baseline unavailable"));
     }
     let inspection = scanned.inspection();
-    let mut output = OpenOptions::new().create_new(true).write(true).open(destination)?;
+    let mut output = bareline_platform::private::file_options()
+        .create_new(true)
+        .write(true)
+        .open(destination)?;
     // The scan's interval map already holds the validated prefix: one streaming pass
     // writes the result, with no per-record scratch copies (REC-08).
     let result = match scanned.replay.as_mut() {
@@ -951,11 +960,11 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
     if scanned.manifest.retired {
         return Err(invalid("recovery discarded"));
     }
-    fs::create_dir(destination)?;
+    bareline_platform::private::create_dir(destination)?;
     for record in &scanned.records {
         cancelled(cancel)?;
         let mut source = File::open(directory.join(&record.segment.name))?;
-        let mut target = OpenOptions::new()
+        let mut target = bareline_platform::private::file_options()
             .create_new(true)
             .write(true)
             .open(destination.join(&record.segment.name))?;
@@ -969,7 +978,7 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
         unavailable_original: Some((0, scanned.manifest.metadata.original_len)),
         records: &scanned.records,
     };
-    let mut file = OpenOptions::new()
+    let mut file = bareline_platform::private::file_options()
         .create_new(true)
         .write(true)
         .open(destination.join("gaps.json"))?;
@@ -1222,6 +1231,27 @@ mod tests {
     fn crc32c_known_vector() {
         assert_eq!(crc32c(b"123456789"), 0xe3069283);
     }
+    /// Journals hold unsaved text: other local users can neither enter their
+    /// folder nor read their files, whatever the umask (LNX-UI-006).
+    #[cfg(unix)]
+    #[test]
+    fn journals_holding_unsaved_text_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = Temp::new();
+        let mut writer = writer(&temp, true);
+        writer.append(1, &[edit()]).unwrap();
+        writer.checkpoint(&FakeFs).unwrap();
+        let item = temp.0.join("item");
+        assert_eq!(fs::metadata(&item).unwrap().permissions().mode() & 0o777, 0o700);
+        let mut files = 0;
+        for entry in fs::read_dir(&item).unwrap() {
+            let entry = entry.unwrap();
+            let mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode & 0o077, 0, "{} is {mode:o}", entry.path().display());
+            files += 1;
+        }
+        assert!(files >= 3, "journal, baseline and manifest");
+    }
     #[test]
     fn sealed_recovery_is_independent_and_never_overwrites_destination() {
         let temp = Temp::new();
@@ -1283,7 +1313,7 @@ mod tests {
         let mut writer = writer(&temp, true);
         writer.append(1, &[edit()]).unwrap();
         drop(writer);
-        let mut journal = OpenOptions::new()
+        let mut journal = fs::OpenOptions::new()
             .append(true)
             .open(temp.0.join("item/journal.bin"))
             .unwrap();
@@ -1378,7 +1408,7 @@ mod tests {
                 .unwrap();
             writer.checkpoint(&FakeFs).unwrap();
             drop(writer);
-            OpenOptions::new()
+            fs::OpenOptions::new()
                 .write(true)
                 .open(temp.0.join("item/journal.bin"))
                 .unwrap()
@@ -1639,7 +1669,7 @@ mod tests {
             }],
         };
         let bytes = serde_json::to_vec(&record).unwrap();
-        let mut journal = OpenOptions::new()
+        let mut journal = fs::OpenOptions::new()
             .append(true)
             .open(directory.join("journal.bin"))
             .unwrap();

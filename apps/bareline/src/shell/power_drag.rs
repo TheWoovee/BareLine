@@ -337,8 +337,16 @@ impl Shell {
             source_selections: source.global_selection_set(),
             destination_selections: destination.global_selection_set(),
         };
+        let cache = match crate::shell::native::owned_cache_root("Bareline-drag-staging") {
+            Ok(cache) => cache,
+            Err(error) => {
+                self.power.status = error;
+                workspace.message = Some(self.power.status.clone());
+                return true;
+            }
+        };
         let options = StagingOptions {
-            cache: std::env::temp_dir().join("Bareline-drag-staging"),
+            cache,
             quota: workspace.transcode_quota_bytes,
             platform: std::sync::Arc::new(crate::shell::native::FileSystem),
             source_options: bareline_file_io::source::SourceOptions::default(),

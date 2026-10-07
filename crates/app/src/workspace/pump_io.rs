@@ -205,7 +205,17 @@ impl Workspace {
             // Interpret As keeps its chosen encoding on the paged path.
             Some(path) => {
                 let interpret = pending.reload.as_ref().and_then(|reload| reload.interpret);
-                let request = self.paged_open_request(path.clone(), interpret);
+                let request = match self.paged_open_request(path.clone(), interpret) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.resume_abandoned_reload(pending.reload.as_ref());
+                        self.settle_failed_open(pending.preview.as_ref(), Some(path), pending.keep_failed_tab, &error);
+                        self.message = Some(error.clone());
+                        self.record_launch_open(launch_request, Err(error.clone()));
+                        self.record_recovery_restore(pending.recovery_restore_request, Err(error));
+                        return;
+                    }
+                };
                 let before = self.pending_io.len();
                 self.submit_paged_open(
                     request,

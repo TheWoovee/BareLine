@@ -208,7 +208,7 @@ impl PagedRecovery {
         status: Arc<Mutex<PagedRecoveryStatus>>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
-        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        bareline_platform::private::create_dir_all(root).map_err(|e| e.to_string())?;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let directory = root.join(format!(
             "paged-{}-{}-{}",
@@ -238,7 +238,7 @@ impl PagedRecovery {
             std::fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
         }
         if let Some(parent) = directory.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            bareline_platform::private::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let writer = RecoveryWriter::create(
             &directory,
@@ -1396,7 +1396,7 @@ fn prepare_recipe<'a>(
             Some(continued) => continued,
             None => {
                 let store = Box::new(OwnedStore::new(revision));
-                let file = std::fs::OpenOptions::new()
+                let file = bareline_platform::private::file_options()
                     .create_new(true)
                     .write(true)
                     .open(directory.join(&store.name))?;
@@ -1426,7 +1426,7 @@ fn prepare_recipe<'a>(
         let mut next_index = std::collections::BTreeMap::new();
         let name = format!("root-{revision}.json");
         let mut file = RecipeQuotaFile {
-            file: std::fs::OpenOptions::new()
+            file: bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(directory.join(&name))?,

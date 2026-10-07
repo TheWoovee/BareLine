@@ -598,7 +598,7 @@ impl Shell {
         }
         let cancel = Cancellation::default();
         let options = StagingOptions {
-            cache: std::env::temp_dir().join("Bareline-power-staging"),
+            cache: crate::shell::native::owned_cache_root("Bareline-power-staging")?,
             quota: workspace.transcode_quota_bytes,
             platform: std::sync::Arc::new(crate::shell::native::FileSystem),
             source_options: bareline_file_io::source::SourceOptions::default(),

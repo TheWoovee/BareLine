@@ -18,7 +18,7 @@ use bareline_document::{
 use bareline_platform::{FileIdentity, LocalFileSystem};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
@@ -332,14 +332,14 @@ impl DiskTranscoder {
         state.save_target = state.interpreted();
         state.bom = !state.interpreted().bom().is_empty() && pending.starts_with(state.interpreted().bom());
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        fs::create_dir_all(&cache)?;
+        bareline_platform::private::create_dir_all(&cache)?;
         let store = loop {
             let path = cache.join(format!(
                 "bareline-transcode-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
-            match fs::create_dir(&path) {
+            match bareline_platform::private::create_dir(&path) {
                 Ok(()) => {
                     if crate::owned_cache::registered_root(&cache)
                         && let Err(error) = crate::owned_cache::publish_ownership(
@@ -358,7 +358,7 @@ impl DiskTranscoder {
             }
         };
         let open = |name| {
-            OpenOptions::new()
+            bareline_platform::private::file_options()
                 .read(true)
                 .write(true)
                 .create_new(true)
@@ -837,7 +837,7 @@ impl DiskDecoded {
     /// The caller owns this fresh directory and records it only after success.
     pub fn retain_recovery(&self, directory: &Path, cancel: &Cancellation) -> Result<Self, DiskError> {
         let guards = self.lock_sealed()?;
-        fs::create_dir(directory)?;
+        bareline_platform::private::create_dir(directory)?;
         // Hash during the copy (FIO-07): each sealed file is read once, and a copy
         // whose source bytes do not match its sealed hash fails before it is used.
         // The copies are proven again when they are opened below.
@@ -845,7 +845,7 @@ impl DiskDecoded {
         for (index, name) in ["original.raw", "text.utf8", "provenance.bin"].into_iter().enumerate() {
             let identity = self.platform.identity(&guards[index])?;
             let mut input = &guards[index];
-            let mut output = OpenOptions::new()
+            let mut output = bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(directory.join(name))?;
@@ -880,7 +880,7 @@ impl DiskDecoded {
             original_hash: self.fingerprint.sha256,
             sealed_hashes: self.sealed_hashes,
         };
-        let mut manifest = OpenOptions::new()
+        let mut manifest = bareline_platform::private::file_options()
             .create_new(true)
             .write(true)
             .open(directory.join("source.json"))?;
@@ -1537,6 +1537,55 @@ mod tests {
         )
         .unwrap()
     }
+    /// Transcodes `raw` to completion in its own folder of `temp`.
+    fn transcode_in(temp: &Temp, name: &str, raw: &[u8], platform: Arc<dyn LocalFileSystem>) -> DiskDecoded {
+        let folder = temp.0.join(name);
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("input");
+        fs::write(&path, raw).unwrap();
+        let mut job = DiskTranscoder::new(
+            FileInput {
+                file: File::open(&path).unwrap(),
+                path,
+            },
+            platform,
+            &folder,
+            DiskOptions {
+                temp_quota_bytes: u64::MAX,
+                interpret: None,
+            },
+            Budget::new(8 * 1024 * 1024),
+            Cancellation::default(),
+        )
+        .unwrap();
+        while !job.step().unwrap().complete {}
+        job.finish().unwrap()
+    }
+    /// Transcode and recovery copies of a document are private to the user,
+    /// whatever the umask (LNX-SEC-002).
+    #[cfg(unix)]
+    #[test]
+    fn transcode_and_recovery_stores_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = Temp::new();
+        let store = transcode_in(
+            &temp,
+            "private",
+            b"secret text\n",
+            Arc::new(Platform { logical_size: None }),
+        );
+        let retained = store
+            .retain_recovery(&temp.0.join("retained"), &Cancellation::default())
+            .unwrap();
+        for folder in [store.store.0.clone(), retained.store.0.clone()] {
+            assert_eq!(fs::metadata(&folder).unwrap().permissions().mode() & 0o777, 0o700);
+            for entry in fs::read_dir(&folder).unwrap() {
+                let entry = entry.unwrap();
+                let mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "{}", entry.path().display());
+            }
+        }
+    }
     #[test]
     fn quota_pause_resumes_exact_raw_and_paged_text() {
         let temp = Temp::new();
@@ -1731,7 +1780,7 @@ mod tests {
         };
         let mut job = open();
         assert!(!job.step().unwrap().complete);
-        OpenOptions::new()
+        fs::OpenOptions::new()
             .append(true)
             .open(&path)
             .unwrap()
@@ -1752,7 +1801,12 @@ mod tests {
         drop(store);
         let mut job = open();
         assert!(!job.step().unwrap().complete);
-        OpenOptions::new().write(true).open(&path).unwrap().set_len(10).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(10)
+            .unwrap();
         assert!(matches!(job.step(), Err(DiskError::Changed)));
         drop(job);
         // Rewritten in place between steps to a longer length: the same file grew, but
