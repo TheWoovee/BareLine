@@ -70,6 +70,38 @@ pub fn private_folder(path: &Path, adopt_writable: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// Give `target`, a new name, the bytes of the sealed regular file `source`
+/// without copying them: a copy-on-write clone (`FICLONE`) where the Linux
+/// file system has one, else a hard link to the same file. A failure leaves
+/// no `target`.
+pub fn share_sealed_file(source: &Path, target: &Path) -> io::Result<()> {
+    let input = sys::open_at(CWD, source, sys::READ).map_err(sys::no_follow)?;
+    let metadata = input.metadata()?;
+    if !metadata.is_file() {
+        return Err(denied("a sealed file must be a regular file"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let output = sys::open_at(CWD, target, sys::CREATE)?;
+        match rustix::fs::ioctl_ficlone(&output, &input) {
+            Ok(()) => return Ok(()),
+            Err(_) => {
+                drop(output);
+                rustix::fs::unlinkat(CWD, target, rustix::fs::AtFlags::empty())?;
+            }
+        }
+    }
+    // Without AT_SYMLINK_FOLLOW the link names `source` itself; it must still
+    // be the file opened and checked above.
+    rustix::fs::linkat(CWD, source, CWD, target, rustix::fs::AtFlags::empty())?;
+    let linked = std::fs::symlink_metadata(target)?;
+    if linked.dev() != metadata.dev() || linked.ino() != metadata.ino() {
+        let _ = rustix::fs::unlinkat(CWD, target, rustix::fs::AtFlags::empty());
+        return Err(sys::changed());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +169,24 @@ mod tests {
         let file = scratch.0.join("file");
         std::fs::write(&file, b"x").unwrap();
         assert!(private_folder(&file, true).is_err());
+    }
+
+    #[test]
+    fn shared_sealed_files_hold_the_same_bytes_without_a_second_write() {
+        let scratch = Scratch::new("share");
+        let source = scratch.0.join("original.raw");
+        std::fs::write(&source, b"sealed bytes").unwrap();
+        let target = scratch.0.join("text.utf8");
+        share_sealed_file(&source, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"sealed bytes");
+        let (source_meta, target_meta) = (std::fs::metadata(&source).unwrap(), std::fs::metadata(&target).unwrap());
+        // A hard link shares the file; a clone is a new file of the same length.
+        assert!(source_meta.ino() == target_meta.ino() || target_meta.len() == source_meta.len());
+        // An existing target is never replaced, and a link is never shared.
+        assert!(share_sealed_file(&source, &target).is_err());
+        let link = scratch.0.join("link");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        assert!(share_sealed_file(&link, &scratch.0.join("other")).is_err());
+        assert!(!scratch.0.join("other").exists());
     }
 }

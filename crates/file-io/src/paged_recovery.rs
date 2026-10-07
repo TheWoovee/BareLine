@@ -350,23 +350,39 @@ impl PagedRecovery {
                             source_path.display()
                         )
                     })?;
-                    let text = retained.sealed_text_reader(&cancel).map_err(|e| {
-                        format!(
-                            "Recovery could not read the original text of {}: {e}",
-                            source_path.display()
+                    // An unedited baseline is the retained text itself (LNX-DISK-004).
+                    let preparation = if whole_original(&baseline, &store) {
+                        preparation.try_share(
+                            &retained.text_path(),
+                            retained.text_len,
+                            retained.sealed_text_hash(),
+                            platform.as_ref(),
                         )
-                    })?;
-                    let mut text = SnapshotRead {
-                        source: text,
-                        store: store.clone(),
-                        foreign_readers: std::collections::BTreeMap::new(),
-                        snapshot: baseline,
-                        offset: 0,
-                        cancellation: cancel.clone(),
+                    } else {
+                        Err(preparation)
                     };
-                    let prepared = preparation
-                        .copy(&mut text, || Ok(true), &cancel)
-                        .map_err(|e| format!("Copy paged baseline into {}: {e}", directory.display()))?;
+                    let prepared = match preparation {
+                        Ok(prepared) => prepared,
+                        Err(preparation) => {
+                            let text = retained.sealed_text_reader(&cancel).map_err(|e| {
+                                format!(
+                                    "Recovery could not read the original text of {}: {e}",
+                                    source_path.display()
+                                )
+                            })?;
+                            let mut text = SnapshotRead {
+                                source: text,
+                                store: store.clone(),
+                                foreign_readers: std::collections::BTreeMap::new(),
+                                snapshot: baseline,
+                                offset: 0,
+                                cancellation: cancel.clone(),
+                            };
+                            preparation
+                                .copy(&mut text, || Ok(true), &cancel)
+                                .map_err(|e| format!("Copy paged baseline into {}: {e}", directory.display()))?
+                        }
+                    };
                     crate::session::publish_json(
                         &directory.join("paged-source.json"),
                         &serde_json::to_vec(&serde_json::json!({"version":1,"source":name}))
@@ -2226,6 +2242,24 @@ fn read_pieces(bytes: &[u8]) -> Result<Vec<RootPiece>, serde_json::Error> {
     Ok(pieces)
 }
 
+/// `snapshot` is exactly the sealed text of `store`: its own original pieces, in
+/// order, over all of it, so a copy of that text is a copy of the snapshot.
+fn whole_original(snapshot: &bareline_document::paged::PagedSnapshot, store: &DiskDecoded) -> bool {
+    if store.text_len == 0 || snapshot.len() as u64 != store.text_len {
+        return false;
+    }
+    let mut next = 0;
+    for piece in snapshot.pieces_from(0).1 {
+        let bareline_document::paged::PagedPiece::Original { source, range } = piece else {
+            return false;
+        };
+        if range.start != next || !matches!(store.foreign_source(source.generation()), Ok(None)) {
+            return false;
+        }
+        next = range.end;
+    }
+    next == store.text_len
+}
 struct SnapshotRead {
     source: crate::codecs::disk::SealedStoreRead,
     store: DiskDecoded,

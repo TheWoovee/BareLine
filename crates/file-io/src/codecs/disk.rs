@@ -242,6 +242,12 @@ pub struct DiskTranscoder {
     platform: Arc<dyn LocalFileSystem>,
     raw: File,
     text: File,
+    /// While the decoded text is byte for byte the raw input (UTF-8 or ASCII
+    /// without a signature or invalid bytes), it is not written: these are the
+    /// raw bytes it has not matched yet, and the sealed text becomes a shared
+    /// copy of `original.raw` (LNX-DISK-004). `None` once the text differs, or
+    /// where the platform cannot share sealed files.
+    mirror: Option<Vec<u8>>,
     map: File,
     map_buffer: Vec<u8>,
     store: Arc<Directory>,
@@ -368,6 +374,7 @@ impl DiskTranscoder {
         let text = open("text.utf8")?;
         let mut map = open("provenance.bin")?;
         map.write_all(MAGIC)?;
+        let mirror = platform.shares_sealed_files().then(Vec::new);
         Ok(Self {
             hash: Sha256::new(),
             text_hash: Sha256::new(),
@@ -382,6 +389,7 @@ impl DiskTranscoder {
             platform,
             raw,
             text,
+            mirror,
             map,
             map_buffer: Vec::with_capacity(MAP_WRITE_RECORDS * RECORD_BYTES as usize),
             store,
@@ -494,7 +502,7 @@ impl DiskTranscoder {
         self.check()?;
         let writes = (|| -> io::Result<()> {
             self.raw.write_all(&self.pending)?;
-            self.text.write_all(batch.text.as_bytes())?;
+            self.write_text(batch.text.as_bytes())?;
             // A failed write fails the transcoder, so hashing as each piece lands is safe.
             for records in batch.records.chunks(MAP_WRITE_RECORDS) {
                 self.map_buffer.clear();
@@ -538,12 +546,66 @@ impl DiskTranscoder {
             }
             self.check()?;
             self.raw.sync_all()?;
-            self.text.sync_all()?;
+            self.finish_text()?;
             self.map.sync_all()?;
             self.eol.push("", true);
             self.complete = true;
         }
         Ok(self.progress())
+    }
+    /// Writes this step's decoded text, after its raw bytes, unless the text still
+    /// mirrors the raw input.
+    fn write_text(&mut self, text: &[u8]) -> io::Result<()> {
+        if let Some(unmatched) = self.mirror.as_mut() {
+            unmatched.extend_from_slice(&self.pending);
+            // A decoder holds back at most an incomplete scalar between steps.
+            if unmatched.starts_with(text) && unmatched.len() - text.len() <= 16 {
+                unmatched.drain(..text.len());
+                return Ok(());
+            }
+            self.mirror = None;
+            self.copy_mirrored_text()?;
+        }
+        self.text.write_all(text)
+    }
+    /// Writes the text a mirror skipped: the first `text_len` raw bytes.
+    fn copy_mirrored_text(&mut self) -> io::Result<()> {
+        let raw = File::open(self.store.0.join("original.raw"))?;
+        let copied = io::copy(&mut raw.take(self.text_len), &mut self.text)?;
+        if copied != self.text_len {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "transcode store shrank"));
+        }
+        Ok(())
+    }
+    /// Makes the sealed text durable. A text that mirrored its raw input to the
+    /// end becomes a shared copy of the synced `original.raw`; where sharing fails
+    /// it is copied.
+    fn finish_text(&mut self) -> io::Result<()> {
+        let Some(unmatched) = self.mirror.take() else {
+            return self.text.sync_all();
+        };
+        let path = self.store.0.join("text.utf8");
+        if unmatched.is_empty() && self.text_len == self.raw_len {
+            // The empty text file is closed first: an open file cannot be removed
+            // on every system.
+            self.text = File::open(self.store.0.join("original.raw"))?;
+            fs::remove_file(&path)?;
+            if self
+                .platform
+                .share_sealed_file(&self.store.0.join("original.raw"), &path)
+                .is_ok()
+            {
+                self.text = File::open(&path)?;
+                return Ok(());
+            }
+            self.text = bareline_platform::private::file_options()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+        }
+        self.copy_mirrored_text()?;
+        self.text.sync_all()
     }
     pub fn finish(self) -> Result<DiskDecoded, DiskError> {
         if !self.complete {
@@ -716,6 +778,10 @@ impl DiskDecoded {
     pub fn platform(&self) -> Arc<dyn LocalFileSystem> {
         self.platform.clone()
     }
+    /// SHA-256 of the sealed UTF-8 text (`text_path`).
+    pub fn sealed_text_hash(&self) -> [u8; 32] {
+        self.sealed_hashes[1]
+    }
     pub(crate) fn raw_hash_state(&self) -> Option<Sha256> {
         self.raw_hash.clone()
     }
@@ -843,6 +909,16 @@ impl DiskDecoded {
         // The copies are proven again when they are opened below.
         let mut buffer = vec![0u8; COPY_BUFFER];
         for (index, name) in ["original.raw", "text.utf8", "provenance.bin"].into_iter().enumerate() {
+            // Where the file system shares sealed files, recovery keeps the same
+            // bytes without a second copy (LNX-DISK-004); `open_retained` below
+            // proves them like any copy.
+            if self
+                .platform
+                .share_sealed_file(&self.store.0.join(name), &directory.join(name))
+                .is_ok()
+            {
+                continue;
+            }
             let identity = self.platform.identity(&guards[index])?;
             let mut input = &guards[index];
             let mut output = bareline_platform::private::file_options()
@@ -1537,6 +1613,44 @@ mod tests {
         )
         .unwrap()
     }
+    /// `Platform` whose file system shares sealed files with hard links and
+    /// records each share by file names.
+    #[derive(Default)]
+    struct Sharing(std::sync::Mutex<Vec<(String, String)>>);
+    impl Sharing {
+        fn shared(&self) -> Vec<(String, String)> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+    impl LocalFileSystem for Sharing {
+        fn guard_directory(&self, path: &Path) -> io::Result<Arc<dyn Send + Sync>> {
+            Platform { logical_size: None }.guard_directory(path)
+        }
+        fn available_space(&self, _: &Path) -> io::Result<u64> {
+            Ok(u64::MAX)
+        }
+        fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
+            File::open(path)
+        }
+        fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+            Platform { logical_size: None }.identity(file)
+        }
+        fn validate_target(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn commit(&self, _: &Path, _: &Path, _: bool) -> io::Result<()> {
+            Err(io::Error::other("not used"))
+        }
+        fn shares_sealed_files(&self) -> bool {
+            true
+        }
+        fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+            fs::hard_link(source, target)?;
+            let name = |path: &Path| path.file_name().unwrap().to_string_lossy().into_owned();
+            self.0.lock().unwrap().push((name(source), name(target)));
+            Ok(())
+        }
+    }
     /// Transcodes `raw` to completion in its own folder of `temp`.
     fn transcode_in(temp: &Temp, name: &str, raw: &[u8], platform: Arc<dyn LocalFileSystem>) -> DiskDecoded {
         let folder = temp.0.join(name);
@@ -1560,6 +1674,63 @@ mod tests {
         .unwrap();
         while !job.step().unwrap().complete {}
         job.finish().unwrap()
+    }
+    /// UTF-8 text is its raw bytes: the sealed text is a shared copy of the raw
+    /// store, and recovery shares all three files, instead of writing each again
+    /// (LNX-DISK-004). Without sharing the same bytes are written, as before.
+    #[test]
+    fn utf8_text_shares_the_raw_store_and_recovery_shares_the_store() {
+        let temp = Temp::new();
+        // Three-byte units across every 64 KiB step boundary.
+        let raw = "a\u{e9}".repeat(70_000).into_bytes();
+        let sharing = Arc::new(Sharing::default());
+        let store = transcode_in(&temp, "shared", &raw, sharing.clone());
+        let written = transcode_in(&temp, "written", &raw, Arc::new(Platform { logical_size: None }));
+        assert_eq!(sharing.shared(), [("original.raw".into(), "text.utf8".into())]);
+        assert_eq!(fs::read(store.text_path()).unwrap(), raw);
+        assert_eq!(fs::read(written.text_path()).unwrap(), raw);
+        assert_eq!(store.sealed_hashes, written.sealed_hashes);
+        let digest: [u8; 32] = Sha256::digest(&raw).into();
+        assert_eq!(store.sealed_text_hash(), digest);
+
+        let retained = store
+            .retain_recovery(&temp.0.join("retained"), &Cancellation::default())
+            .unwrap();
+        let names: Vec<_> = sharing.shared().into_iter().skip(1).map(|(_, target)| target).collect();
+        assert_eq!(names, ["original.raw", "text.utf8", "provenance.bin"]);
+        assert_eq!(fs::read(retained.text_path()).unwrap(), raw);
+        let mut copy = Vec::new();
+        retained.copy_original(&mut copy, &Cancellation::default()).unwrap();
+        assert_eq!(copy, raw);
+    }
+    /// Text that differs from its raw bytes, from the start or part way, is
+    /// written exactly as without sharing, and only the store is shared later.
+    #[test]
+    fn text_that_differs_from_its_raw_bytes_is_written_not_shared() {
+        let temp = Temp::new();
+        let mut late = vec![b'x'; 100_000];
+        late.push(0xff);
+        late.extend_from_slice(b"tail\n");
+        let utf16 = [0xff, 0xfe, b'h', 0, b'i', 0];
+        let signed = b"\xef\xbb\xbfsigned".to_vec();
+        for (name, raw) in [("late", late), ("utf16", utf16.to_vec()), ("signed", signed)] {
+            let sharing = Arc::new(Sharing::default());
+            let store = transcode_in(&temp, &format!("{name}-shared"), &raw, sharing.clone());
+            let written = transcode_in(
+                &temp,
+                &format!("{name}-written"),
+                &raw,
+                Arc::new(Platform { logical_size: None }),
+            );
+            assert!(sharing.shared().is_empty(), "{name}");
+            assert_eq!(
+                fs::read(store.text_path()).unwrap(),
+                fs::read(written.text_path()).unwrap(),
+                "{name}"
+            );
+            assert_eq!(store.sealed_hashes, written.sealed_hashes, "{name}");
+            assert_ne!(fs::read(store.text_path()).unwrap(), raw, "{name}");
+        }
     }
     /// Transcode and recovery copies of a document are private to the user,
     /// whatever the umask (LNX-SEC-002).

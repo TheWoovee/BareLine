@@ -191,6 +191,34 @@ impl Drop for PreparedBaseline {
     }
 }
 impl BaselinePreparation {
+    /// `copy` for a baseline that is exactly the proven sealed file `source`, of
+    /// `len` bytes with SHA-256 `sha256`: the file system shares that file instead
+    /// of writing a second copy (LNX-DISK-004). Where it cannot, nothing is left
+    /// behind and the preparation comes back for `copy`.
+    pub fn try_share(
+        self,
+        source: &Path,
+        len: u64,
+        sha256: [u8; 32],
+        platform: &dyn LocalFileSystem,
+    ) -> Result<PreparedBaseline, Self> {
+        if len != self.original_len
+            || platform
+                .share_sealed_file(source, &self.directory.join("baseline.bin"))
+                .is_err()
+        {
+            return Err(self);
+        }
+        Ok(PreparedBaseline {
+            job: self,
+            blob: Blob {
+                name: "baseline.bin".into(),
+                len,
+                sha256,
+            },
+            preserve: false,
+        })
+    }
     /// Revalidate the complete source fingerprint after copying; changed sources cannot seal.
     pub fn copy<R: Read>(
         self,
@@ -1266,6 +1294,49 @@ mod tests {
     #[test]
     fn crc32c_known_vector() {
         assert_eq!(crc32c(b"123456789"), 0xe3069283);
+    }
+    /// An unedited baseline shares the proven sealed text instead of writing a
+    /// second copy where the file system can (LNX-DISK-004).
+    #[test]
+    fn baselines_share_the_sealed_text_where_the_file_system_can() {
+        struct Sharing;
+        impl LocalFileSystem for Sharing {
+            fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+                FakeFs.identity(file)
+            }
+            fn validate_target(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, staged: &Path, target: &Path, existed: bool) -> io::Result<()> {
+                FakeFs.commit(staged, target, existed)
+            }
+            fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+                fs::hard_link(source, target)
+            }
+        }
+        let temp = Temp::new();
+        let sealed = temp.0.join("text.utf8");
+        fs::write(&sealed, b"hello").unwrap();
+        let hash: [u8; 32] = Sha256::digest(b"hello").into();
+        let mut owner = writer(&temp, false);
+        // Without sharing, or for another length, the preparation comes back for a copy.
+        let Err(job) = owner.prepare_baseline().unwrap().try_share(&sealed, 5, hash, &FakeFs) else {
+            panic!("shared without a file system that shares");
+        };
+        let Err(job) = job.try_share(&sealed, 4, hash, &Sharing) else {
+            panic!("shared a baseline of another length");
+        };
+        assert!(!temp.0.join("item/baseline.bin").exists());
+        let Ok(prepared) = job.try_share(&sealed, 5, hash, &Sharing) else {
+            panic!("the sealed text was not shared");
+        };
+        owner.attach_baseline(prepared, &Sharing).unwrap();
+        owner.append(1, &[edit()]).unwrap();
+        owner.checkpoint(&FakeFs).unwrap();
+        let inspection = inspect(&temp.0.join("item"), &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::Complete);
+        assert!(inspection.complete_baseline);
+        assert_eq!(fs::read(temp.0.join("item/baseline.bin")).unwrap(), b"hello");
     }
     /// Journals hold unsaved text: other local users can neither enter their
     /// folder nor read their files, whatever the umask (LNX-UI-006).

@@ -154,6 +154,16 @@ impl LocalFileSystem for PosixFileSystem {
         private::cache_root()
     }
 
+    fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+        private::share_sealed_file(source, target)
+    }
+
+    /// Hard links work between the files of one folder on every local Unix file
+    /// system Bareline keeps caches on; a failed share copies instead.
+    fn shares_sealed_files(&self) -> bool {
+        true
+    }
+
     /// The final name is never followed and only a regular file is returned.
     /// POSIX cannot keep other writers off it; readers verify by hash.
     fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
