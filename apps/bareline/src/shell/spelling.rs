@@ -16,6 +16,39 @@ pub(super) const SUGGESTION_COMMANDS: [&str; 5] = [
 ];
 const NO_TARGET: &str = "Place the caret on a misspelled word";
 
+impl Shell {
+    /// A service this system lacks (spell checking on Linux and macOS) is not
+    /// news at every launch, nor worth the message bar over the last lines of
+    /// text: its notice shows once per profile, as a notification that
+    /// retires itself (LNX-EDIT-011).
+    pub(super) fn retire_known_gap_notices(&mut self) {
+        self.settings.record_known_gaps();
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let Some(&notice) = crate::shell::native::KNOWN_GAP_NOTICES
+            .iter()
+            .find(|notice| workspace.message.as_deref() == Some(**notice))
+        else {
+            return;
+        };
+        workspace.message = None;
+        if self.settings.note_known_gap(notice) {
+            self.toasts.push_typed(
+                format!("known-gap:{notice}"),
+                toast::next_revision(),
+                bareline_ui::theme::ToastLevel::Info,
+                toast::NotificationKind::Outcome,
+                notice,
+                None,
+                None,
+                toast::NotificationLifetime::Transient,
+                Instant::now(),
+            );
+        }
+    }
+}
+
 pub(super) fn register(registry: &mut CommandRegistry) {
     for (id, title) in [
         ("spelling.toggle", "Spell Check"),
@@ -215,5 +248,73 @@ fn spelling_replace(workspace: &mut Workspace, active: usize, target: &Target, r
     match editor.set_selections(selection.into()) {
         Ok(()) => editor.enqueue(Input::Insert(replacement)),
         Err(error) => workspace.message = Some(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// LNX-EDIT-011: a missing spelling service was announced in the message
+    /// bar over the text at every launch.
+    #[test]
+    fn known_gap_notices_show_once_per_profile() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-known-gaps-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let profile = |name: &str| {
+            super::super::settings::SettingsRuntime::new(
+                bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
+                Some(root.join(name).join("settings.toml")),
+                std::sync::Arc::new(|| {}),
+            )
+        };
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        let mut first = profile("a");
+        assert!(first.note_known_gap("gap"));
+        assert!(!first.note_known_gap("gap"));
+        let mut next_launch = profile("a");
+        assert!(!next_launch.note_known_gap("gap"));
+        assert!(next_launch.note_known_gap("another gap"));
+        // A first launch creates its profile folder later: the record waits.
+        let mut first_launch = profile("c");
+        assert!(first_launch.note_known_gap("gap"));
+        assert!(!root.join("c").join("known-gaps.txt").exists());
+        std::fs::create_dir_all(root.join("c")).unwrap();
+        first_launch.record_known_gaps();
+        assert!(!profile("c").note_known_gap("gap"));
+        // Through the shell: the notice leaves the message bar and becomes a
+        // notification the first time only.
+        for (launch, shown) in [(1, true), (2, false)] {
+            let Some(&notice) = crate::shell::native::KNOWN_GAP_NOTICES.first() else {
+                break;
+            };
+            let mut shell = super::super::accessibility::tests::headless_shell();
+            shell.settings = profile("b");
+            let mut workspace = bareline_app::workspace::Workspace::new(
+                std::sync::Arc::new(|| {}),
+                std::sync::Arc::new(crate::shell::native::FileSystem),
+            )
+            .unwrap();
+            workspace.message = Some(notice.to_owned());
+            shell.workspace = Some(workspace);
+            shell.retire_known_gap_notices();
+            assert_eq!(shell.workspace.as_ref().unwrap().message, None, "launch {launch}");
+            shell.toasts.draw(
+                &mut bareline_renderer_recording::RecordingBackend::default(),
+                1200.0,
+                760.0,
+                Default::default(),
+                &mut Vec::new(),
+            );
+            let notified = shell.toasts.accessibility().iter().any(|toast| toast.text == notice);
+            assert_eq!(notified, shown, "launch {launch}");
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 }

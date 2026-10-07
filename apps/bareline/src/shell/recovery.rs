@@ -1595,6 +1595,7 @@ impl RecoveryRuntime {
             }
         }
         let y = (height - 70.0).max(140.0);
+        self.actions_top = Some(y - 30.0);
         if let Some(paths) = &self.confirm_discard {
             let message = if paths.len() == 1 {
                 "Permanently discard this recovery? This cannot be undone.".to_string()

@@ -4576,6 +4576,7 @@ impl Shell {
         // Producers enqueue typed notices once. Redraw only retires elapsed
         // transient notices; it never reinterprets status text as a new event.
         let toast_now = Instant::now();
+        self.retire_known_gap_notices();
         self.toasts.tick(toast_now);
         // Hand the renderer to the frame pipeline as a local so the draw
         // helpers can borrow it alongside disjoint `self` fields; it is
@@ -5372,6 +5373,19 @@ impl Shell {
                 failures.push(("utilities layout", error.to_string()));
             }
         }
+        // Notifications stack above the message bar and a modal's action row,
+        // never over them (LNX-EDIT-011).
+        let editor = self.editor_bounds();
+        let floor = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.message_bar)
+            .map(|bar| editor.y + bar.y)
+            .into_iter()
+            .chain(self.recovery.actions_top().map(|top| editor.y + top))
+            .chain(self.settings.controller.footer_top())
+            .reduce(f32::min);
+        self.toasts.set_floor(floor);
         self.toasts.draw(
             renderer,
             size.width as f32 / scale,

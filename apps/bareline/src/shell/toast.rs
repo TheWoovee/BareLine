@@ -691,6 +691,9 @@ impl ToastStack {
         let toast_width = (width - 32.0).min(WIDTH).max(80.0).min(width.max(0.0));
         let x = ((width - toast_width) / 2.0).max(0.0);
         let mut y = height - bareline_ui::STATUS_HEIGHT - GAP;
+        if let Some(floor) = self.floor {
+            y = y.min(floor - GAP);
+        }
         let available = ((y - bareline_ui::TAB_HEIGHT) / (ROW_HEIGHT + GAP)).floor().max(0.0) as usize;
         let capacity = available.min(MAX_VISIBLE);
         let visible_count =
@@ -1226,5 +1229,39 @@ mod tests {
         stack.resolve(&NotificationId::from("owned"));
         assert!(!stack.details_open());
         assert_eq!(stack.accessibility_focus(), None);
+    }
+
+    /// LNX-EDIT-011 / robustness LNX-UI-013: notifications sat on the message
+    /// bar and on the Recovery Center's action buttons.
+    #[test]
+    fn notifications_stay_above_their_floor() {
+        let mut stack = ToastStack::default();
+        stack.enqueue(notice("first", 1, NotificationLifetime::Persistent), Instant::now());
+        stack.enqueue(notice("second", 1, NotificationLifetime::Persistent), Instant::now());
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let height = 760.0;
+        stack.draw(&mut renderer, 1200.0, height, UiTheme::default(), &mut Vec::new());
+        let lowest = |stack: &ToastStack| {
+            stack
+                .accessibility()
+                .iter()
+                .map(|notice| notice.bounds.y + notice.bounds.height)
+                .fold(0.0f32, f32::max)
+        };
+        assert!(
+            lowest(&stack) > 700.0,
+            "without a floor the stack sits on the status strip"
+        );
+        let floor = 640.0;
+        stack.set_floor(Some(floor));
+        stack.draw(&mut renderer, 1200.0, height, UiTheme::default(), &mut Vec::new());
+        assert_eq!(stack.accessibility().len(), 2);
+        assert!(lowest(&stack) <= floor - GAP, "{} is above {floor}", lowest(&stack));
+        // Every notification is still reachable through the pointer.
+        let first = stack.accessibility()[0].bounds;
+        assert!(stack.contains(Point {
+            x: first.x + 4.0,
+            y: first.y + 4.0,
+        }));
     }
 }

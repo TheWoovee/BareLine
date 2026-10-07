@@ -58,6 +58,11 @@ struct ResolvedCache {
 }
 
 pub(super) struct SettingsRuntime {
+    /// Known-gap notices already shown this run (`note_known_gap`), those not
+    /// yet recorded in the profile, and the record's path.
+    known_gaps_shown: std::collections::BTreeSet<String>,
+    known_gaps_pending: Vec<String>,
+    known_gaps_file: Option<PathBuf>,
     pub controller: SettingsController,
     pub keymap: KeymapDocument,
     path: Option<PathBuf>,
@@ -135,6 +140,44 @@ impl Default for SettingsRuntime {
     }
 }
 impl SettingsRuntime {
+    /// Record that the known-gap `notice` was shown in this profile. True the
+    /// first time, so the shell shows it; the record is `known-gaps.txt`
+    /// beside settings.toml (per process when there is no profile folder).
+    pub(super) fn note_known_gap(&mut self, notice: &str) -> bool {
+        if !self.known_gaps_shown.insert(notice.to_owned()) {
+            return false;
+        }
+        let Some(path) = self.known_gaps_file.as_deref() else {
+            return true;
+        };
+        if std::fs::read_to_string(path).is_ok_and(|recorded| recorded.lines().any(|line| line == notice)) {
+            return false;
+        }
+        self.known_gaps_pending.push(notice.to_owned());
+        self.record_known_gaps();
+        true
+    }
+    /// Write the shown known-gap notices to the profile once its folder
+    /// exists (on a first launch it is created after the first notices).
+    pub(super) fn record_known_gaps(&mut self) {
+        let Some(path) = self.known_gaps_file.as_deref() else {
+            return;
+        };
+        if self.known_gaps_pending.is_empty() || !path.parent().is_some_and(std::path::Path::is_dir) {
+            return;
+        }
+        let mut recorded = std::fs::read_to_string(path).unwrap_or_default();
+        for notice in &self.known_gaps_pending {
+            if !recorded.lines().any(|line| line == notice) {
+                recorded.push_str(notice);
+                recorded.push('\n');
+            }
+        }
+        // Best effort: an unrecorded notice shows again at the next launch.
+        if std::fs::write(path, recorded).is_ok() {
+            self.known_gaps_pending.clear();
+        }
+    }
     pub fn new(document: SettingsDocument, path: Option<PathBuf>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
         let controller = SettingsController::new(
             document,
@@ -146,6 +189,7 @@ impl SettingsRuntime {
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
+        let known_gaps_file = path.as_ref().map(|p| p.with_file_name("known-gaps.txt"));
         Self {
             controller,
             keymap: KeymapDocument::defaults(&bareline_commands::shell_commands()),
@@ -173,6 +217,9 @@ impl SettingsRuntime {
             default_keymap_key: Cell::new(None),
             keymap_rebuilds: Cell::new(0),
             keymap_revision: 0,
+            known_gaps_shown: Default::default(),
+            known_gaps_pending: Vec::new(),
+            known_gaps_file,
             pending_at: Instant::now(),
             alt_gr: false,
             ime: false,
