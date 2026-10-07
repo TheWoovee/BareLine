@@ -1289,6 +1289,169 @@ pub(super) fn accessibility_test_cases() -> Vec<(
 #[cfg(test)]
 mod workspace_panel_regressions {
     use super::*;
+    use bareline_ui::rect;
+
+    /// One frame composed as `render_frame` does it: the base chrome, the editor
+    /// layer (views and their tab strip) beside the docks, then the docks.
+    fn frame(
+        shell: &mut Shell,
+        renderer: &mut bareline_renderer_recording::RecordingBackend,
+        width: f32,
+        height: f32,
+    ) -> (Vec<DrawOp>, Rect) {
+        let editor = shell.editor_bounds_in(width, height);
+        let mut ops = shell.frame_chrome(width, height);
+        let start = ops.len();
+        let workspace = shell.workspace.as_mut().unwrap();
+        shell.views.sync(workspace, &mut shell.app);
+        shell
+            .views
+            .draw(
+                workspace,
+                &mut shell.app,
+                renderer,
+                editor.width,
+                editor.height,
+                &mut ops,
+                Arc::new(|| {}),
+            )
+            .unwrap();
+        crate::shell::translate_operations(&mut ops[start..], editor.x, editor.y);
+        let workspace = shell.workspace.as_ref().unwrap();
+        shell
+            .panels
+            .draw(renderer, width, height, workspace, shell.app.active, &mut ops)
+            .unwrap();
+        (ops, editor)
+    }
+
+    /// Reported on Windows with the Workspace panel open: a second tab row ran
+    /// from x=0 over the dock's column, and the tree sat in a fixed 238 px box
+    /// that stayed put when the window or the dock grew. Every frame lays the
+    /// dock, the editor pane and its one tab strip out from that frame's window
+    /// size and dock width, and the dock's splitter keeps its resize pointer.
+    #[test]
+    fn workspace_dock_follows_the_window_and_leaves_one_tab_strip_over_the_editor() {
+        use bareline_ui::widgets::SECTION_HEADER;
+        use winit::window::CursorIcon;
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        for _ in 0..3 {
+            workspace.new_document().unwrap();
+        }
+        shell.app.tabs = workspace.titles();
+        shell.workspace = Some(workspace);
+        // A chosen folder opens the Workspace section; adding the root does no I/O.
+        let mut explorer = WorkspacePanel::new(Arc::new(|| {}));
+        explorer.add_root(PathBuf::from("dock-fixture"));
+        shell.panels.explorer = Some(explorer);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let panel = shell.workspace.as_ref().unwrap().theme.panel();
+        frame(&mut shell, &mut renderer, 1200.0, 760.0);
+        // A click under the rows focuses the tree, which rings its bounds.
+        assert!(shell.panels.explorer().pointer(Point { x: 20.0, y: 400.0 }).is_none());
+
+        let mut stale: Vec<Rect> = Vec::new();
+        for (width, height, dock) in [
+            (1200.0, 760.0, DockWidths::default().left),
+            (1600.0, 1000.0, DockWidths::default().left),
+            (1600.0, 1000.0, 320.0),
+        ] {
+            shell.panels.widths.left = dock;
+            let (ops, editor) = frame(&mut shell, &mut renderer, width, height);
+            let size = format!("{width}x{height} with a {dock} px dock");
+            assert_eq!(editor, rect(dock, 0.0, width - dock, height), "{size}");
+
+            // Exactly one tab strip, over the editor pane: each title is drawn
+            // once, right of the dock, and the tab row above the dock's column
+            // holds nothing but the band's own chrome fill.
+            assert_eq!(
+                shell.views.test_tab_strips(),
+                [Some(rect(0.0, 0.0, editor.width, TAB_HEIGHT)), None],
+                "{size}"
+            );
+            for title in shell.workspace.as_ref().unwrap().titles() {
+                let drawn: Vec<f32> = ops
+                    .iter()
+                    .filter_map(|op| match op {
+                        DrawOp::Text { origin, text, .. } if origin.y < TAB_HEIGHT && *text == title => Some(origin.x),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(drawn.len(), 1, "{title} at {drawn:?}, {size}");
+                assert!(drawn[0] > editor.x, "{title} at {drawn:?}, {size}");
+            }
+            let above_dock: Vec<_> = ops
+                .iter()
+                .filter(|op| match op {
+                    DrawOp::Fill(r, _) | DrawOp::Stroke(r, _, _) => r.y < TAB_HEIGHT && r.x < dock,
+                    DrawOp::Text { origin, .. } => origin.y < TAB_HEIGHT && origin.x < dock,
+                    _ => false,
+                })
+                .collect();
+            assert_eq!(above_dock.len(), 2, "{above_dock:?}, {size}");
+            assert!(
+                above_dock
+                    .iter()
+                    .all(|op| matches!(op, DrawOp::Fill(r, _) if r.x == 0.0 && r.width == width)),
+                "{above_dock:?}, {size}"
+            );
+
+            // The Workspace section fills the dock column under its header, and
+            // the tree fills the section under the panel's title.
+            let body = rect(
+                0.0,
+                TAB_HEIGHT + SECTION_HEADER,
+                dock,
+                height - TAB_HEIGHT - STATUS_HEIGHT - SECTION_HEADER,
+            );
+            assert!(ops.contains(&DrawOp::Fill(body, panel.surface)), "{size}");
+            assert!(ops.contains(&DrawOp::PushClip(body)), "{size}");
+            let rings: Vec<Rect> = ops
+                .iter()
+                .filter_map(|op| match op {
+                    DrawOp::Stroke(r, color, _) if *color == panel.focus && r.x < dock => Some(*r),
+                    _ => None,
+                })
+                .collect();
+            let tree = rect(0.0, body.y + 34.0, dock, body.height - 34.0);
+            assert_eq!(rings, [tree], "{size}");
+
+            // Nothing is drawn or clipped at an earlier frame's size.
+            for old in &stale {
+                assert!(
+                    !ops.iter().any(|op| matches!(
+                        op,
+                        DrawOp::Fill(r, _) | DrawOp::Stroke(r, _, _) | DrawOp::PushClip(r) if r == old
+                    )),
+                    "stale {old:?} at {size}"
+                );
+            }
+            stale.extend([body, tree]);
+
+            // The splitter on the dock's edge resizes it; the dock itself does not.
+            let at = |x: f32, y: f32| shell.pointer_cursor_in(Point { x, y }, editor);
+            assert_eq!(at(dock + 3.0, height / 2.0), CursorIcon::ColResize, "{size}");
+            assert_eq!(at(dock / 2.0, height / 2.0), CursorIcon::Default, "{size}");
+        }
+
+        // The bottom panel's sash resizes that panel beside the open dock.
+        let ready = crate::shell::dock::DockSurfaceState {
+            available: true,
+            revision: 1,
+            ..Default::default()
+        };
+        let empty = crate::shell::dock::DockSurfaceState::default();
+        shell.dock.sync([ready, empty, empty]);
+        let (_, editor) = frame(&mut shell, &mut renderer, 1600.0, 1000.0);
+        let sash = shell.dock.layout(editor.width, editor.height).unwrap().splitter;
+        let point = Point {
+            x: editor.x + 200.0,
+            y: editor.y + sash.y + 2.0,
+        };
+        assert_eq!(shell.pointer_cursor_in(point, editor), CursorIcon::RowResize);
+    }
+
     #[test]
     fn disconnected_worker_is_a_terminal_error() {
         let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);

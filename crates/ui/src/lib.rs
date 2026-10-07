@@ -84,38 +84,65 @@ pub fn shell_with_theme(
     palette: bool,
     theme: theme::UiTheme,
 ) -> Vec<DrawOp> {
+    compose_shell(width, height, tabs, Some(active), palette, theme)
+}
+/// [`shell_with_theme`] for a window whose editor views lay out their own tab
+/// strip over the editor pane: the tab band keeps its chrome fill, but no tab
+/// is drawn across the full width. A side dock narrows the editor pane, so a
+/// full-width strip here would show a second, stale row of tabs above the
+/// dock's column.
+pub fn shell_chrome_with_theme(
+    width: f32,
+    height: f32,
+    tabs: &[String],
+    palette: bool,
+    theme: theme::UiTheme,
+) -> Vec<DrawOp> {
+    compose_shell(width, height, tabs, None, palette, theme)
+}
+/// The shell composition; `active` is `None` when the caller owns the tab strip.
+fn compose_shell(
+    width: f32,
+    height: f32,
+    tabs: &[String],
+    active: Option<usize>,
+    palette: bool,
+    theme: theme::UiTheme,
+) -> Vec<DrawOp> {
     let mut ops = vec![
         DrawOp::Fill(rect(0.0, 0.0, width, height), theme.editor),
         DrawOp::Fill(rect(0.0, 0.0, width, TAB_HEIGHT), theme.chrome),
     ];
-    ops.push(DrawOp::PushClip(rect(0.0, 0.0, width, TAB_HEIGHT)));
-    let strip = controls::TabStrip {
-        width,
-        count: tabs.len(),
-        active,
-    };
-    let visible = strip.visible();
-    for (index, title) in tabs.iter().enumerate().skip(visible.start).take(visible.len()) {
-        let tab = strip.bounds(index).unwrap();
-        let (x, width) = (tab.x, tab.width);
-        ops.push(DrawOp::Fill(
-            rect(x, 0.0, width, TAB_HEIGHT),
-            if index == active { theme.editor } else { theme.chrome },
-        ));
-        ops.push(DrawOp::Stroke(rect(x, 0.0, width, TAB_HEIGHT), theme.border, 1.0));
-        text(
-            &mut ops,
-            x + 16.0,
-            8.0,
-            title,
-            13.0,
-            if index == active { theme.text } else { theme.muted },
-        );
-        if index == active {
-            ops.push(DrawOp::Fill(rect(x, 32.0, width, 2.0), theme.focus));
+    if let Some(active) = active {
+        ops.push(DrawOp::PushClip(rect(0.0, 0.0, width, TAB_HEIGHT)));
+        let strip = controls::TabStrip {
+            width,
+            count: tabs.len(),
+            active,
+        };
+        let visible = strip.visible();
+        for (index, title) in tabs.iter().enumerate().skip(visible.start).take(visible.len()) {
+            let tab = strip.bounds(index).unwrap();
+            let (x, width) = (tab.x, tab.width);
+            ops.push(DrawOp::Fill(
+                rect(x, 0.0, width, TAB_HEIGHT),
+                if index == active { theme.editor } else { theme.chrome },
+            ));
+            ops.push(DrawOp::Stroke(rect(x, 0.0, width, TAB_HEIGHT), theme.border, 1.0));
+            text(
+                &mut ops,
+                x + 16.0,
+                8.0,
+                title,
+                13.0,
+                if index == active { theme.text } else { theme.muted },
+            );
+            if index == active {
+                ops.push(DrawOp::Fill(rect(x, 32.0, width, 2.0), theme.focus));
+            }
         }
+        ops.push(DrawOp::PopClip);
     }
-    ops.push(DrawOp::PopClip);
     let status_y = (height - STATUS_HEIGHT).max(TAB_HEIGHT);
     ops.push(DrawOp::PushClip(rect(0.0, TAB_HEIGHT, width, status_y - TAB_HEIGHT)));
     if !tabs.is_empty() {
@@ -180,3 +207,49 @@ pub fn palette_with_theme(width: f32, theme: theme::UiTheme, ops: &mut Vec<DrawO
 
 pub mod semantics;
 pub mod theme;
+
+#[cfg(test)]
+mod shell_chrome_tests {
+    use super::*;
+
+    /// A shell whose views draw the tab strip over the editor pane gets only
+    /// the empty band from the chrome, never a second, full-width row of tabs.
+    #[test]
+    fn chrome_without_tabs_keeps_the_band_and_status_but_draws_no_tab() {
+        let tabs = ["binary.bin".to_owned(), "Untitled 1".to_owned()];
+        let theme = theme::UiTheme::default();
+        let full = shell_with_theme(1200.0, 760.0, &tabs, 1, false, theme);
+        let chrome = shell_chrome_with_theme(1200.0, 760.0, &tabs, false, theme);
+        let in_band = |op: &DrawOp| match op {
+            DrawOp::Fill(r, _) | DrawOp::Stroke(r, _, _) => r.y < TAB_HEIGHT,
+            DrawOp::Text { origin, .. } => origin.y < TAB_HEIGHT,
+            _ => false,
+        };
+        let titled = |ops: &[DrawOp]| {
+            ops.iter()
+                .filter(|op| matches!(op, DrawOp::Text { text, .. } if tabs.contains(text)))
+                .count()
+        };
+        assert_eq!(titled(&full), 2);
+        assert_eq!(titled(&chrome), 0);
+        // The band holds only the window background and its own chrome fill.
+        let band: Vec<_> = chrome.iter().filter(|op| in_band(op)).cloned().collect();
+        assert_eq!(
+            band,
+            [
+                DrawOp::Fill(rect(0.0, 0.0, 1200.0, 760.0), theme.editor),
+                DrawOp::Fill(rect(0.0, 0.0, 1200.0, TAB_HEIGHT), theme.chrome),
+            ]
+        );
+        // Below the band both compositions are the same, apart from the full
+        // shell's (now empty) strip clip and its pop.
+        let below = |ops: &[DrawOp]| ops.iter().filter(|op| !in_band(op)).cloned().collect::<Vec<_>>();
+        let strip_clip = |op: &DrawOp| matches!(op, DrawOp::PushClip(r) if r.y == 0.0 && r.height == TAB_HEIGHT);
+        assert!(!chrome.iter().any(strip_clip));
+        let mut full_below = below(&full);
+        let clip = full_below.iter().position(strip_clip).unwrap();
+        assert_eq!(full_below.remove(clip + 1), DrawOp::PopClip);
+        full_below.remove(clip);
+        assert_eq!(full_below, below(&chrome));
+    }
+}

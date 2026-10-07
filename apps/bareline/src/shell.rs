@@ -1756,6 +1756,11 @@ impl Shell {
             let scale = window.scale_factor() as f32;
             (size.width as f32 / scale, size.height as f32 / scale)
         });
+        self.editor_bounds_in(width, height)
+    }
+    /// The editor area of a `width` × `height` (logical) window: beside the
+    /// open docks, under the toolbar. Its top row is the views' tab strip.
+    fn editor_bounds_in(&self, width: f32, height: f32) -> bareline_renderer::Rect {
         bareline_ui::rect(
             self.panels.width_left(),
             self.toolbar.controller.height(),
@@ -4715,14 +4720,7 @@ impl Shell {
         visible_rows: usize,
     ) {
         renderer.set_layout_budget(open_editors, visible_rows);
-        let mut operations = bareline_ui::shell_with_theme(
-            size.width as f32 / scale,
-            size.height as f32 / scale,
-            &self.app.tabs,
-            self.app.active,
-            false,
-            self.settings.ui_theme(),
-        );
+        let mut operations = self.frame_chrome(size.width as f32 / scale, size.height as f32 / scale);
         // A layer that fails is skipped and reported once, never through a
         // modal: this runs from WM_PAINT (APP-08).
         let footer_labels = self.draw_editor_layer(el, renderer, editor_bounds, &mut operations);
@@ -4732,6 +4730,19 @@ impl Shell {
         self.draw_overlays(el, renderer, size, scale, &mut operations);
         self.present_frame(el, renderer, size, scale, &operations);
         self.refresh_menus(el);
+    }
+    /// The frame's base layer for a `width` × `height` window: background, tab
+    /// band and status bar. Once a workspace exists its views own the tab
+    /// strip and lay it out over the editor pane, which a side dock narrows
+    /// and moves, so this layer leaves the band empty; tabs drawn here as
+    /// well showed as a second, full-width strip above the dock's column.
+    fn frame_chrome(&self, width: f32, height: f32) -> Vec<bareline_renderer::DrawOp> {
+        let theme = self.settings.ui_theme();
+        if self.workspace.is_some() {
+            bareline_ui::shell_chrome_with_theme(width, height, &self.app.tabs, false, theme)
+        } else {
+            bareline_ui::shell_with_theme(width, height, &self.app.tabs, self.app.active, false, theme)
+        }
     }
     fn draw_editor_layer(
         &mut self,

@@ -5363,6 +5363,11 @@ impl ViewsRuntime {
     pub(super) fn test_set_splitter(&mut self, splitter: Rect) {
         self.splitter = Some(splitter);
     }
+    /// Each pane's tab strip on the last frame, in editor-local coordinates.
+    #[cfg(test)]
+    pub(super) fn test_tab_strips(&self) -> [Option<Rect>; 2] {
+        self.tab_strips
+    }
     /// The resize cursor over the split divider at editor-local `point`, or
     /// while it is dragged: a column resize between side-by-side panes.
     pub(super) fn splitter_cursor(&self, point: Point) -> Option<winit::window::CursorIcon> {
