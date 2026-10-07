@@ -35,10 +35,16 @@ enum Operation {
     Input(Input),
     Clipboard(bool),
 }
-/// The progress message shown while `operation` is staged, if any: only a copy
-/// or cut reads the selected text first (LNX-EDIT-006).
+/// The progress message shown while `operation` is staged, if any. Typing shows
+/// its result when it lands and no message (LNX-EDIT-006); the operations that
+/// read the selected text first say so until they finish.
 fn preparation_status(operation: &Operation) -> Option<&'static str> {
-    matches!(operation, Operation::Clipboard(_)).then_some("Preparing selected text…")
+    match operation {
+        Operation::Input(_) => None,
+        Operation::Clipboard(_) => Some("Preparing selected text…"),
+        Operation::Transform(_) => Some("Reading selected lines…"),
+        Operation::Literal(..) => Some("Preparing the edit…"),
+    }
 }
 #[derive(Clone)]
 struct Target {
@@ -1317,12 +1323,7 @@ impl Shell {
                 match result {
                     Err(error) => self.power.status = error,
                     Ok(()) => {
-                        self.power.copied(&text);
-                        // The copy is done: its progress message goes with it.
-                        self.power.status.clear();
-                        if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
-                            self.power.status = warning;
-                        }
+                        self.power.clipboard_written(&text);
                         if matches!(worker.operation, Operation::Clipboard(true)) {
                             let transaction = bareline_document::EditTransaction {
                                 base_revision: worker.target.source.revision,

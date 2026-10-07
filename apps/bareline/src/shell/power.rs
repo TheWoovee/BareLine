@@ -218,6 +218,16 @@ impl PowerRuntime {
             };
         }
     }
+    /// A copy or cut reached the clipboard: its progress message ends, and what
+    /// Clipboard History did with the text, or a size warning, is reported in
+    /// its place (LNX-EDIT-006).
+    pub(super) fn clipboard_written(&mut self, text: &str) {
+        self.status.clear();
+        self.copied(text);
+        if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
+            self.status = warning;
+        }
+    }
     pub(super) fn draw(
         &mut self,
         renderer: &mut Renderer,
@@ -1841,5 +1851,30 @@ mod column_mode_pointer_tests {
         shell.modifiers = ModifiersState::ALT;
         shell.pointer = Point { x: 500.0, y: 300.0 };
         assert!(shell.power_pointer_in(&press(), frame));
+    }
+}
+
+#[cfg(test)]
+mod clipboard_status_tests {
+    use super::*;
+
+    /// LNX-EDIT-006: a finished copy from a paged document drops its progress
+    /// message but keeps what Clipboard History reports about the text.
+    #[test]
+    fn a_finished_copy_keeps_the_clipboard_history_message() {
+        let mut runtime = PowerRuntime::default();
+        runtime.configure_history(true, 20, 16 << 20, 4 << 20);
+        runtime.status = "Preparing selected text…".into();
+        runtime.clipboard_written("kept in history");
+        assert_eq!(runtime.status, "");
+        runtime.status = "Preparing selected text…".into();
+        runtime.clipboard_written(&"x".repeat((4 << 20) + 1));
+        assert_eq!(
+            runtime.status,
+            format!(
+                "Copied. Text larger than {} is not kept in Clipboard History.",
+                bareline_platform::clipboard::clipboard_size_label(4 << 20)
+            )
+        );
     }
 }
