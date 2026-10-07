@@ -1204,6 +1204,36 @@ mod tests {
         assert_eq!(workspace.editors[0].snapshot().revision, primary.revision);
     }
 
+    /// LNX-UI-013: Split, Clone to Other View and Close Split View used to
+    /// leave a second tab for every document the second pane showed.
+    #[test]
+    fn closing_a_split_or_clone_leaves_one_tab_per_document() {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let mut views = ViewsRuntime::default();
+        let mut app = App::default();
+        views.sync_documents(&workspace);
+        views.install_views(&mut workspace);
+        let tabs = |views: &ViewsRuntime| views.controller.as_ref().unwrap().tabs().len();
+        assert_eq!(tabs(&views), 2);
+        for keep_secondary in [false, true] {
+            views.split(&mut workspace, 0, Orientation::Vertical);
+            assert!(views.open());
+            app.active = 1;
+            views.clone_active(&mut workspace, &mut app);
+            assert!(tabs(&views) > 2);
+            views.activate(&mut workspace, &mut app, u32::from(keep_secondary));
+            views.close_split(&mut workspace);
+            assert!(!views.open());
+            assert_eq!(tabs(&views), 2, "keep secondary: {keep_secondary}");
+        }
+    }
+
     #[test]
     fn closing_split_preserves_shared_undo_redo_from_either_writer() {
         fn exercise(writer: u32, close_from: u32) {
