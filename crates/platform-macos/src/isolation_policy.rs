@@ -35,15 +35,20 @@
 //! enforce `RLIMIT_AS` or `RLIMIT_DATA`; the budget's wall-clock watchdog and
 //! the CPU limit bound a runaway host instead.
 use bareline_extensions_protocol::ExecutionBudget;
+use bareline_platform_posix::extension_transport::HostSpawn;
 use std::{
     ffi::OsString,
     io,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
 pub const SHELL: &str = "/bin/sh";
 pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 pub const PROBE_PROGRAM: &str = "/usr/bin/true";
+/// How the host is confined, as the Extensions page and the launch report it
+/// (`isolation=sandbox_init`): `sandbox-exec` applies the profile with it.
+pub const MECHANISM: &str = "sandbox_init";
 /// The script's exit status when a resource limit could not be set.
 pub const LIMITS_FAILED: i32 = 125;
 /// `$0` of the launch script, as seen in process listings until the exec.
@@ -70,6 +75,47 @@ pub struct IsolationRequest {
     /// The Unix-domain socket the host connects to, when the transport uses a path.
     pub socket: Option<PathBuf>,
     pub budget: ExecutionBudget,
+}
+
+/// The request for a verified host launch of the shared Unix transport. The
+/// sandbox matches real paths (`/var/folders` is `/private/var/folders`), so
+/// the runtime and the transport socket are named with their links resolved;
+/// the component is granted under both its spelling, which the host opens,
+/// and its real path. The resolved runtime must still be the file that was
+/// hashed, since macOS cannot launch from the verified descriptor.
+pub fn host_request(spawn: &HostSpawn<'_>) -> io::Result<IsolationRequest> {
+    let runtime = std::fs::canonicalize(spawn.executable)?;
+    let (named, verified) = (std::fs::metadata(&runtime)?, spawn.executable_file.metadata()?);
+    if (named.dev(), named.ino()) != (verified.dev(), verified.ino()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the extension host changed after it was verified",
+        ));
+    }
+    let component = std::fs::canonicalize(spawn.component)?;
+    let mut readable = vec![spawn.component.to_path_buf()];
+    if component != spawn.component {
+        readable.push(component);
+    }
+    let socket = match spawn.socket {
+        Some(socket) => {
+            let (Some(folder), Some(name)) = (socket.parent(), socket.file_name()) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the transport socket has no folder",
+                ));
+            };
+            Some(std::fs::canonicalize(folder)?.join(name))
+        }
+        None => None,
+    };
+    Ok(IsolationRequest {
+        runtime,
+        arguments: spawn.arguments.clone(),
+        readable,
+        socket,
+        budget: spawn.budget,
+    })
 }
 
 /// Limits applied with `ulimit` before the sandbox is entered.
@@ -289,6 +335,57 @@ mod tests {
         let mut request = request();
         request.socket = None;
         assert!(!sandbox_profile(&request).unwrap().contains("unix-socket"));
+    }
+
+    /// A host in the macOS temporary folder (`/var` is a link to `/private/var`)
+    /// is granted by its real paths, which the sandbox matches.
+    #[test]
+    fn host_requests_name_real_paths() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "bareline-host-request-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        let (host, component) = (root.join("link/host"), root.join("link/c.wasm"));
+        std::fs::write(&host, b"host").unwrap();
+        std::fs::write(&component, b"component").unwrap();
+        let file = std::fs::File::open(&host).unwrap();
+        let socket = root.join("link/bareline-exthost-1-ab");
+        let spawn = HostSpawn {
+            executable: &host,
+            executable_file: &file,
+            component: &component,
+            arguments: vec!["name".into(), "1".into()],
+            budget: ExecutionBudget::Background,
+            socket: Some(&socket),
+        };
+        let request = host_request(&spawn).unwrap();
+        assert_eq!(request.runtime, root.join("real/host"));
+        assert_eq!(request.readable, [component.clone(), root.join("real/c.wasm")]);
+        assert_eq!(request.socket, Some(root.join("real/bareline-exthost-1-ab")));
+        assert_eq!(request.arguments, spawn.arguments);
+        assert_eq!(request.budget, ExecutionBudget::Background);
+        let profile = sandbox_profile(&request).unwrap();
+        assert!(profile.contains(&format!(
+            "(allow process-exec (literal \"{}\"))",
+            root.join("real/host").display()
+        )));
+        // A runtime replaced after its verification is not launched.
+        let other = std::fs::File::open(&component).unwrap();
+        let swapped = HostSpawn {
+            executable_file: &other,
+            ..spawn
+        };
+        assert_eq!(
+            host_request(&swapped).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

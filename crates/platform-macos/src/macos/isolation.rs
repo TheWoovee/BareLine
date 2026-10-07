@@ -9,11 +9,16 @@
 //! kind `PermissionDenied`, the counterpart of the Windows adapter's
 //! `SandboxUnavailable`, and [`MacIsolation::probe`] reports
 //! `isolation=unsupported`. There is no weaker fallback.
+//!
+//! [`MacHostSandbox`] is the shared Unix launch's `HostSandbox` on macOS: the
+//! verified host runs only under this isolation, as Linux's runs only under
+//! Landlock.
 use crate::isolation_policy::{
-    IsolationRequest, LIMITS_FAILED, PROBE_PROGRAM, ResourceLimits, SANDBOX_EXEC, SHELL, launch_arguments,
-    probe_profile, sandbox_profile, scrubbed_environment,
+    IsolationRequest, LIMITS_FAILED, MECHANISM, PROBE_PROGRAM, ResourceLimits, SANDBOX_EXEC, SHELL, host_request,
+    launch_arguments, probe_profile, sandbox_profile, scrubbed_environment,
 };
 use bareline_macros::process::ProcessTreeGuard;
+use bareline_platform_posix::extension_transport::{HostProcess, HostSandbox, HostSpawn, Isolation, SpawnedHost};
 use std::{
     collections::HashSet,
     ffi::{CString, OsString},
@@ -134,6 +139,53 @@ impl MacIsolation {
         let pid = spawn(&argv, &mapped)?;
         let reaper = Reaper::new(pid);
         Ok((MacHostChild { reaper: reaper.clone() }, Box::new(HostGroup { reaper })))
+    }
+}
+
+/// The `HostSandbox` of the shared verified launch (`run_verified_host_in`):
+/// the host starts under the sandbox profile and limits, after the probe
+/// proved they apply, or it does not start (SEC-05).
+#[derive(Default)]
+pub struct MacHostSandbox {
+    isolation: MacIsolation,
+}
+impl MacHostSandbox {
+    /// The Extensions page's line, without starting anything: `sandbox_init`
+    /// where `sandbox-exec` exists. Every launch still proves the profile first.
+    pub fn isolation() -> Isolation {
+        if Path::new(SANDBOX_EXEC).exists() {
+            Isolation::Enforced(MECHANISM.into())
+        } else {
+            Isolation::Unsupported(format!("{SANDBOX_EXEC} is not available"))
+        }
+    }
+}
+impl HostSandbox for MacHostSandbox {
+    fn spawn_host(&self, spawn: &HostSpawn<'_>) -> io::Result<SpawnedHost> {
+        let request = host_request(spawn)?;
+        if let IsolationSupport::Unsupported { reason } = self.isolation.probe(&request) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                Isolation::Unsupported(reason).to_string(),
+            ));
+        }
+        let (child, guard) = self.isolation.spawn_host(&request, &[])?;
+        Ok(SpawnedHost {
+            child: Box::new(child),
+            guard,
+            isolation: Isolation::Enforced(MECHANISM.into()),
+        })
+    }
+}
+impl HostProcess for MacHostChild {
+    fn id(&self) -> u32 {
+        MacHostChild::id(self)
+    }
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        MacHostChild::try_wait(self)
+    }
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        MacHostChild::wait(self)
     }
 }
 
@@ -452,6 +504,36 @@ mod tests {
         };
         let (mut child, _guard) = isolation.spawn_host(&denied, &[]).unwrap();
         assert!(!child.wait().unwrap().success());
+    }
+
+    /// The shared launch's sandbox starts the verified runtime confined and
+    /// names the mechanism; the child is waited for through the shared trait.
+    #[test]
+    fn the_host_sandbox_starts_the_runtime_confined() {
+        let root = scratch("adapter");
+        let component = root.join("c.wasm");
+        std::fs::write(&component, b"component").unwrap();
+        // Spelled through /var (a link), as the shared launch names files.
+        let spelled = std::env::temp_dir().join(root.file_name().unwrap()).join("c.wasm");
+        let executable = Path::new("/bin/cat");
+        let file = std::fs::File::open(executable).unwrap();
+        let spawn = HostSpawn {
+            executable,
+            executable_file: &file,
+            component: &spelled,
+            arguments: vec![spelled.clone().into()],
+            budget: ExecutionBudget::Interactive,
+            socket: None,
+        };
+        assert_eq!(MacHostSandbox::isolation(), Isolation::Enforced(MECHANISM.into()));
+        let SpawnedHost {
+            mut child,
+            guard: _guard,
+            isolation,
+        } = MacHostSandbox::default().spawn_host(&spawn).unwrap();
+        assert_eq!(isolation.to_string(), "isolation=sandbox_init");
+        assert!(child.wait().unwrap().success(), "the granted component is readable");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -269,9 +269,13 @@ const DELETE_BACKUP_ID: i32 = 1303;
 /// The task dialog's always-present Cancel button (`IDCANCEL`).
 const DIALOG_CANCEL_ID: i32 = 2;
 /// Whether `root` lies under `%TEMP%`. Both paths are resolved to their final form
-/// (junctions, 8.3 names) as far as they exist and compared case-insensitively.
+/// (junctions, 8.3 names) as far as they exist and compared case-insensitively;
+/// they are also compared as spelled, so a temporary folder reached through a
+/// link (macOS `/var`, Linux `/var/lock`) counts however the rest resolves.
 fn under_temp(root: &Path) -> bool {
-    same_or_under(root, &std::env::temp_dir())
+    let temp = std::env::temp_dir();
+    let spelled = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
+    same_or_under(root, &temp) || spelled(root).starts_with(spelled(&temp))
 }
 fn same_or_under(path: &Path, base: &Path) -> bool {
     comparable_path(path).starts_with(comparable_path(base))

@@ -74,6 +74,7 @@ fn sandboxed_selftest(sandbox: &LinuxHostSandbox, grant: &Path, deny: &Path) -> 
         component: grant,
         arguments: vec!["--sandbox-selftest".into(), grant.into(), deny.into()],
         budget: ExecutionBudget::Interactive,
+        socket: None,
     })?;
     let deadline = Instant::now() + Duration::from_secs(20);
     let status = loop {

@@ -314,7 +314,7 @@ impl HostSandbox for LinuxHostSandbox {
         drop(ruleset);
         let guard = HostTree::new(child.id());
         Ok(SpawnedHost {
-            child,
+            child: Box::new(child),
             guard: Box::new(guard),
             isolation,
         })
