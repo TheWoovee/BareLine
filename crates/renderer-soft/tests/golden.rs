@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Raster goldens: a fixed operation list using every `DrawOp`, rendered
+//! Raster goldens: a fixed operation list using every `DrawOp`, and a text
+//! fidelity scene (combining marks, bidi lines, missing emoji), rendered
 //! offscreen with the bundled font only and compared with checked-in PNGs.
 //!
 //! A pixel matches when every channel is within [`TOLERANCE`]; at most
@@ -125,6 +126,34 @@ fn scene(renderer: &mut SoftRenderer) -> Vec<DrawOp> {
     squiggle(200.0, 280.0, 192.0, Color(0xFF5555), &mut ops);
     ops
 }
+/// Text fidelity, 320 x 200 DIPs: spacing combining marks over their base and
+/// a precomposed sequence (LNX-UI-009), lines that start right to left but read
+/// left to right (LNX-UI-010), and one box per emoji cluster the bundled face
+/// lacks (LNX-UI-017).
+fn text_scene(renderer: &mut SoftRenderer) -> Vec<DrawOp> {
+    let lines = [
+        "Z\u{336}\u{335} o\u{302}\u{323} x\u{323}\u{307} end",
+        "مرحبا 123 ok",
+        "שלום abc",
+        "Mixed: abc مرحبا def",
+        "👍🏽 🇯🇵 ❤\u{FE0F} end",
+    ];
+    let mut ops = vec![DrawOp::Fill(rect(0.0, 0.0, 320.0, 200.0), Color(0x1F2328))];
+    for (index, line) in lines.iter().enumerate() {
+        let layout = renderer
+            .shape_with_font_family(line, 16.0, 300.0, BUNDLED_FONT_FAMILY)
+            .unwrap();
+        ops.push(DrawOp::Layout {
+            origin: Point {
+                x: 10.0,
+                y: 10.0 + 36.0 * index as f32,
+            },
+            layout,
+            color: Color(0xE6E8EA),
+        });
+    }
+    ops
+}
 
 fn golden_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -134,6 +163,9 @@ fn golden_path(name: &str) -> PathBuf {
 }
 
 fn check_golden(name: &str, scale: f32) {
+    check_golden_of(name, scale, scene);
+}
+fn check_golden_of(name: &str, scale: f32, scene: fn(&mut SoftRenderer) -> Vec<DrawOp>) {
     let (width, height) = ((320.0 * scale) as u32, (200.0 * scale) as u32);
     let mut renderer = SoftRenderer::offscreen_with_fonts(width, height, scale, FontSource::BundledOnly).unwrap();
     let ops = scene(&mut renderer);
@@ -175,6 +207,11 @@ fn every_draw_op_matches_the_golden_at_scale_1() {
 #[test]
 fn every_draw_op_matches_the_golden_at_scale_1_5() {
     check_golden("scene-scale1_5.png", 1.5);
+}
+#[test]
+fn combining_bidi_and_missing_emoji_text_matches_the_golden() {
+    check_golden_of("text-scale1.png", 1.0, text_scene);
+    check_golden_of("text-scale2.png", 2.0, text_scene);
 }
 #[test]
 fn the_comparison_detects_a_changed_frame() {

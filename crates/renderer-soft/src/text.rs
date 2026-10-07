@@ -37,6 +37,19 @@ const INTERFACE_FAMILIES: [&str; 8] = [
     "Liberation Sans",
     "Arial",
 ];
+/// Colour emoji families, the first installed of which draws emoji sequences
+/// (the counterpart of Segoe UI Emoji in DirectWrite's system fallback).
+const COLOR_EMOJI_FAMILIES: [&str; 6] = [
+    "Noto Color Emoji",
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Twemoji",
+    "JoyPixels",
+    "OpenMoji Color",
+];
+/// LEFT-TO-RIGHT MARK, put before a paragraph's shaping copy so the paragraph's
+/// base direction is left-to-right whatever its first strong character is.
+const LTR_MARK: &str = "\u{200E}";
 /// Resolved family names; the cache is flushed when it overflows.
 const MAX_RESOLVED_FAMILIES: usize = 64;
 /// Glyph bitmaps kept between frames. Past this, a frame keeps only the
@@ -81,6 +94,8 @@ pub(crate) struct Fonts {
     line_heights: HashMap<String, f32>,
     monospace: String,
     interface: String,
+    /// The installed colour emoji family, if any.
+    emoji: Option<String>,
     /// Paragraphs shaped since creation; tests use it to prove caching.
     #[cfg(test)]
     pub(crate) shaped_paragraphs: usize,
@@ -93,8 +108,13 @@ impl Fonts {
             db.load_system_fonts();
         }
         db.load_font_source(fontdb::Source::Binary(Arc::new(BUNDLED_FONT)));
+        Self::with_database(db)
+    }
+    /// Fonts drawn from `db`, which must hold the bundled face.
+    fn with_database(db: fontdb::Database) -> Self {
         let monospace = first_installed(&db, &MONOSPACE_FAMILIES).unwrap_or_else(|| BUNDLED_FONT_FAMILY.to_owned());
         let interface = first_installed(&db, &INTERFACE_FAMILIES).unwrap_or_else(|| monospace.clone());
+        let emoji = first_installed(&db, &COLOR_EMOJI_FAMILIES);
         // A fixed locale keeps fallback order independent of the user's settings.
         let system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
         Self {
@@ -106,6 +126,7 @@ impl Fonts {
             line_heights: HashMap::new(),
             monospace,
             interface,
+            emoji,
             #[cfg(test)]
             shaped_paragraphs: 0,
         }
@@ -300,12 +321,37 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
         height: 0.0,
         styles: Vec::new(),
     };
+    let emoji = fonts.emoji.clone();
     let mut top = 0.0f32;
     for (range, ending) in paragraphs(text) {
         let paragraph = shaped.paragraphs.len();
-        let mut line = BufferLine::new(&text[range.clone()], ending, AttrsList::new(&attrs), Shaping::Advanced);
-        // Leading alignment for every paragraph direction, as DirectWrite's
-        // default left-to-right reading direction does.
+        let source = &text[range.clone()];
+        // cosmic-text takes a paragraph's base direction from its first strong
+        // character, so a line starting in Arabic would read right to left.
+        // Editor lines read left to right with right-to-left runs inside, as
+        // DirectWrite's default reading direction lays them out: a leading
+        // LEFT-TO-RIGHT MARK fixes the base direction. ASCII has no
+        // right-to-left characters and needs none.
+        let prefix = if source.is_ascii() { 0 } else { LTR_MARK.len() };
+        let mut attrs_list = AttrsList::new(&attrs);
+        if prefix > 0
+            && let Some(emoji) = emoji.as_deref()
+        {
+            // Emoji sequences prefer the colour face, as DirectWrite's fallback does.
+            let emoji_attrs = attrs.clone().family(Family::Name(emoji));
+            for (index, cluster) in source.grapheme_indices(true) {
+                if is_emoji_sequence(cluster) {
+                    attrs_list.add_span(prefix + index..prefix + index + cluster.len(), &emoji_attrs);
+                }
+            }
+        }
+        let shaping = if prefix > 0 {
+            format!("{LTR_MARK}{source}")
+        } else {
+            source.to_owned()
+        };
+        let mut line = BufferLine::new(shaping, ending, attrs_list.clone(), Shaping::Advanced);
+        // Leading alignment, as DirectWrite's default reading direction does.
         line.set_align(Some(Align::Left));
         #[cfg(test)]
         {
@@ -326,10 +372,24 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
             // Glyphs are centred in the line box, as cosmic-text's own runs are.
             let baseline = top + (height - (visual.max_ascent + visual.max_descent)) / 2.0 + visual.max_ascent;
             let first = shaped.clusters.len();
-            for glyph in &visual.glyphs {
+            // The glyphs in `source` offsets, without the direction mark's.
+            let mut glyphs: Vec<LayoutGlyph> = visual
+                .glyphs
+                .iter()
+                .filter(|glyph| glyph.end > prefix)
+                .map(|glyph| LayoutGlyph {
+                    start: glyph.start.saturating_sub(prefix),
+                    end: glyph.end - prefix,
+                    ..glyph.clone()
+                })
+                .collect();
+            let growth = split_missing_clusters(fonts, &mut glyphs, source, size, &attrs_list, prefix)
+                + overlay_unattached_marks(fonts, &mut glyphs, source);
+            for glyph in glyphs {
                 let (start, end) = (range.start + glyph.start, range.start + glyph.end);
+                let (left, right, rtl) = (glyph.x, glyph.x + glyph.w, glyph.level.is_rtl());
                 shaped.glyphs.push(Glyph {
-                    layout: glyph.clone(),
+                    layout: glyph,
                     baseline,
                     start,
                 });
@@ -341,22 +401,22 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
                 let on_line = shaped.clusters.len() > first;
                 match shaped.clusters.last_mut() {
                     Some(cluster) if on_line && cluster.start == start && cluster.end == end => {
-                        cluster.left = cluster.left.min(glyph.x);
-                        cluster.right = cluster.right.max(glyph.x + glyph.w);
+                        cluster.left = cluster.left.min(left);
+                        cluster.right = cluster.right.max(right);
                     }
                     _ => shaped.clusters.push(Cluster {
                         start,
                         end,
-                        left: glyph.x,
-                        right: glyph.x + glyph.w,
-                        rtl: glyph.level.is_rtl(),
+                        left,
+                        right,
+                        rtl,
                     }),
                 }
             }
             let right = shaped.clusters[first..]
                 .iter()
                 .map(|cluster| cluster.right)
-                .fold(visual.w, f32::max);
+                .fold(visual.w + growth, f32::max);
             shaped.width = shaped.width.max(right);
             shaped.lines.push(Line {
                 paragraph,
@@ -380,6 +440,328 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
     }
     shaped.height = top;
     shaped
+}
+
+/// Emoji_Presentation=Yes code points (Unicode 16.0 `emoji-data.txt`), as
+/// inclusive ranges in order.
+const EMOJI_PRESENTATION: [(u32, u32); 80] = [
+    (0x231A, 0x231B),
+    (0x23E9, 0x23EC),
+    (0x23F0, 0x23F0),
+    (0x23F3, 0x23F3),
+    (0x25FD, 0x25FE),
+    (0x2614, 0x2615),
+    (0x2648, 0x2653),
+    (0x267F, 0x267F),
+    (0x2693, 0x2693),
+    (0x26A1, 0x26A1),
+    (0x26AA, 0x26AB),
+    (0x26BD, 0x26BE),
+    (0x26C4, 0x26C5),
+    (0x26CE, 0x26CE),
+    (0x26D4, 0x26D4),
+    (0x26EA, 0x26EA),
+    (0x26F2, 0x26F3),
+    (0x26F5, 0x26F5),
+    (0x26FA, 0x26FA),
+    (0x26FD, 0x26FD),
+    (0x2705, 0x2705),
+    (0x270A, 0x270B),
+    (0x2728, 0x2728),
+    (0x274C, 0x274C),
+    (0x274E, 0x274E),
+    (0x2753, 0x2755),
+    (0x2757, 0x2757),
+    (0x2795, 0x2797),
+    (0x27B0, 0x27B0),
+    (0x27BF, 0x27BF),
+    (0x2B1B, 0x2B1C),
+    (0x2B50, 0x2B50),
+    (0x2B55, 0x2B55),
+    (0x1F004, 0x1F004),
+    (0x1F0CF, 0x1F0CF),
+    (0x1F18E, 0x1F18E),
+    (0x1F191, 0x1F19A),
+    (0x1F1E6, 0x1F1FF),
+    (0x1F201, 0x1F201),
+    (0x1F21A, 0x1F21A),
+    (0x1F22F, 0x1F22F),
+    (0x1F232, 0x1F236),
+    (0x1F238, 0x1F23A),
+    (0x1F250, 0x1F251),
+    (0x1F300, 0x1F320),
+    (0x1F32D, 0x1F335),
+    (0x1F337, 0x1F37C),
+    (0x1F37E, 0x1F393),
+    (0x1F3A0, 0x1F3CA),
+    (0x1F3CF, 0x1F3D3),
+    (0x1F3E0, 0x1F3F0),
+    (0x1F3F4, 0x1F3F4),
+    (0x1F3F8, 0x1F43E),
+    (0x1F440, 0x1F440),
+    (0x1F442, 0x1F4FC),
+    (0x1F4FF, 0x1F53D),
+    (0x1F54B, 0x1F54E),
+    (0x1F550, 0x1F567),
+    (0x1F57A, 0x1F57A),
+    (0x1F595, 0x1F596),
+    (0x1F5A4, 0x1F5A4),
+    (0x1F5FB, 0x1F64F),
+    (0x1F680, 0x1F6C5),
+    (0x1F6CC, 0x1F6CC),
+    (0x1F6D0, 0x1F6D2),
+    (0x1F6D5, 0x1F6D7),
+    (0x1F6DC, 0x1F6DF),
+    (0x1F6EB, 0x1F6EC),
+    (0x1F6F4, 0x1F6FC),
+    (0x1F7E0, 0x1F7EB),
+    (0x1F7F0, 0x1F7F0),
+    (0x1F90C, 0x1F93A),
+    (0x1F93C, 0x1F945),
+    (0x1F947, 0x1F9FF),
+    (0x1FA70, 0x1FA7C),
+    (0x1FA80, 0x1FA89),
+    (0x1FA8F, 0x1FAC6),
+    (0x1FACE, 0x1FADC),
+    (0x1FADF, 0x1FAE9),
+    (0x1FAF0, 0x1FAF8),
+];
+
+/// Whether the grapheme `cluster` asks for emoji presentation (UTS #51): it
+/// starts with an emoji-presentation character or carries an emoji variation
+/// selector, a keycap, a skin-tone modifier or tags, and no text variation
+/// selector.
+fn is_emoji_sequence(cluster: &str) -> bool {
+    let mut chars = cluster.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let presentation = u32::from(first);
+    !cluster.contains('\u{FE0E}')
+        && (EMOJI_PRESENTATION
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&presentation))
+            || chars
+                .any(|c| matches!(c, '\u{FE0F}' | '\u{20E3}' | '\u{1F3FB}'..='\u{1F3FF}' | '\u{E0020}'..='\u{E007F}')))
+}
+
+/// Combining diacritics shared by every script (the Inherited blocks), which
+/// monospace faces often draw as spacing glyphs in a cell of their own.
+fn is_generic_mark(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0300}'..='\u{036F}'
+            | '\u{1AB0}'..='\u{1AFF}'
+            | '\u{1DC0}'..='\u{1DFF}'
+            | '\u{20D0}'..='\u{20FF}'
+            | '\u{FE20}'..='\u{FE2F}'
+    )
+}
+
+/// Characters that join or select inside an emoji sequence and draw nothing of
+/// their own: zero-width joiner, variation selectors and tags.
+fn is_emoji_joiner(c: char) -> bool {
+    matches!(c, '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0020}'..='\u{E007F}')
+}
+
+/// The glyphs one visual line's cluster spans: the run of glyphs from the
+/// first that share its byte range.
+fn cluster_len(glyphs: &[LayoutGlyph]) -> usize {
+    glyphs.first().map_or(0, |first| {
+        glyphs
+            .iter()
+            .take_while(|glyph| glyph.start == first.start && glyph.end == first.end)
+            .count()
+    })
+}
+
+/// Repair clusters with missing glyphs on one visual line (glyphs in visual
+/// order, offsets into `text`, the paragraph). cosmic-text falls back per
+/// cluster, so an emoji sequence no installed face draws whole (`👍🏽`
+/// without a colour emoji face) kept a box per character even where a symbol
+/// face has its parts. Each part of such a sequence is shaped on its own with
+/// the whole fallback chain instead, and a cluster draws at most one
+/// missing-glyph box, as DirectWrite does. Returns the change in line width.
+fn split_missing_clusters(
+    fonts: &mut Fonts,
+    glyphs: &mut Vec<LayoutGlyph>,
+    text: &str,
+    size: f32,
+    attrs: &AttrsList,
+    prefix: usize,
+) -> f32 {
+    if glyphs.iter().all(|glyph| glyph.glyph_id != 0) {
+        return 0.0;
+    }
+    let mut repaired = Vec::with_capacity(glyphs.len());
+    let mut growth = 0.0f32;
+    let mut rest = glyphs.as_slice();
+    while !rest.is_empty() {
+        let (cluster, tail) = rest.split_at(cluster_len(rest));
+        rest = tail;
+        let first = &cluster[0];
+        let missing = cluster.iter().filter(|glyph| glyph.glyph_id == 0).count();
+        let source = text.get(first.start..first.end).unwrap_or_default();
+        let replacement = if missing == 0 {
+            None
+        } else if is_emoji_sequence(source) {
+            Some(shape_parts(
+                fonts,
+                source,
+                size,
+                &attrs.get_span(prefix + first.start),
+                first.level.is_rtl(),
+            ))
+        } else if missing > 1 && cluster.iter().all(|glyph| glyph.glyph_id == 0 || glyph.w == 0.0) {
+            // Nothing in the cluster is drawn: one box stands for it.
+            cluster.iter().find(|glyph| glyph.glyph_id == 0).map(|glyph| {
+                vec![LayoutGlyph {
+                    x: 0.0,
+                    ..glyph.clone()
+                }]
+            })
+        } else {
+            None
+        };
+        let Some(parts) = replacement else {
+            repaired.extend(cluster.iter().map(|glyph| LayoutGlyph {
+                x: glyph.x + growth,
+                ..glyph.clone()
+            }));
+            continue;
+        };
+        let left = cluster.iter().map(|glyph| glyph.x).fold(f32::INFINITY, f32::min) + growth;
+        let old: f32 = cluster.iter().map(|glyph| glyph.w).sum();
+        let new: f32 = parts.iter().map(|glyph| glyph.w).sum();
+        repaired.extend(parts.into_iter().map(|glyph| LayoutGlyph {
+            start: first.start,
+            end: first.end,
+            x: left + glyph.x,
+            y: first.y,
+            level: first.level,
+            ..glyph
+        }));
+        growth += new - old;
+    }
+    *glyphs = repaired;
+    growth
+}
+
+/// `cluster`'s parts (a character with any generic marks after it; joiners
+/// and selectors dropped) shaped one by one with full fallback and laid out
+/// from x = 0 in visual order. Parts no face draws share one missing-glyph box.
+fn shape_parts(fonts: &mut Fonts, cluster: &str, size: f32, attrs: &Attrs, rtl: bool) -> Vec<LayoutGlyph> {
+    let mut parts: Vec<Range<usize>> = Vec::new();
+    let mut open = false;
+    for (index, c) in cluster.char_indices() {
+        let end = index + c.len_utf8();
+        match parts.last_mut() {
+            _ if is_emoji_joiner(c) => open = false,
+            Some(part) if open && is_generic_mark(c) => part.end = end,
+            _ => {
+                parts.push(index..end);
+                open = true;
+            }
+        }
+    }
+    if rtl {
+        parts.reverse();
+    }
+    let mut glyphs = Vec::new();
+    let (mut x, mut boxed) = (0.0f32, false);
+    for part in parts {
+        let mut line = BufferLine::new(
+            &cluster[part],
+            LineEnding::None,
+            AttrsList::new(attrs),
+            Shaping::Advanced,
+        );
+        let layout = line.layout(
+            &mut fonts.system,
+            size,
+            None,
+            Wrap::None,
+            Ellipsize::None,
+            None,
+            TAB_WIDTH,
+            Hinting::Disabled,
+        );
+        let shaped: Vec<&LayoutGlyph> = layout.iter().flat_map(|visual| &visual.glyphs).collect();
+        if let Some(missing) = shaped.iter().find(|glyph| glyph.glyph_id == 0) {
+            if !boxed {
+                boxed = true;
+                glyphs.push(LayoutGlyph {
+                    x,
+                    ..(*missing).clone()
+                });
+                x += missing.w;
+            }
+            continue;
+        }
+        let width = shaped.iter().map(|glyph| glyph.x + glyph.w).fold(0.0, f32::max);
+        glyphs.extend(shaped.into_iter().map(|glyph| LayoutGlyph {
+            x: x + glyph.x,
+            ..glyph.clone()
+        }));
+        x += width;
+    }
+    glyphs
+}
+
+/// Draw generic combining marks the face does not attach over their base, as
+/// fallback mark positioning does: centred on the base's advance, taking no
+/// width. Monospace faces draw such marks in a cell of their own, either as
+/// spacing glyphs (DejaVu Sans Mono's U+0335 and U+0336) or, when the shaper
+/// zeroes their advance but no anchor fits the base (a mark after a
+/// precomposed letter, as in `x` + U+0323 + U+0307), over the next character.
+/// Only left-to-right clusters of one base and generic marks qualify. Returns
+/// the change in line width.
+fn overlay_unattached_marks(fonts: &mut Fonts, glyphs: &mut [LayoutGlyph], text: &str) -> f32 {
+    let mut growth = 0.0f32;
+    let mut index = 0;
+    while index < glyphs.len() {
+        let count = cluster_len(&glyphs[index..]);
+        let cluster = &mut glyphs[index..index + count];
+        index += count;
+        for glyph in cluster.iter_mut() {
+            glyph.x += growth;
+        }
+        let (base, marks) = cluster.split_at_mut(1);
+        let base = &base[0];
+        let mut chars = text.get(base.start..base.end).unwrap_or_default().chars().skip(1);
+        if marks.is_empty() || base.level.is_rtl() || marks.len() > chars.clone().count() || !chars.all(is_generic_mark)
+        {
+            continue;
+        }
+        for mark in marks {
+            if mark.x_offset != 0.0 || mark.y_offset != 0.0 {
+                continue;
+            }
+            let advance = if mark.w > 0.0 {
+                mark.w
+            } else {
+                design_advance(fonts, mark)
+            };
+            if advance > 0.0 {
+                growth -= mark.w;
+                mark.x = base.x + (base.w - advance) / 2.0;
+                mark.w = 0.0;
+            }
+        }
+    }
+    growth
+}
+
+/// `glyph`'s advance in its face's metrics, at its size.
+fn design_advance(fonts: &mut Fonts, glyph: &LayoutGlyph) -> f32 {
+    fonts
+        .system
+        .get_font(glyph.font_id, glyph.font_weight)
+        .map_or(0.0, |font| {
+            let face = font.as_swash();
+            let units = f32::from(face.metrics(&[]).units_per_em.max(1));
+            face.glyph_metrics(&[]).advance_width(glyph.glyph_id) * glyph.font_size / units
+        })
 }
 
 impl Cluster {
@@ -678,5 +1060,182 @@ mod tests {
             red,
             "a rejected list keeps the old styles"
         );
+    }
+
+    /// The glyphs of `shaped` grouped by cluster byte range, in visual order.
+    fn clusters_of(shaped: &Shaped) -> Vec<(usize, Vec<&LayoutGlyph>)> {
+        let mut clusters: Vec<(usize, Vec<&LayoutGlyph>)> = Vec::new();
+        for glyph in shaped.glyphs() {
+            match clusters.last_mut() {
+                Some((start, glyphs)) if *start == glyph.start => glyphs.push(&glyph.layout),
+                _ => clusters.push((glyph.start, vec![&glyph.layout])),
+            }
+        }
+        clusters
+    }
+    /// The id of the face whose first family is `family`.
+    fn face_id(fonts: &Fonts, family: &str) -> fontdb::ID {
+        fonts
+            .system
+            .db()
+            .faces()
+            .find(|face| face.families.first().is_some_and(|(name, _)| name == family))
+            .map(|face| face.id)
+            .unwrap()
+    }
+
+    #[test]
+    fn spacing_combining_marks_overlay_their_base_and_take_no_width() {
+        // LNX-UI-009: DejaVu Sans Mono draws U+0336 and U+0335 as spacing glyphs.
+        let mut fonts = Fonts::new(FontSource::BundledOnly);
+        let plain = shape(&mut fonts, "Zx", 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        let text = "Z\u{336}\u{335}x";
+        let marked = shape(&mut fonts, text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        assert_eq!(marked.size(), plain.size(), "the marks add no width");
+        let glyphs: Vec<&LayoutGlyph> = marked.glyphs().iter().map(|glyph| &glyph.layout).collect();
+        assert_eq!(glyphs.len(), 4);
+        for mark in &glyphs[1..3] {
+            assert!(mark.glyph_id != 0 && mark.w == 0.0, "{mark:?}");
+            assert_eq!(mark.x, glyphs[0].x, "a monospace mark's cell lies over its base");
+        }
+        assert_eq!(glyphs[3].x, plain.glyphs()[1].layout.x);
+        let x = text.find('x').unwrap();
+        assert_eq!(marked.caret(x).unwrap(), plain.caret(1).unwrap());
+        assert_eq!(
+            marked.caret(1).unwrap().x,
+            0.0,
+            "a mark's offset is its cluster's leading edge"
+        );
+        assert_eq!(marked.range_rects(0..x).unwrap(), plain.range_rects(0..1).unwrap());
+        // A sequence with a precomposed form keeps every mark: o + U+0302 + U+0323
+        // is drawn as U+1ED9, dot below included.
+        let composed = shape(&mut fonts, "\u{1ED9}", 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        let decomposed = shape(&mut fonts, "o\u{302}\u{323}", 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        assert_eq!(decomposed.glyphs().len(), 1);
+        assert_eq!(
+            decomposed.glyphs()[0].layout.glyph_id,
+            composed.glyphs()[0].layout.glyph_id
+        );
+        // A mark no anchor attaches to a precomposed base (U+1E8B, U+1EB9) is
+        // drawn over that base, not over the next character.
+        for text in ["x\u{323}\u{307}z", "e\u{301}\u{323}z", "a\u{302}\u{301}z"] {
+            let shaped = shape(&mut fonts, text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+            let glyphs: Vec<&LayoutGlyph> = shaped.glyphs().iter().map(|glyph| &glyph.layout).collect();
+            let (base, next) = (glyphs[0], glyphs[glyphs.len() - 1]);
+            assert!(glyphs.len() > 2, "{text:?} keeps a separate mark");
+            for mark in &glyphs[1..glyphs.len() - 1] {
+                assert!(mark.w == 0.0 && mark.x < base.x + base.w, "{text:?}: {mark:?}");
+            }
+            assert!(
+                (next.x - base.w).abs() < 0.01,
+                "{text:?}: the next letter keeps its place"
+            );
+        }
+        // Marks the face attaches keep the face's placement.
+        let attached = shape(&mut fonts, "q\u{323}", 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        assert!(attached.glyphs()[1].layout.x_offset < 0.0);
+    }
+
+    #[test]
+    fn a_cluster_no_face_draws_shows_one_missing_glyph_box() {
+        // LNX-UI-017: one box per cluster, not one per character.
+        let mut fonts = Fonts::new(FontSource::BundledOnly);
+        let text = "👍🏽 👨\u{200D}👩\u{200D}👧 🇯🇵 नमस्ते ❤\u{FE0F} e\u{301}";
+        let shaped = shape(&mut fonts, text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        let clusters = clusters_of(&shaped);
+        for (start, glyphs) in &clusters {
+            let boxes = glyphs.iter().filter(|glyph| glyph.glyph_id == 0).count();
+            assert!(boxes <= 1, "{boxes} boxes for the cluster at {start} of {text:?}");
+        }
+        let (_, family) = clusters
+            .iter()
+            .find(|(start, _)| *start == text.find('👨').unwrap())
+            .unwrap();
+        assert_eq!(family.len(), 1, "the joiners draw nothing");
+        let (_, heart) = clusters
+            .iter()
+            .find(|(start, _)| *start == text.find('❤').unwrap())
+            .unwrap();
+        assert!(heart[0].glyph_id != 0, "the bundled face's heart is kept");
+        // Geometry stays consistent: the cluster is as wide as its one box.
+        let flag = text.find('🇯').unwrap();
+        let rects = shaped.range_rects(flag..flag + "🇯🇵".len()).unwrap();
+        let (_, boxed) = clusters.iter().find(|(start, _)| *start == flag).unwrap();
+        assert!(
+            rects.len() == 1 && (rects[0].width - boxed[0].w).abs() < 0.01,
+            "{rects:?}"
+        );
+    }
+
+    #[test]
+    fn emoji_sequences_prefer_an_installed_colour_face() {
+        // A stand-in colour face: the bundled data under the Noto Color Emoji name.
+        let mut db = fontdb::Database::new();
+        db.load_font_source(fontdb::Source::Binary(Arc::new(BUNDLED_FONT)));
+        let mut colour = db.faces().next().unwrap().clone();
+        colour.families = vec![("Noto Color Emoji".to_owned(), fontdb::Language::English_UnitedStates)];
+        colour.post_script_name = "NotoColorEmoji".to_owned();
+        db.push_face_info(colour);
+        let mut fonts = Fonts::with_database(db);
+        assert_eq!(fonts.emoji.as_deref(), Some("Noto Color Emoji"));
+        let (mono, emoji) = (
+            face_id(&fonts, BUNDLED_FONT_FAMILY),
+            face_id(&fonts, "Noto Color Emoji"),
+        );
+        // Emoji presentation by selector or by default; text presentation stays.
+        let text = "❤\u{FE0F} ❤ ⌚ ⌚\u{FE0E} ✔ a";
+        let shaped = shape(&mut fonts, text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        let starts = text.match_indices(['❤', '⌚', '✔', 'a']).map(|(index, _)| index);
+        let expected = [emoji, mono, emoji, mono, mono, mono];
+        for (start, face) in starts.zip(expected) {
+            let glyph = shaped.glyphs().iter().find(|glyph| glyph.start == start).unwrap();
+            assert_eq!(glyph.layout.font_id, face, "the cluster at {start} of {text:?}");
+        }
+        // Without a colour face nothing changes.
+        assert_eq!(Fonts::new(FontSource::BundledOnly).emoji, None);
+    }
+
+    #[test]
+    fn emoji_parts_fall_back_one_by_one_when_no_face_has_the_sequence() {
+        // LNX-UI-017: 👍🏽 without a colour face keeps the 👍 a symbol face
+        // (Noto Sans Symbols2, Segoe UI Symbol) has. Needs such a face installed.
+        let mut system = fontdb::Database::new();
+        system.load_system_fonts();
+        let mut probe = FontSystem::new_with_locale_and_db("en-US".to_owned(), system);
+        let ids: Vec<fontdb::ID> = probe.db().faces().map(|face| face.id).collect();
+        let symbols = ids.into_iter().find(|id| {
+            probe.get_font(*id, fontdb::Weight::NORMAL).is_some_and(|font| {
+                let charmap = font.as_swash().charmap();
+                charmap.map('👍') != 0 && charmap.map('\u{1F3FD}') == 0
+            })
+        });
+        let Some(symbols) = symbols else {
+            eprintln!("skipped: no installed face has U+1F44D without U+1F3FD");
+            return;
+        };
+        let face = probe.db().face(symbols).unwrap();
+        let (source, family) = (face.source.clone(), face.families[0].0.clone());
+        let mut db = fontdb::Database::new();
+        db.load_font_source(fontdb::Source::Binary(Arc::new(BUNDLED_FONT)));
+        db.load_font_source(source);
+        let mut fonts = Fonts::with_database(db);
+        let shaped = shape(&mut fonts, "👍🏽 ok", 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        let clusters = clusters_of(&shaped);
+        let thumb = &clusters[0].1;
+        let symbol_face = face_id(&fonts, &family);
+        assert!(
+            thumb
+                .iter()
+                .any(|glyph| glyph.font_id == symbol_face && glyph.glyph_id != 0),
+            "{family} draws the thumb: {thumb:?}"
+        );
+        assert_eq!(
+            thumb.iter().filter(|glyph| glyph.glyph_id == 0).count(),
+            1,
+            "one box for the modifier"
+        );
+        // The rest of the line follows the repaired cluster.
+        let right = thumb.iter().map(|glyph| glyph.x + glyph.w).fold(0.0, f32::max);
+        assert!((shaped.caret("👍🏽".len()).unwrap().x - right).abs() < 0.01);
     }
 }
