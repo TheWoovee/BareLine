@@ -265,6 +265,16 @@ impl Styling {
             Err(_) => self.unavailable = true,
         }
     }
+    /// Where the current paged pass started lexing (ADR-17).
+    #[cfg(test)]
+    pub(crate) fn paged_pass_start(&self) -> Option<TextOffset> {
+        self.paged.as_ref().map(|job| job.start)
+    }
+    /// Drops the resume points of a paged document (`identity_token().0`).
+    #[cfg(test)]
+    pub(crate) fn forget_paged_resume_points(document: u64) {
+        paged::forget_resume_points(document);
+    }
     /// Takes every result the paged pass has sent and reports whether the pass
     /// has ended (its worker is gone).
     #[cfg(test)]
