@@ -87,7 +87,10 @@ pub fn publish_ownership(directory: &Path, kind: CacheKind, platform: &dyn Local
     let bytes = serde_json::to_vec(&record).map_err(io::Error::other)?;
     let staged = directory.join(format!("{RECORD}.new"));
     let final_path = directory.join(RECORD);
-    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&staged)?;
+    let mut file = bareline_platform::private::file_options()
+        .write(true)
+        .create_new(true)
+        .open(&staged)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);
