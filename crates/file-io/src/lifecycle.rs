@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Bounded UTF-8 Resident lifecycle. Call only on the I/O worker.
+use crate::CodecError;
 use crate::cancellation::Cancellation;
 use crate::codecs::{
     Encoding,
@@ -118,6 +119,9 @@ impl SaveCleanup {
 pub struct SaveRecovery {
     pub conflicts: Vec<SaveConflict>,
     pub cleanups: Vec<SaveCleanup>,
+    /// Leftovers of saves an ended process interrupted (stages and transactions
+    /// that never held a complete editor version) removed before the listing.
+    pub reclaimed: Vec<PathBuf>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DestinationPreflight {
@@ -229,6 +233,21 @@ pub enum FileError {
     CancelledAfterCommit(Box<PostCommitCancellation>),
     VerificationAfterCommit(Box<PostCommitVerification>),
     Commit(Box<CommitFailure>),
+    /// The file a Save would replace no longer exists: it was deleted outside
+    /// Bareline. Nothing was written; Recreate saves it again at the same path.
+    DeletedOutside {
+        target: PathBuf,
+    },
+    /// The destination folder accepts no new entries and the file could not be
+    /// rewritten in place. Nothing was written.
+    FolderNotWritable {
+        folder: PathBuf,
+    },
+    /// The volume ran out of space before anything was replaced.
+    StorageFull {
+        target: PathBuf,
+        volume: PathBuf,
+    },
 }
 // The commit-failure and post-commit records below are boxed inside `FileError`
 // (QA-18): they carry up to four recovery paths plus two fingerprints, and keeping
@@ -369,6 +388,25 @@ impl std::fmt::Display for FileError {
             },
             Self::Io(error) => write!(f, "File operation failed: {error}"),
             Self::Budget => f.write_str("Document memory budget reached."),
+            Self::DeletedOutside { target } => write!(
+                f,
+                "{} was deleted outside Bareline. Your text is still open: choose Recreate to save it at the same path, or Save As to choose another location.",
+                target.display()
+            ),
+            Self::FolderNotWritable { folder } => write!(
+                f,
+                "The folder {} is not writable. Your edits are still open; use Save As to save in another folder.",
+                folder.display()
+            ),
+            Self::StorageFull { target, volume } => write!(
+                f,
+                "Not enough space on {} to save {}. Your edits are still open; free some space, or use Save As to save on another drive.",
+                volume.display(),
+                target.file_name().map_or_else(
+                    || target.display().to_string(),
+                    |name| name.to_string_lossy().into_owned()
+                )
+            ),
         }
     }
 }
@@ -456,9 +494,16 @@ pub fn inspect_save_recovery(
     platform: &dyn LocalFileSystem,
     cancellation: &Cancellation,
 ) -> Result<SaveRecovery, FileError> {
+    // Leftovers of saves a crash interrupted are reclaimed when a document of the
+    // folder opens, not only at its next save (LNX-FILE-007).
+    let mut reclaimed = platform.reclaim_commit_transactions(parent).unwrap_or_default();
+    reclaimed.extend(sweep_dead_stages(parent, platform, false));
     match platform.inspect_commit_transactions(parent, cancellation) {
         Ok(found) => {
-            let mut result = SaveRecovery::default();
+            let mut result = SaveRecovery {
+                reclaimed,
+                ..SaveRecovery::default()
+            };
             for recovery in found {
                 cancellation.check()?;
                 let mut verified = recovery.verified;
@@ -492,7 +537,10 @@ pub fn inspect_save_recovery(
             }
             Ok(result)
         }
-        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(SaveRecovery::default()),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(SaveRecovery {
+            reclaimed,
+            ..SaveRecovery::default()
+        }),
         Err(error) => Err(error.into()),
     }
 }
@@ -1026,6 +1074,84 @@ pub fn open_utf8_streaming_handle(
 struct Staged {
     path: PathBuf,
     retain: bool,
+    /// An exclusive `flock` held on the stage while it is in use, so a sweep in
+    /// any process sees it is live (Unix only; elsewhere the age guard decides).
+    _hold: Option<File>,
+}
+/// Create a `.bareline-<pid>-<n>.tmp` stage in `folder`.
+fn create_stage(folder: &Path, cancellation: &Cancellation) -> Result<(File, Staged), FileError> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    loop {
+        cancellation.check()?;
+        let path = folder.join(format!(
+            ".bareline-{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => {
+                let hold = cfg!(unix)
+                    .then(|| file.try_clone().ok())
+                    .flatten()
+                    .filter(|hold| hold.try_lock().is_ok());
+                return Ok((
+                    file,
+                    Staged {
+                        path,
+                        retain: false,
+                        _hold: hold,
+                    },
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+/// The folder refused a new entry: no permission, or a read-only filesystem.
+fn folder_refused(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+    )
+}
+fn storage_exhausted(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded)
+}
+/// The mount point (Unix) or drive root (elsewhere) that holds `path`.
+fn volume_of(path: &Path) -> PathBuf {
+    let folder = path.parent().unwrap_or(path);
+    #[cfg(unix)]
+    if let Ok(device) = fs::metadata(folder).map(|metadata| std::os::unix::fs::MetadataExt::dev(&metadata)) {
+        let mut mount = folder;
+        while let Some(above) = mount.parent()
+            && fs::metadata(above).is_ok_and(|metadata| std::os::unix::fs::MetadataExt::dev(&metadata) == device)
+        {
+            mount = above;
+        }
+        return mount.to_path_buf();
+    }
+    folder.ancestors().last().unwrap_or(folder).to_path_buf()
+}
+/// A save that ran out of space says so and names the volume holding `place`,
+/// whichever step was writing (LNX-MSG-008); other failures keep their wording.
+fn storage_error(error: FileError, target: &Path, place: &Path) -> FileError {
+    let exhausted = match &error {
+        FileError::Io(error)
+        | FileError::Encoding(ResidentError::Codec(CodecError::Output(error)))
+        | FileError::Transcode(DiskError::Io(error) | DiskError::Codec(CodecError::Output(error))) => {
+            storage_exhausted(error)
+        }
+        _ => false,
+    };
+    if exhausted {
+        FileError::StorageFull {
+            target: target.to_path_buf(),
+            volume: volume_of(place),
+        }
+    } else {
+        error
+    }
 }
 impl Staged {
     /// Keep the stage as a reported recovery copy. It leaves the `.tmp` grammar so
@@ -1056,28 +1182,37 @@ fn stage_owner(name: &str) -> Option<u32> {
 }
 /// A stage untouched for this long is no longer being written. Pids are only
 /// meaningful on this machine, and a shared folder can hold another machine's
-/// in-flight stage whose pid reads as dead here, so fresh stages are never swept.
+/// in-flight stage whose pid reads as dead here, so there fresh stages are never
+/// swept.
 const STAGE_SWEEP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-/// Remove stages a crashed process left beside a destination (REC-11), once per folder
-/// per process. Only a regular file whose owner is provably gone and that has not been
-/// modified for `STAGE_SWEEP_MIN_AGE` is removed, and only a bounded prefix of the
-/// listing is examined so a large folder never stalls a save.
-fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem) {
+/// Remove stages a crashed process left beside a destination (REC-11) and return
+/// the paths removed; `once` sweeps a folder only on its first visit by this
+/// process. Only a regular file whose owner is provably gone is removed: at once
+/// where the folder is on storage only this machine writes and no process holds
+/// the stage (LNX-FILE-007), elsewhere once it has not been modified for
+/// `STAGE_SWEEP_MIN_AGE`. Only a bounded prefix of the listing is examined so a
+/// large folder never stalls a save.
+fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem, once: bool) -> Vec<PathBuf> {
     {
         let mut swept = SWEPT_STAGE_PARENTS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if swept.iter().any(|swept| swept == parent) {
-            return;
+        let visited = swept.iter().any(|swept| swept == parent);
+        if visited && once {
+            return Vec::new();
         }
-        if swept.len() >= 256 {
-            swept.clear();
+        if !visited {
+            if swept.len() >= 256 {
+                swept.clear();
+            }
+            swept.push(parent.to_path_buf());
         }
-        swept.push(parent.to_path_buf());
     }
     let Ok(entries) = fs::read_dir(parent) else {
-        return;
+        return Vec::new();
     };
+    let local = platform.local_storage(parent);
+    let mut removed = Vec::new();
     for entry in entries.take(4096).flatten() {
         let name = entry.file_name();
         let Some(owner) = name.to_str().and_then(stage_owner) else {
@@ -1092,14 +1227,19 @@ fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem) {
                 .and_then(|metadata| metadata.modified())
                 .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age >= STAGE_SWEEP_MIN_AGE))
         };
+        // Every live stage holds its lock, whichever process (or pid namespace)
+        // writes it.
+        let unheld = || cfg!(unix) && File::open(entry.path()).is_ok_and(|stage| stage.try_lock().is_ok());
         if owner != std::process::id()
             && entry.file_type().is_ok_and(|kind| kind.is_file())
-            && stale()
             && platform.cache_process_liveness(owner, 0) == bareline_platform::ProcessLiveness::Dead
+            && (stale() || (local && unheld()))
+            && fs::remove_file(entry.path()).is_ok()
         {
-            let _ = fs::remove_file(entry.path());
+            removed.push(entry.path());
         }
     }
+    removed
 }
 pub struct Saved {
     pub fingerprint: Fingerprint,
@@ -1330,26 +1470,42 @@ fn save_bytes(
     emit: impl FnOnce(&mut dyn Write) -> Result<(), FileError>,
 ) -> Result<SaveBytesReceipt, FileError> {
     cancellation.check()?;
+    let mode = if matches!(condition, DestinationCondition::ReplaceCaptured(_)) {
+        CommitMode::Replace
+    } else {
+        CommitMode::CreateNew
+    };
+    // A destination deleted outside Bareline is its own state (LNX-FILE-003): no
+    // stage or transaction is made, so a retry leaves nothing behind, and the
+    // document offers Recreate at the same path.
+    if mode == CommitMode::Replace && fs::metadata(target).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+        return Err(FileError::DeletedOutside {
+            target: target.to_path_buf(),
+        });
+    }
     platform.validate_target(target)?;
     let parent = target
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target has no parent"))?;
-    sweep_dead_stages(parent, platform);
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let (mut file, mut staged) = loop {
-        cancellation.check()?;
-        let path = parent.join(format!(
-            ".bareline-{}-{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => {
-                break (file, Staged { path, retain: false });
+    sweep_dead_stages(parent, platform, true);
+    // A folder that accepts no new entries cannot hold the stage. A writable file
+    // there is rewritten in place from a stage in the platform's private folder
+    // (LNX-EDIT-003); otherwise the message names the folder.
+    let mut relocated = false;
+    let (mut file, mut staged) = match create_stage(parent, cancellation) {
+        Ok(created) => created,
+        Err(FileError::Io(error)) if folder_refused(&error) => match platform.locked_folder_stage() {
+            Some(folder) if mode == CommitMode::Replace => {
+                relocated = true;
+                create_stage(&folder, cancellation).map_err(|error| storage_error(error, target, &folder))?
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        }
+            _ => {
+                return Err(FileError::FolderNotWritable {
+                    folder: parent.to_path_buf(),
+                });
+            }
+        },
+        Err(error) => return Err(storage_error(error, target, target)),
     };
     #[cfg(test)]
     fault_transitions::hit(fault_transitions::Point::StageCreated)?;
@@ -1397,18 +1553,23 @@ fn save_bytes(
     })();
     // Close before propagating write/cancellation errors so Windows can remove the stage.
     drop(file);
-    let written_hash = write_result?;
-    // Revalidate metadata policy immediately before replacement. No in-place fallback exists.
+    let written_hash = write_result.map_err(|error| storage_error(error, target, &staged.path))?;
+    // Revalidate metadata policy immediately before replacement.
     platform.validate_target(target)?;
     cancellation.check()?;
-    let mode = if matches!(condition, DestinationCondition::ReplaceCaptured(_)) {
-        CommitMode::Replace
-    } else {
-        CommitMode::CreateNew
-    };
     let transaction = match platform.prepare_commit(&staged.path, target, mode, cancellation) {
         Ok(transaction) => transaction,
         Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(FileError::Cancelled),
+        // Nothing was replaced and the editor still holds the text, so a stage on
+        // a full volume, or in a folder the target's folder refused, is not kept.
+        Err(error) if storage_exhausted(&error) => {
+            return Err(storage_error(FileError::Io(error), target, &staged.path));
+        }
+        Err(_) if relocated => {
+            return Err(FileError::FolderNotWritable {
+                folder: parent.to_path_buf(),
+            });
+        }
         Err(error) => {
             return Err(FileError::Commit(Box::new(CommitFailure {
                 staged: staged.keep(),
@@ -1452,6 +1613,14 @@ fn save_bytes(
                 // Nothing was committed: drop the prepared recovery copy (FIO-10).
                 let _ = platform.abort_commit(transaction);
                 return Err(FileError::Cancelled);
+            }
+            Err(FileError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                // Deleted while the save was prepared: nothing was replaced, and no
+                // conflict copy is kept for a file that no longer exists.
+                let _ = platform.abort_commit(transaction);
+                return Err(FileError::DeletedOutside {
+                    target: target.to_path_buf(),
+                });
             }
             Err(_) => false,
         },
@@ -3024,6 +3193,330 @@ mod encoded_tests {
         // machine's in-flight save on a shared folder are never touched.
         assert!(!dead.exists());
         assert!(unknown.exists() && kept.exists() && fresh.exists());
+    }
+    /// Delegates every operation a save needs to the simulated `Platform`.
+    macro_rules! simulated_save_platform {
+        () => {
+            fn guard_directory(&self, path: &Path) -> io::Result<std::sync::Arc<dyn Send + Sync>> {
+                Platform.guard_directory(path)
+            }
+            fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+                Platform.identity(file)
+            }
+            fn validate_target(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn commit_transaction(
+                &self,
+                transaction: bareline_platform::PreparedCommit,
+            ) -> io::Result<bareline_platform::CommitReceipt> {
+                bareline_platform::simulate_commit_transaction(self, transaction)
+            }
+            fn commit(&self, stage: &Path, target: &Path, existed: bool) -> io::Result<()> {
+                Platform.commit(stage, target, existed)
+            }
+        };
+    }
+    /// LNX-FILE-003: a Save whose file was deleted outside Bareline is its own
+    /// state. Nothing is written and nothing is left behind however often it is
+    /// retried, and Recreate (a save that must create the name) writes the file
+    /// again without ever replacing one that reappeared.
+    #[test]
+    fn deleted_destination_is_its_own_state_and_recreate_writes_it_again() {
+        let temp = Temp::new();
+        let target = temp.0.join("note.txt");
+        fs::write(&target, b"alpha\n").unwrap();
+        let captured = fingerprint(&target, &Platform, &Cancellation::default()).unwrap();
+        fs::remove_file(&target).unwrap();
+        let document = Document::from_utf8("alpha\nafter delete\n", Budget::new(1024), Budget::new(0)).unwrap();
+        for _ in 0..2 {
+            let error = save_utf8(document.snapshot(), &target, Some(&captured), false, &Platform)
+                .err()
+                .expect("a deleted file is not saved over");
+            assert!(
+                matches!(&error, FileError::DeletedOutside { target: deleted } if deleted == &target),
+                "{error:?}"
+            );
+            assert!(error.save_conflict().is_none(), "no conflict copy is kept");
+            assert!(error.to_string().contains("was deleted outside Bareline"), "{error}");
+            assert_eq!(
+                fs::read_dir(&temp.0).unwrap().count(),
+                0,
+                "a retry leaves nothing behind"
+            );
+        }
+        save_utf8(document.snapshot(), &target, None, false, &Platform).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"alpha\nafter delete\n");
+        assert!(matches!(
+            save_utf8(document.snapshot(), &target, None, false, &Platform),
+            Err(FileError::Conflict { .. })
+        ));
+
+        // Deleted while the save was being prepared: the prepared copy is dropped.
+        struct DeleteWhilePreparing;
+        impl LocalFileSystem for DeleteWhilePreparing {
+            simulated_save_platform!();
+            fn prepare_commit(
+                &self,
+                staged: &Path,
+                target: &Path,
+                mode: bareline_platform::CommitMode,
+                cancellation: &dyn bareline_platform::CommitCancellation,
+            ) -> io::Result<bareline_platform::PreparedCommit> {
+                fs::remove_file(target)?;
+                bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
+            }
+        }
+        let late = Temp::new();
+        let target = late.0.join("note.txt");
+        fs::write(&target, b"alpha\n").unwrap();
+        let captured = fingerprint(&target, &Platform, &Cancellation::default()).unwrap();
+        let error = save_utf8(
+            document.snapshot(),
+            &target,
+            Some(&captured),
+            false,
+            &DeleteWhilePreparing,
+        )
+        .err()
+        .expect("a file deleted during the save is not recreated by it");
+        assert!(matches!(error, FileError::DeletedOutside { .. }), "{error:?}");
+        assert_eq!(fs::read_dir(&late.0).unwrap().count(), 0, "no conflict copy is kept");
+    }
+    /// LNX-MSG-008: running out of space while the stage is written, through any
+    /// encoder, or while the editor version is copied names the volume, keeps the
+    /// file as it was and keeps no stage. Other failures keep their wording.
+    #[test]
+    fn a_full_volume_names_the_volume_and_keeps_nothing() {
+        let temp = Temp::new();
+        let target = temp.0.join("five.txt");
+        fs::write(&target, b"old bytes").unwrap();
+        let condition =
+            DestinationCondition::ReplaceCaptured(fingerprint(&target, &Platform, &Cancellation::default()).unwrap());
+        let full = || io::Error::new(io::ErrorKind::StorageFull, "No space left on device");
+        let check = |result: Result<SaveBytesReceipt, FileError>| {
+            let Err(error) = result else {
+                panic!("a full volume saved nothing")
+            };
+            let FileError::StorageFull { target: named, volume } = &error else {
+                panic!("{error:?}")
+            };
+            assert_eq!(named, &target);
+            assert!(temp.0.starts_with(volume), "{}", volume.display());
+            let message = error.to_string();
+            assert!(
+                message.starts_with(&format!("Not enough space on {} to save five.txt.", volume.display())),
+                "{message}"
+            );
+            assert_eq!(fs::read(&target).unwrap(), b"old bytes");
+            assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1, "no stage is kept");
+        };
+        for error in [
+            FileError::Io(full()),
+            FileError::Encoding(ResidentError::Codec(CodecError::Output(full()))),
+            FileError::Transcode(DiskError::Io(full())),
+            FileError::Transcode(DiskError::Codec(CodecError::Output(full()))),
+            FileError::Io(io::Error::new(io::ErrorKind::QuotaExceeded, "Disk quota exceeded")),
+        ] {
+            check(save_bytes(
+                &target,
+                &condition,
+                &Platform,
+                &Cancellation::default(),
+                move |_| Err(error),
+            ));
+        }
+        struct FullOnCopy;
+        impl LocalFileSystem for FullOnCopy {
+            simulated_save_platform!();
+            fn prepare_commit(
+                &self,
+                _: &Path,
+                _: &Path,
+                _: bareline_platform::CommitMode,
+                _: &dyn bareline_platform::CommitCancellation,
+            ) -> io::Result<bareline_platform::PreparedCommit> {
+                Err(io::Error::new(io::ErrorKind::StorageFull, "No space left on device"))
+            }
+        }
+        check(save_bytes(
+            &target,
+            &condition,
+            &FullOnCopy,
+            &Cancellation::default(),
+            |out| {
+                out.write_all(b"new bytes")?;
+                Ok(())
+            },
+        ));
+        let other = save_bytes(&target, &condition, &Platform, &Cancellation::default(), |_| {
+            Err(FileError::Encoding(ResidentError::WrongDocument))
+        });
+        assert!(matches!(other, Err(FileError::Encoding(ResidentError::WrongDocument))));
+    }
+    /// LNX-EDIT-003: a folder that refuses the stage moves it to the platform's
+    /// private folder for a replacement; a new file there, a platform without
+    /// such a folder, or one that cannot use the moved stage, names the folder.
+    /// A moved stage is never kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_refusing_the_stage_moves_it_or_names_the_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Relocating {
+            private: PathBuf,
+            staged: std::sync::Mutex<Option<(PathBuf, Vec<u8>)>>,
+        }
+        impl LocalFileSystem for Relocating {
+            simulated_save_platform!();
+            fn locked_folder_stage(&self) -> Option<PathBuf> {
+                Some(self.private.clone())
+            }
+            fn prepare_commit(
+                &self,
+                staged: &Path,
+                _: &Path,
+                _: bareline_platform::CommitMode,
+                _: &dyn bareline_platform::CommitCancellation,
+            ) -> io::Result<bareline_platform::PreparedCommit> {
+                *self.staged.lock().unwrap() = Some((staged.to_path_buf(), fs::read(staged)?));
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "save stage and destination must share a directory",
+                ))
+            }
+        }
+        let temp = Temp::new();
+        let locked = temp.0.join("locked");
+        let private = temp.0.join("private");
+        fs::create_dir(&locked).unwrap();
+        fs::create_dir(&private).unwrap();
+        let target = locked.join("f.txt");
+        fs::write(&target, b"indir\n").unwrap();
+        let condition =
+            DestinationCondition::ReplaceCaptured(fingerprint(&target, &Platform, &Cancellation::default()).unwrap());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(locked.join("probe"), b"").is_ok() {
+            eprintln!("skipped: this user may write every folder (superuser)");
+            let _ = fs::remove_file(locked.join("probe"));
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let platform = Relocating {
+            private: private.clone(),
+            staged: std::sync::Mutex::new(None),
+        };
+        let edit = |out: &mut dyn Write| -> Result<(), FileError> {
+            out.write_all(b"indir\nEDIT\n")?;
+            Ok(())
+        };
+        let named = |result: Result<SaveBytesReceipt, FileError>| match result {
+            Err(error @ FileError::FolderNotWritable { .. }) => {
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "The folder {} is not writable. Your edits are still open; use Save As to save in another folder.",
+                        locked.display()
+                    )
+                );
+            }
+            Err(error) => panic!("{error:?}"),
+            Ok(_) => panic!("nothing can be saved into the locked folder"),
+        };
+        named(save_bytes(
+            &target,
+            &condition,
+            &platform,
+            &Cancellation::default(),
+            edit,
+        ));
+        let (staged, bytes) = platform
+            .staged
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the stage was handed over");
+        assert_eq!(staged.parent(), Some(private.as_path()));
+        assert_eq!(bytes, b"indir\nEDIT\n");
+        assert_eq!(
+            fs::read_dir(&private).unwrap().count(),
+            0,
+            "the moved stage is not kept"
+        );
+        named(save_bytes(
+            &locked.join("new.txt"),
+            &DestinationCondition::MustBeAbsent,
+            &platform,
+            &Cancellation::default(),
+            edit,
+        ));
+        assert!(
+            platform.staged.lock().unwrap().is_none(),
+            "a new name never moves its stage"
+        );
+        named(save_bytes(
+            &target,
+            &condition,
+            &Platform,
+            &Cancellation::default(),
+            edit,
+        ));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"indir\n");
+        assert_eq!(fs::read_dir(&locked).unwrap().count(), 1);
+    }
+    /// LNX-FILE-007: on storage only this machine writes, opening a document
+    /// reclaims a dead process's stage at once and reports it. A stage some
+    /// process still holds (as every live save does), one whose owner may be
+    /// alive, and a reported copy stay; elsewhere the age guard still decides.
+    #[cfg(unix)]
+    #[test]
+    fn open_time_inspection_reclaims_dead_stages_at_once_on_local_storage() {
+        struct Machine {
+            local: bool,
+        }
+        impl LocalFileSystem for Machine {
+            simulated_save_platform!();
+            fn cache_process_liveness(&self, pid: u32, _: u64) -> bareline_platform::ProcessLiveness {
+                if pid == 424242 || pid == 424244 {
+                    bareline_platform::ProcessLiveness::Dead
+                } else {
+                    bareline_platform::ProcessLiveness::Unknown
+                }
+            }
+            fn local_storage(&self, _: &Path) -> bool {
+                self.local
+            }
+        }
+        let temp = Temp::new();
+        let dead = temp.0.join(".bareline-424242-1.tmp");
+        let held = temp.0.join(".bareline-424244-1.tmp");
+        let unknown = temp.0.join(".bareline-424243-1.tmp");
+        let kept = temp.0.join(".bareline-424242-2.kept");
+        for leftover in [&dead, &held, &unknown, &kept] {
+            fs::write(leftover, b"crash leftover").unwrap();
+        }
+        // A live save in another pid namespace holds its stage like this.
+        let holder = File::open(&held).unwrap();
+        holder.try_lock().unwrap();
+        let shared = Temp::new();
+        let remote = shared.0.join(".bareline-424242-1.tmp");
+        fs::write(&remote, b"another machine's save").unwrap();
+        let found = inspect_save_recovery(&shared.0, &Machine { local: false }, &Cancellation::default()).unwrap();
+        assert!(found.reclaimed.is_empty() && remote.exists());
+
+        let found = inspect_save_recovery(&temp.0, &Machine { local: true }, &Cancellation::default()).unwrap();
+        assert_eq!(found.reclaimed, vec![dead.clone()]);
+        assert!(!dead.exists());
+        assert!(held.exists() && unknown.exists() && kept.exists());
+        drop(holder);
+
+        // The stage of a save in progress holds its lock until it is dropped.
+        let (file, staged) = create_stage(&temp.0, &Cancellation::default()).unwrap();
+        drop(file);
+        assert!(File::open(&staged.path).unwrap().try_lock().is_err());
+        let path = staged.path.clone();
+        drop(staged);
+        assert!(!path.exists());
     }
     #[test]
     fn destination_preflight_keeps_the_user_path_spelling() {
