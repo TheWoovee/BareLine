@@ -30,9 +30,8 @@ const AUTOMATION_DEADLINE: Duration = Duration::from_secs(15);
 const SHELL_KEYS: &str = "apps/bareline/src/shell/settings.rs";
 const CONTROL_IS_PRIMARY: &str = "ctrl: modifiers.control_key(),";
 
-pub(super) fn desktop() -> Result<Box<dyn Desktop>, Failure> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let (primary, primary_source) = primary_modifier(&root);
+pub(super) fn desktop(root: &Path, _scratch: &Path) -> Result<Box<dyn Desktop>, Failure> {
+    let (primary, primary_source) = primary_modifier(root);
     let mut desktop = Quartz {
         helper: root.join("tests/e2e/macos_desktop.py"),
         scratch: std::env::temp_dir().join(format!("bareline-journey-capture-{}", std::process::id())),

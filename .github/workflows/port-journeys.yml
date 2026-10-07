@@ -1,7 +1,9 @@
 name: Port journeys
 # Runs the ordinary journeys of tests/e2e/journeys.json against the release
-# editor on Linux (Xvfb, driven with xdotool) and macOS (the runner's logged-in
-# GUI session, driven through Quartz events) after every push to the port
+# editor on Linux (driven with xdotool on a private Xvfb display per attempt,
+# with a private session bus whose portal stand-in, tests/e2e/fake_portal.py,
+# answers the file choosers) and macOS (the runner's logged-in GUI session,
+# driven through Quartz events) after every push to the port
 # integration branch and on demand. Each journey reports every step as passed,
 # failed with a class (product, harness, timeout, environment or
 # service_not_wired with the service's name) or skipped with its reason; the
@@ -54,18 +56,18 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-x11-0 libxcursor1 xvfb xauth xdotool imagemagick x11-utils
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-x11-0 libxcursor1 xvfb xdotool imagemagick x11-utils dbus python3-gi gir1.2-glib-2.0
       - name: Build the release editor and the journey runner
         run: |
           cargo build -p bareline --release --locked
           cargo build -p xtask --locked
+      # On Linux this includes the private-display tests (window finding and
+      # capture, back-to-back clients, the portal stand-in), which start their
+      # own Xvfb and session bus.
       - name: Journey harness regressions
         run: |
           cargo test -p xtask --locked
           python -m unittest discover -s tests/e2e -p 'test_macos_desktop.py'
-      - name: Find and capture a window under Xvfb
-        if: runner.os == 'Linux'
-        run: env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' cargo test -p xtask --locked -- --ignored finds_and_captures_a_window
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: port-journeys-runner-${{ matrix.platform }}
@@ -99,7 +101,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0 libxcursor1 xvfb xauth xdotool imagemagick x11-utils fonts-dejavu-core fonts-noto-cjk
+          sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0 libxcursor1 xvfb xdotool imagemagick x11-utils dbus python3-gi gir1.2-glib-2.0 fonts-dejavu-core fonts-noto-cjk
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: port-journeys-runner-${{ matrix.platform }}
@@ -111,14 +113,11 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         # The runner was built in this checkout's path, so it finds the
         # fixtures and the manifest beside it. --no-fail: the summary reports.
+        # On Linux each attempt starts its own Xvfb (-displayfd, -noreset)
+        # and session bus with the portal stand-in, so no xvfb-run is needed.
         run: |
           chmod +x target/port-runner/release/bareline target/port-runner/debug/xtask
-          journey=(target/port-runner/debug/xtask journey "$JOURNEY" --executable=target/port-runner/release/bareline --attempts="$ATTEMPTS" --output="target/port-journeys/$PLATFORM-$JOURNEY" --commit="$GITHUB_SHA" --summary="$GITHUB_STEP_SUMMARY" --no-fail)
-          if [ "$RUNNER_OS" = Linux ]; then
-            env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1600x1000x24' "${journey[@]}"
-          else
-            "${journey[@]}"
-          fi
+          target/port-runner/debug/xtask journey "$JOURNEY" --executable=target/port-runner/release/bareline --attempts="$ATTEMPTS" --output="target/port-journeys/$PLATFORM-$JOURNEY" --commit="$GITHUB_SHA" --summary="$GITHUB_STEP_SUMMARY" --no-fail
       - name: Retain the journey results, observations, logs and screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

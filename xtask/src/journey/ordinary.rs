@@ -11,7 +11,10 @@
 //! route opens a native file dialog, the file is given on the command line or
 //! restored by the session (a substituted route, also recorded); a step whose
 //! action has no such route asks the dialog service and is classified as
-//! `service_not_wired` while the shell's seam still holds the stand-in.
+//! `service_not_wired` while the shell's seam still holds the stand-in. On
+//! Linux the desktop's portal stand-in answers those choosers with the path
+//! the step stages, so the editor's portal request is checked but no chooser
+//! window is driven (also recorded as substituted).
 //!
 //! Commands that Windows posts through the native menu run through the
 //! command palette (Primary+Shift+P, the exact title, Enter): Linux has no
@@ -144,6 +147,22 @@ pub(super) trait Desktop {
     /// `Ok(host)` when native file dialogs can appear in this session at all
     /// (Linux: an XDG desktop portal on the session bus), `Err(why)` otherwise.
     fn dialog_host(&self) -> Result<String, String>;
+    /// Variables every editor on this desktop is launched with (`None`
+    /// removes one): its own display and session bus.
+    fn environment(&self) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+        Vec::new()
+    }
+    /// When the desktop answers file choosers itself (the harness's portal
+    /// stand-in), stage `target` as the next chooser's answer and return how
+    /// many requests it has answered so far; `None` when a chooser window
+    /// must be driven instead.
+    fn answer_next_chooser(&self, _target: &Path) -> Result<Option<usize>, Failure> {
+        Ok(None)
+    }
+    /// The chooser requests the desktop answered itself, oldest first.
+    fn chooser_requests(&self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
 }
 
 /// Run a desktop tool to completion within `deadline`, draining its pipes on a
@@ -185,6 +204,12 @@ struct Layout {
     logs: PathBuf,
     /// Folders an installed Bareline may write; a portable run must leave them empty.
     installed_roots: Vec<PathBuf>,
+    /// The private runtime folder (XDG_RUNTIME_DIR; on macOS also TMPDIR,
+    /// where the editor keeps its runtime files). It lives under /tmp, not
+    /// in the scratch home: the instance socket's path must fit a Unix socket
+    /// address (108 bytes on Linux, 104 on macOS), and a socket that cannot
+    /// bind makes every window independent, which never saves the session.
+    runtime: PathBuf,
 }
 
 impl Layout {
@@ -204,11 +229,14 @@ impl Layout {
             home.join("cache/bareline"),
             home.join("state/bareline"),
         ];
+        let digest = Sha256::digest(home.as_os_str().as_encoded_bytes());
+        let key: String = digest[..6].iter().map(|byte| format!("{byte:02x}")).collect();
         Self {
             home: home.to_path_buf(),
             profile,
             logs,
             installed_roots,
+            runtime: PathBuf::from(format!("/tmp/bl-journey-{key}")),
         }
     }
 
@@ -219,8 +247,15 @@ impl Layout {
             ("XDG_CONFIG_HOME", self.home.join("config")),
             ("XDG_STATE_HOME", self.home.join("state")),
             ("XDG_CACHE_HOME", self.home.join("cache")),
-            ("XDG_RUNTIME_DIR", self.home.join("runtime")),
-            ("TMPDIR", self.home.join("temp")),
+            ("XDG_RUNTIME_DIR", self.runtime.clone()),
+            (
+                "TMPDIR",
+                if cfg!(target_os = "macos") {
+                    self.runtime.clone()
+                } else {
+                    self.home.join("temp")
+                },
+            ),
         ]
     }
 
@@ -231,10 +266,15 @@ impl Layout {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(self.home.join("runtime"), std::fs::Permissions::from_mode(0o700))
+            std::fs::set_permissions(&self.runtime, std::fs::Permissions::from_mode(0o700))
                 .map_err(|error| Failure::harness(format!("runtime folder: {error}")))?;
         }
         Ok(())
+    }
+
+    /// Remove the private runtime folder once nothing of the attempt runs.
+    fn remove_runtime(&self) {
+        let _ = std::fs::remove_dir_all(&self.runtime);
     }
 }
 
@@ -243,6 +283,8 @@ impl Layout {
 enum Region {
     /// The left half of the tab strip, where the active tab's modified marker is drawn.
     Tabs,
+    /// The first tab alone (its first 140 logical pixels).
+    FirstTab,
     /// The editor body without gutter, scroll bar, toasts and status bar.
     Body,
     Left,
@@ -292,6 +334,31 @@ struct Editor {
     pid: u32,
     window: Window,
     stdout: PathBuf,
+    stderr: PathBuf,
+}
+
+/// Why a launched editor showed no window.
+enum NoWindow {
+    /// The display refused the editor's connection: the session's failure.
+    Refused,
+    Failed(Failure),
+}
+
+/// Launches again after an X server refusal before the display is blamed.
+const LAUNCH_RETRIES: u32 = 2;
+
+/// Whether an editor's standard error shows its display refusing the
+/// connection (the X server under Xvfb), which is never the product's failure.
+fn refused_by_display(stderr: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        super::linux::x_connection_refused(stderr)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = stderr;
+        false
+    }
 }
 
 struct Launch<'a> {
@@ -351,7 +418,7 @@ fn drive(env: &Env, journey: &'static str, procedure: fn(&mut Run) -> Result<(),
     std::fs::create_dir_all(evidence.join("shots")).map_err(|error| error.to_string())?;
     let (scratch, _) = env.scratch(journey)?;
     let platform = platform_evidence(env, &scratch);
-    let desktop = match desktop() {
+    let desktop = match desktop(&env.root, &scratch) {
         Ok(desktop) => desktop,
         Err(failure) => {
             // Without a desktop nothing can run: report every step.
@@ -664,10 +731,19 @@ impl Run<'_> {
         let number = self.launches;
         let executable = launch.executable.unwrap_or(&self.env.exe).to_path_buf();
         let mut arguments: Vec<std::ffi::OsString> = vec!["--software".into()];
-        if !launch.session {
-            arguments.push("--no-session".into());
+        if launch.session {
+            // Either flag makes the window independent, and an independent
+            // window neither restores nor saves the session (shell/instance.rs
+            // `prepare`, the same code on Windows). The attempt's profile and
+            // runtime folder are its own, so no other window can take this
+            // launch: it becomes the profile's owner and keeps the session.
+            self.substituted(
+                "--new-instance and --no-extensions of the Windows launch",
+                SESSION_ROUTE,
+            );
+        } else {
+            arguments.extend(["--no-session".into(), "--no-extensions".into(), "--new-instance".into()]);
         }
-        arguments.extend(["--no-extensions".into(), "--new-instance".into()]);
         arguments.extend(launch.files.iter().map(|path| path.as_os_str().to_owned()));
         let stdout = self.evidence.join(format!("editor-{number}.stdout.log"));
         let stderr = self.evidence.join(format!("editor-{number}.stderr.log"));
@@ -675,72 +751,82 @@ impl Run<'_> {
         let open = |path: &Path| {
             std::fs::File::create(path).map_err(|error| Failure::harness(format!("{}: {error}", path.display())))
         };
-        let mut command = Command::new(&executable);
-        command
-            .args(&arguments)
-            .current_dir(&self.scratch)
-            .env("BARELINE_QA_COMMAND_TRACE", trace)
-            .stdin(Stdio::null())
-            .stdout(open(&stdout)?)
-            .stderr(open(&stderr)?);
-        for (name, value) in self.layout.environment() {
-            command.env(name, value);
-        }
-        if let Some(bus) = session_bus() {
-            command.env("DBUS_SESSION_BUS_ADDRESS", bus);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Its own process group, so cleanup reaches what the editor started.
-            command.process_group(0);
-        }
-        let child = command
-            .spawn()
-            .map_err(|error| Failure::harness(format!("spawn failed: {error}")))?;
-        let pid = child.id();
-        let mut editor = Editor {
-            child,
-            pid,
-            window: Window {
-                id: String::new(),
-                pid: Some(pid),
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-                title: None,
-            },
-            stdout,
-        };
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let (window, frame) = loop {
-            if let Ok(Some(status)) = editor.child.try_wait() {
-                self.editor = Some(editor);
-                let errors = std::fs::read_to_string(&stderr).unwrap_or_default();
-                let detail = format!("Editor exited before showing a window: {status}");
-                // The display, not the editor, refused the connection.
-                return Err(if errors.contains("Failed to open connection to X server") {
-                    Failure::environment(format!("{detail}; the X server refused the connection"))
-                } else {
-                    Failure::product(detail)
-                });
+        let mut refusals: u32 = 0;
+        let (mut editor, window, frame) = loop {
+            let mut command = Command::new(&executable);
+            command
+                .args(&arguments)
+                .current_dir(&self.scratch)
+                .env("BARELINE_QA_COMMAND_TRACE", &trace)
+                .stdin(Stdio::null())
+                .stdout(open(&stdout)?)
+                .stderr(open(&stderr)?);
+            for (name, value) in self.layout.environment() {
+                command.env(name, value);
             }
-            let windows = self.desktop.windows(pid)?;
-            let frame = first_frame_event(&editor.stdout);
-            if let (Some(window), Some(frame)) = (windows.into_iter().max_by_key(|w| w.width * w.height), frame)
-                && window.width > 100
+            if let Some(bus) = session_bus() {
+                command.env("DBUS_SESSION_BUS_ADDRESS", bus);
+            }
+            // The desktop's own display and bus come last and win.
+            for (name, value) in self.desktop.environment() {
+                match value {
+                    Some(value) => command.env(name, value),
+                    None => command.env_remove(name),
+                };
+            }
+            #[cfg(unix)]
             {
-                break (window, frame);
+                use std::os::unix::process::CommandExt;
+                // Its own process group, so cleanup reaches what the editor started.
+                command.process_group(0);
             }
-            if Instant::now() >= deadline {
-                self.editor = Some(editor);
-                return Err(Failure::timeout(
-                    "Owned editor window and first frame were not ready before the startup deadline",
-                ));
+            let child = command
+                .spawn()
+                .map_err(|error| Failure::harness(format!("spawn failed: {error}")))?;
+            let pid = child.id();
+            let mut editor = Editor {
+                child,
+                pid,
+                window: Window {
+                    id: String::new(),
+                    pid: Some(pid),
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                    title: None,
+                },
+                stdout: stdout.clone(),
+                stderr: stderr.clone(),
+            };
+            match self.await_window(&mut editor) {
+                Ok((window, frame)) => break (editor, window, frame),
+                Err(NoWindow::Failed(failure)) => {
+                    self.editor = Some(editor);
+                    return Err(failure);
+                }
+                // The display refused the connection before the editor did
+                // anything: launch again after a pause, keeping the refused
+                // attempt's output, and blame the display if it persists.
+                Err(NoWindow::Refused) => {
+                    refusals += 1;
+                    let kept = |path: &Path| path.with_extension(format!("refused-{refusals}.log"));
+                    let _ = std::fs::rename(&stderr, kept(&stderr));
+                    let _ = std::fs::rename(&stdout, kept(&stdout));
+                    self.record(
+                        &format!("owned launch {number} refused by the X server"),
+                        serde_json::json!({"refusal": refusals, "pid": pid, "stderr": kept(&stderr)}),
+                    );
+                    if refusals > LAUNCH_RETRIES {
+                        return Err(Failure::environment(format!(
+                            "Editor exited before showing a window: the X server refused the connection {refusals} times"
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(500 << refusals));
+                }
             }
-            std::thread::sleep(Duration::from_millis(100));
         };
+        let pid = editor.pid;
         editor.window = window.clone();
         self.editor = Some(editor);
         self.desktop.focus(&window)?;
@@ -770,6 +856,36 @@ impl Run<'_> {
             }),
         );
         Ok(())
+    }
+
+    /// Wait until the launched editor shows a window wider than 100 pixels and
+    /// reports its first frame.
+    fn await_window(&mut self, editor: &mut Editor) -> Result<(Window, serde_json::Value), NoWindow> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Ok(Some(status)) = editor.child.try_wait() {
+                let errors = std::fs::read_to_string(&editor.stderr).unwrap_or_default();
+                if refused_by_display(&errors) {
+                    return Err(NoWindow::Refused);
+                }
+                return Err(NoWindow::Failed(Failure::product(format!(
+                    "Editor exited before showing a window: {status}"
+                ))));
+            }
+            let windows = self.desktop.windows(editor.pid).map_err(NoWindow::Failed)?;
+            let frame = first_frame_event(&editor.stdout);
+            if let (Some(window), Some(frame)) = (windows.into_iter().max_by_key(|w| w.width * w.height), frame)
+                && window.width > 100
+            {
+                return Ok((window, frame));
+            }
+            if Instant::now() >= deadline {
+                return Err(NoWindow::Failed(Failure::timeout(
+                    "Owned editor window and first frame were not ready before the startup deadline",
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn editor(&mut self) -> Result<&mut Editor, Failure> {
@@ -848,6 +964,7 @@ impl Run<'_> {
             self.record("cleanup failure", serde_json::json!({"detail": failure.detail}));
         }
         self.kill();
+        self.layout.remove_runtime();
         // The diagnostics log of the installed profile (a portable run keeps its own).
         let log = self.layout.logs.join("bareline.log");
         self.retain(&log, "bareline.log");
@@ -934,6 +1051,7 @@ impl Run<'_> {
         let bottom = top + (h - top) * 3 / 4;
         match region {
             Region::Tabs => (0, top, w / 2, top + 33 * scale),
+            Region::FirstTab => (0, top, (w / 2).min(140 * scale), top + 33 * scale),
             Region::Body => (56 * scale, top + 36 * scale, w - 24 * scale, bottom),
             Region::Left => (56 * scale, top + 36 * scale, w / 2 - 8 * scale, bottom),
             Region::Right => (w / 2 + 8 * scale, top + 36 * scale, w - 24 * scale, bottom),
@@ -1033,22 +1151,47 @@ impl Run<'_> {
         }
     }
 
-    /// Wait until a paged document finishes loading: its tab reads "name
-    /// (loading)" until then and drops typed input. A document that loaded
-    /// before the first capture leaves the tab unchanged until the deadline.
-    fn wait_loaded(&mut self, timeout: Duration) -> Result<Image, Failure> {
-        let loading = self.capture()?;
+    /// The tab strip of an editor showing a clean, loaded document named as
+    /// `document`: a one-line file of that name, opened in an editor of its own,
+    /// which loads before its first settled capture. A paged document's tab
+    /// reads "name (loading)" until it has loaded, so matching this capture
+    /// is the positive sign that it has.
+    fn loaded_tab(&mut self, document: &Path) -> Result<Image, Failure> {
+        let name = document
+            .file_name()
+            .ok_or_else(|| Failure::harness("a loaded tab needs a file name"))?;
+        let file = self.scratch.join("loaded-tab").join(name);
+        self.write(
+            &file,
+            b"loaded tab reference
+",
+        )?;
+        self.launch(Launch::files(&[file.as_path()]))?;
+        let image = self.settle(Duration::from_secs(5))?;
+        let _ = self.shot(&format!("loaded tab of {}", name.to_string_lossy()));
+        self.exit()?;
+        Ok(image)
+    }
+
+    /// Wait until the owned editor's tab strip shows the document loaded:
+    /// it matches `loaded`, the strip of a loaded document of the same name
+    /// (`loaded_tab`). Until then the tab reads "name (loading)" and the
+    /// document drops typed input.
+    fn wait_loaded(&mut self, loaded: &Image, timeout: Duration) -> Result<Image, Failure> {
         let started = Instant::now();
-        let result = self.expect_pixels(&loading, Region::Tabs, "document loaded", |diff| diff >= 0.002, timeout);
+        let result = self.expect_pixels(loaded, Region::Tabs, "document loaded", |diff| diff <= 0.0005, timeout);
         self.record(
             "document load wait",
-            serde_json::json!({"elapsed_ms": started.elapsed().as_millis(), "tab_changed": result.is_ok()}),
+            serde_json::json!({"elapsed_ms": started.elapsed().as_millis(), "tab_matched_loaded": result.is_ok()}),
         );
-        match result {
-            Ok(image) => Ok(image),
-            Err(Miss::Capture(failure)) => Err(failure),
-            Err(Miss::Pixels(_)) => self.capture(),
-        }
+        result.map_err(|miss| {
+            miss.into_failure(|diff| {
+                format!(
+                    "The document did not finish loading within {} s: its tab still differs from a loaded tab of                      the same name ({diff:.5})",
+                    timeout.as_secs()
+                )
+            })
+        })
     }
 
     /// Wait until two consecutive captures agree (progress, scrolling and
@@ -1122,11 +1265,11 @@ impl Run<'_> {
     fn choose_in_dialog(&mut self, opener: Opener<'_>, target: &Path) -> StepResult {
         let label = opener.label();
         let editor = self.pid()?;
-        let before = self.desktop.all_windows()?;
-        match opener {
-            Opener::Command(title) => self.command(title)?,
-            Opener::Key { chord, .. } => self.key(chord)?,
+        if let Some(answered) = self.desktop.answer_next_chooser(target)? {
+            return self.choose_through_portal(opener, target, answered);
         }
+        let before = self.desktop.all_windows()?;
+        self.open_chooser(opener)?;
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut ignored: Vec<Window> = Vec::new();
         let dialog = loop {
@@ -1190,6 +1333,71 @@ impl Run<'_> {
         Ok(())
     }
 
+    fn open_chooser(&mut self, opener: Opener<'_>) -> Result<(), Failure> {
+        match opener {
+            Opener::Command(title) => self.command(title),
+            Opener::Key { chord, .. } => self.key(chord),
+        }
+    }
+
+    /// The desktop's portal stand-in answers the chooser with `target` (staged
+    /// before the opener ran): the step requires the editor to ask the portal
+    /// for exactly one chooser, and lists the chooser's own UI as substituted.
+    fn choose_through_portal(&mut self, opener: Opener<'_>, target: &Path, answered: usize) -> StepResult {
+        let label = opener.label();
+        self.open_chooser(opener)?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let request = loop {
+            let requests = self.desktop.chooser_requests();
+            if requests.len() > answered || Instant::now() >= deadline {
+                break requests.into_iter().nth(answered);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let Some(request) = request else {
+            let _ = self.shot(&format!("{label} no dialog"));
+            self.record(
+                "file dialog missing",
+                serde_json::json!({"opener": label, "dialog_host": format!("{:?}", self.desktop.dialog_host())}),
+            );
+            return Err(Stop::Fail(self.needs(
+                Service::Dialogs,
+                format!("{label}: the editor asked the session's portal for no file chooser within 8 s"),
+            )));
+        };
+        self.record(
+            "file dialog",
+            serde_json::json!({"opener": label, "portal_request": request, "target": target}),
+        );
+        self.substituted(
+            &format!("{label} chooser window"),
+            "the harness's portal stand-in on a private session bus answered the editor's FileChooser request with              the target; no chooser window was driven",
+        );
+        if request["response"] != 0 {
+            return Err(Stop::Fail(Failure::harness(format!(
+                "{label}: the portal stand-in had no staged answer for the request"
+            ))));
+        }
+        // The editor retires its "Waiting for the file dialog" modal once the
+        // answer arrives; the step's own oracle checks what it did with it.
+        std::thread::sleep(Duration::from_millis(500));
+        let window = self.window()?;
+        self.desktop.focus(&window)?;
+        Ok(())
+    }
+
+    /// The lines of the owned editor's standard error that start with `prefix`
+    /// (the shell's `event=` diagnostics, such as `event=prompt_shown`).
+    fn stderr_events(&mut self, prefix: &str) -> Result<Vec<String>, Failure> {
+        let path = self.editor()?.stderr.clone();
+        Ok(std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.starts_with(prefix))
+            .map(str::to_owned)
+            .collect())
+    }
+
     // -------------------------------------------------------------- process ---
 
     /// Private memory of the editor in KiB (Linux RssAnon, macOS resident set).
@@ -1212,8 +1420,11 @@ impl Run<'_> {
 /// Whether a capture shows more than one colour (a window that has presented
 /// its content, not a still black or blank surface).
 fn painted(image: &Image) -> bool {
-    let mut pixels = image.pixels.chunks_exact(4).map(|pixel| &pixel[..3]);
-    pixels.next().is_some_and(|first| pixels.any(|pixel| pixel != first))
+    let (pixels, _) = image.pixels.as_chunks::<4>();
+    let mut colours = pixels.iter().map(|pixel| &pixel[..3]);
+    colours
+        .next()
+        .is_some_and(|first| colours.any(|colour| colour != first))
 }
 
 fn blank() -> Image {
@@ -1420,7 +1631,9 @@ fn journey_smoke(env: &Env) -> Result<(), String> {
     for (name, value) in layout.environment() {
         command.env(name, value);
     }
-    let capture = crate::capture::run(&mut command, Duration::from_secs(30)).map_err(|e| e.to_string())?;
+    let capture = crate::capture::run(&mut command, Duration::from_secs(30));
+    layout.remove_runtime();
+    let capture = capture.map_err(|e| e.to_string())?;
     if capture.status != "ok" {
         return Err(format!(
             "smoke exit status {} (code {:?}); stderr: {}",
@@ -1444,6 +1657,7 @@ fn journey_smoke(env: &Env) -> Result<(), String> {
 
 // --------------------------------------------------------------- procedures --
 
+const SESSION_ROUTE: &str = "a launch that keeps the session runs without --new-instance and --no-extensions,      which make the window independent of the profile's session; the attempt's private profile and runtime folder      leave no other window to join";
 const OPEN_ROUTE: &str = "Open needs the dialogs service; the file was given on the editor's command line";
 
 fn plain_text(run: &mut Run) -> Result<(), Failure> {
@@ -1787,14 +2001,33 @@ fn huge_log_tail(run: &mut Run) -> Result<(), Failure> {
             run.launch(Launch::files(&[]))?;
             let baseline = run.private_kib()?;
             run.exit()?;
+            let loaded = run.loaded_tab(&saved)?;
             run.launch(Launch::files(&[saved.as_path()]))?;
-            run.wait_loaded(Duration::from_secs(60))?;
+            run.wait_loaded(&loaded, Duration::from_secs(60))?;
             run.key("Primary+Home")?;
             let reference = run.settle(Duration::from_secs(5))?;
             run.text("X")?;
-            run.expect_change(&reference, Region::Body, 0.0003, "log edited viewport")?;
+            // One inserted character, not a reloading viewport; as on Windows
+            // (Log-View), each state may take up to 20 s to show.
+            run.expect_pixels(
+                &reference,
+                Region::Body,
+                "log edited viewport",
+                |diff| (0.0003..=0.03).contains(&diff),
+                Duration::from_secs(20),
+            )
+            .map_err(|miss| {
+                miss.into_failure(|diff| {
+                    format!("The edited viewport did not show one inserted character within 20 s (Body differed by {diff:.5})")
+                })
+            })?;
             run.key("Primary+Z")?;
-            run.expect_same(&reference, Region::Body, 0.0003, "log Undo viewport")?;
+            run.expect_pixels(&reference, Region::Body, "log Undo viewport", |diff| diff <= 0.0003, Duration::from_secs(20))
+                .map_err(|miss| {
+                    miss.into_failure(|diff| {
+                        format!("Undo did not restore the viewport within 20 s (Body differed by {diff:.5})")
+                    })
+                })?;
             run.expect_dirty(&reference, false, "log Undo clean")?;
             let after = run.private_kib()?;
             run.record(
@@ -2041,7 +2274,7 @@ fn macro_external(run: &mut Run) -> Result<(), Failure> {
             run.record("external fixture", serde_json::json!({"python": python}));
             // The Windows route loads the definition through a native file
             // dialog. Without a wired chooser, or in a session that cannot host
-            // one (no XDG portal, as on ubuntu-latest and WSL), the definition
+            // one (no portal and no stand-in, BARELINE_QA_PORTAL=none), the definition
             // goes where the macro library loads it at startup and the owned
             // editor is relaunched on the same source file; the consent, argv,
             // process tree and cancellation checks below run unchanged.
@@ -2063,15 +2296,17 @@ fn macro_external(run: &mut Run) -> Result<(), Failure> {
                     serde_json::json!({"library": library, "dialogs_wired": wired, "dialog_host": format!("{host:?}")}),
                 );
             }
-            run.command(&format!("Run {}", Run::fixture_text(&fixture, "command_name")?))?;
+            let command = format!("Run {}", Run::fixture_text(&fixture, "command_name")?);
+            let python = python.as_str().unwrap_or_default().to_owned();
+            accept_external_consent(run, &command, &python)?;
             let receipt = run.scratch.join("external-receipt.json");
             let deadline = Instant::now() + Duration::from_secs(8);
             while !receipt.is_file() {
                 if Instant::now() >= deadline {
                     return Err(run
                         .needs(
-                            Service::Dialogs,
-                            "External command consent did not appear and the command never ran".into(),
+                            Service::ExternalProcesses,
+                            "External command consent was accepted but the command never ran".into(),
                         )
                         .into());
                 }
@@ -2111,6 +2346,125 @@ fn macro_external(run: &mut Run) -> Result<(), Failure> {
     Ok(())
 }
 
+/// How the external-command consent appeared.
+enum Consent {
+    /// The shell's in-app prompt, with its `event=prompt_shown` line.
+    InApp(String),
+    /// A new window of the editor (a native alert).
+    Window(Window),
+}
+
+/// Whether the consent's text names the fixture's interpreter, its script and
+/// the scratch folder it runs in, as the Windows procedure requires of the
+/// consent prompt (Confirm-FixtureCommand).
+fn consent_names_fixture(text: &str, python: &str, scratch: &Path) -> bool {
+    !python.is_empty()
+        && text.contains(python)
+        && text.contains("external_fixture.py")
+        && text.contains(scratch.to_string_lossy().as_ref())
+}
+
+/// Run `command` (Run <external command>) through the palette and accept the
+/// consent it must ask for, as Confirm-FixtureCommand does on Windows: find the
+/// prompt, check that it names the fixture, answer Yes (the prompt's default is
+/// No) and require it to close. No consent at all means the command cannot run
+/// on this system; a consent that does not take Yes is the product's failure.
+fn accept_external_consent(run: &mut Run, command: &str, python: &str) -> StepResult {
+    let editor = run.pid()?;
+    let windows = run.desktop.all_windows()?;
+    let shown = run.stderr_events("event=prompt_shown")?.len();
+    let answered = run.stderr_events("event=prompt_answered")?.len();
+    let before = run.capture()?;
+    run.command(command)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let consent = loop {
+        if let Some(line) = run.stderr_events("event=prompt_shown")?.into_iter().nth(shown) {
+            break Some(Consent::InApp(line));
+        }
+        let (window, _) = pick_dialog(&windows, run.desktop.all_windows()?, |window| {
+            dialog_owner(window, editor)
+        });
+        if let Some(window) = window {
+            break Some(Consent::Window(window));
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let image = run.shot("external consent")?;
+    let rect = run.rect(Region::Center, &image);
+    let center_diff = image.diff_fraction(&before, rect);
+    let scratch = run.scratch.clone();
+    match consent {
+        None => {
+            run.record(
+                "external consent missing",
+                serde_json::json!({"command": command, "center_diff": center_diff}),
+            );
+            Err(run
+                .needs(
+                    Service::ExternalProcesses,
+                    format!("External command consent did not appear after {command}; the command never ran"),
+                )
+                .into())
+        }
+        Some(Consent::InApp(line)) => {
+            let named = consent_names_fixture(&line, python, &scratch);
+            if !named {
+                run.gap(
+                    "consent text names the fixture's python, external_fixture.py and the scratch folder",
+                    GapKind::Unobservable(Service::Accessibility),
+                    "the prompt's diagnostic line does not carry its full text; Windows reads it through UI Automation",
+                );
+            }
+            // The in-app prompt takes a button's access key; Yes is 'Y'.
+            run.key("Y")?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while run.stderr_events("event=prompt_answered")?.len() <= answered {
+                if Instant::now() >= deadline {
+                    run.record("external consent not accepted", serde_json::json!({"prompt": line}));
+                    return Err(Failure::product("External command consent did not take its Yes access key").into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            run.record(
+                "external explicit consent",
+                serde_json::json!({"prompt": line, "names_fixture": named, "accepted_with": "Y", "center_diff": center_diff}),
+            );
+            Ok(())
+        }
+        Some(Consent::Window(window)) => {
+            run.unobservable("consent text names the fixture's python, external_fixture.py and the scratch folder");
+            // A native alert's Yes, by its mnemonic.
+            run.desktop.key(&window, "Alt+Y")?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while run.desktop.all_windows()?.iter().any(|known| known.id == window.id) {
+                if Instant::now() >= deadline {
+                    return Err(Failure::product("External command consent did not close after Yes").into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            run.record(
+                "external explicit consent",
+                serde_json::json!({"window": window.json(), "accepted_with": "Alt+Y"}),
+            );
+            let main = run.window()?;
+            run.desktop.focus(&main)?;
+            Ok(())
+        }
+    }
+}
+
+/// Save once both panes have settled, and require `expected` on disk. The
+/// Windows procedure observes both panes after each edit (Observe-Panes)
+/// before its next action; the saved bytes stand in for that read here.
+fn save_settled(run: &mut Run, saved: &Path, expected: &str, stage: &str) -> Result<(), Failure> {
+    run.settle(Duration::from_secs(5))?;
+    run.key("Primary+S")?;
+    run.expect_file(saved, expected.as_bytes(), stage)
+}
+
 fn split_clone_sync(run: &mut Run) -> Result<(), Failure> {
     let fixture = run.python("__import__('split_fixture').fixture()")?;
     run.fixture = fixture["identity"].clone();
@@ -2139,19 +2493,15 @@ fn split_clone_sync(run: &mut Run) -> Result<(), Failure> {
         |run| {
             run.keys(&["Primary+End"])?;
             run.text("PRIMARY")?;
-            run.key("Primary+S")?;
-            run.expect_file(&saved, first.as_bytes(), "split primary edit")?;
+            save_settled(run, &saved, &first, "split primary edit")?;
             run.key("Primary+Z")?;
-            run.key("Primary+S")?;
-            run.expect_file(&saved, initial.as_bytes(), "split primary Undo")?;
+            save_settled(run, &saved, &initial, "split primary Undo")?;
             run.key("F6")?;
             run.key("Primary+End")?;
             run.text("SECONDARY")?;
-            run.key("Primary+S")?;
-            run.expect_file(&saved, second.as_bytes(), "split secondary edit")?;
+            save_settled(run, &saved, &second, "split secondary edit")?;
             run.key("Primary+Z")?;
-            run.key("Primary+S")?;
-            run.expect_file(&saved, initial.as_bytes(), "split unchanged disk")?;
+            save_settled(run, &saved, &initial, "split unchanged disk")?;
             run.unobservable("both panes' text after each edit and Undo (the saved bytes stand in)");
             Ok(())
         },
@@ -2263,7 +2613,9 @@ fn portable(run: &mut Run) -> Result<(), Failure> {
                 session: true,
                 files: &[],
             })?;
-            run.expect_same(&document_tab, Region::Tabs, 0.0002, "portable restored session tab")?;
+            // As in the regression procedure: a blank Untitled may open beside
+            // the restored tab before the restore begins reading.
+            run.expect_same(&document_tab, Region::FirstTab, 0.0002, "portable restored session tab")?;
             run.unobservable("restored session text");
             let files = run.profile_files(&installed);
             run.record("portable containment after", serde_json::json!({"external_profile_files": files}));
@@ -2395,11 +2747,17 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
             }
             run.key("Escape")?;
             run.expect_dirty(&clean, true, "untitled still dirty")?;
+            let dirty = run.capture()?;
             run.key("Primary+W")?;
             std::thread::sleep(Duration::from_secs(1));
             // Alt+N is the Don't Save mnemonic.
             run.key("Alt+N")?;
-            run.expect_dirty(&clean, false, "untitled discarded")?;
+            // Closing the last tab leaves a fresh, clean Untitled whose number
+            // differs from the first one's: the typed text is gone from the
+            // body and the modified tab is gone from the strip.
+            run.expect_same(&clean, Region::Body, 0.0005, "untitled discarded body")?;
+            run.expect_change(&dirty, Region::Tabs, 0.0002, "untitled discarded tab")?;
+            run.unobservable("the remaining tab is a clean Untitled document (its name and modified state)");
             run.gap("window and every top-level menu enabled", GapKind::WindowsOnly, steps::NATIVE_MENU_STATE);
             Ok(())
         },
@@ -2437,8 +2795,10 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
                     busy.to_string_lossy()
                 ))?;
             }
+            stop_regression_editor(run);
+            let loaded = run.loaded_tab(&busy)?;
             fresh(run, &[busy.as_path()], false)?;
-            run.wait_loaded(Duration::from_secs(60))?;
+            run.wait_loaded(&loaded, Duration::from_secs(60))?;
             run.key("Primary+Home")?;
             let clean = run.settle(Duration::from_secs(10))?;
             let edit = Run::fixture_text(&fixture, "busy_edit")?;
@@ -2528,8 +2888,12 @@ fn ui_regressions(run: &mut Run) -> Result<(), Failure> {
                     session: true,
                     files: &[],
                 })?;
-                run.expect_same(&opened, Region::Tabs, 0.0002, &format!("relaunch {launch} restored document tab"))?;
-                run.unobservable("restored document text");
+                // The restored document's tab leads the strip. A launch without
+                // files may also open a blank Untitled before the restore begins
+                // reading (shell/startup.rs pins it), so only the first tab is
+                // compared; Windows checks the active document's text.
+                run.expect_same(&opened, Region::FirstTab, 0.0002, &format!("relaunch {launch} restored document tab"))?;
+                run.unobservable("restored document text and that it is the active document");
             }
             Ok(())
         },
@@ -2609,6 +2973,65 @@ mod tests {
             "a window without an owner never takes input"
         );
         assert!(dialog_owner(&window("editor", std::process::id()), std::process::id()));
+    }
+
+    #[test]
+    fn the_consent_must_name_the_fixture_interpreter_script_and_folder() {
+        let scratch = Path::new("/work/target/journey/macro_external-1-2");
+        let python = "/usr/bin/python3";
+        let line = "event=prompt_shown title=\"Bareline - Run External Command\" \
+                    instruction=\"Run this direct executable command?\n/usr/bin/python3 \
+                    /work/tests/e2e/external_fixture.py /work/target/journey/macro_external-1-2\" buttons=[\"Yes\", \"No\"]";
+        assert!(consent_names_fixture(line, python, scratch));
+        assert!(!consent_names_fixture(line, "/opt/python3.12", scratch));
+        assert!(!consent_names_fixture(
+            &line.replace("external_fixture.py", "other.py"),
+            python,
+            scratch
+        ));
+        assert!(
+            !consent_names_fixture(line, "", scratch),
+            "an unknown interpreter never matches"
+        );
+    }
+
+    /// The editor binds its instance socket at
+    /// `<runtime>/bareline/instance-<24 hex digits>.sock`; a path longer than
+    /// a Unix socket address cannot bind, and the window then runs
+    /// independently and never saves the session.
+    #[test]
+    fn the_instance_socket_of_a_deep_scratch_home_fits_a_unix_socket_address() {
+        let home = Path::new(
+            "/home/runner/work/Bareline-Editor/Bareline-Editor/target/journey/ui_regressions-123456-1791337033423832192",
+        );
+        let layout = Layout::new(home);
+        let runtime = layout
+            .environment()
+            .into_iter()
+            .find_map(|(name, path)| (name == "XDG_RUNTIME_DIR").then_some(path))
+            .unwrap();
+        let socket = runtime
+            .join("bareline")
+            .join(format!("instance-{}.sock", "0".repeat(24)));
+        // macOS allows 104 bytes including the terminating NUL.
+        assert!(socket.as_os_str().len() < 104, "{}", socket.display());
+        assert!(
+            !runtime.starts_with(home),
+            "the runtime folder must not live in the scratch home"
+        );
+        assert_ne!(
+            runtime,
+            Layout::new(&home.join("other")).runtime,
+            "each attempt has its own"
+        );
+    }
+
+    #[test]
+    fn only_the_display_refusing_the_connection_is_retried() {
+        let refused = "event=startup_failed error=os error at winit-0.30.13/src/platform_impl/linux/mod.rs:788: \
+                       Failed to open connection to X server";
+        assert_eq!(refused_by_display(refused), cfg!(target_os = "linux"));
+        assert!(!refused_by_display("event=startup_failed error=renderer unavailable"));
     }
 
     #[test]
