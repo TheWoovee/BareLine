@@ -522,6 +522,17 @@ impl ToastStack {
         self.details_open.is_some() && self.details_close_bounds.contains(point)
     }
 
+    /// Whether window point `point` is on a painted notification or the
+    /// open details panel.
+    pub(super) fn contains(&self, point: Point) -> bool {
+        self.details_contains(point)
+            || (self.overflow_painted && self.overflow_bounds.contains(point))
+            || self
+                .toasts
+                .iter()
+                .any(|toast| self.painted.contains(&toast.accessibility_id) && toast.bounds.contains(point))
+    }
+
     pub(super) fn details_contains(&self, point: Point) -> bool {
         self.details_open.is_some() && self.details_bounds.contains(point)
     }

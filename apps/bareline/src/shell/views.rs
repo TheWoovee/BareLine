@@ -2182,6 +2182,60 @@ mod tests {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
     }
 
+    /// LNX-UI-014: long names that share a prefix were all cut to the same
+    /// "document…", and no tab offered its full name.
+    #[test]
+    fn long_tab_names_keep_their_ends_and_hovered_tabs_name_their_document() {
+        assert_eq!(elide_middle("short.txt", 20), "short.txt");
+        assert_eq!(elide_middle("abcdefghijklmnop", 5), "ab…op");
+        // The narrow tabs of a full strip still tell these apart.
+        assert_eq!(elide_middle("document-with-a-rather-long-name-07.txt", 9), "d…-07.txt");
+        let first = elide_middle("document-with-a-rather-long-name-07.txt", 14);
+        let second = elide_middle("document-with-a-rather-long-name-08.txt", 14);
+        assert_ne!(first, second);
+        assert_eq!(first.chars().count(), 14);
+        assert!(first.starts_with("docum") && first.ends_with("-07.txt"), "{first}");
+        // A short room still keeps the extension.
+        assert!(elide_middle("a-very-long-file-name.json", 8).ends_with(".json"));
+
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            workspace.new_document().unwrap();
+        }
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        let strip = rect(0.0, 0.0, 1200.0, TAB_HEIGHT);
+        views.draw_tab_strip(&workspace, 0, strip, false, &mut Vec::new());
+        let tab = views.tab_hits[1];
+        let over = Point {
+            x: tab.bounds.x + 20.0,
+            y: tab.bounds.y + 10.0,
+        };
+        assert!(!views.hover_tabs(over, 1_000));
+        // The Find bar's hover delay applies before the tooltip shows.
+        assert_eq!(views.tab_tooltip_deadline_ms(), Some(1_500));
+        assert!(!views.tab_tooltip_tick(1_499));
+        assert!(views.tab_tooltip_tick(1_500));
+        let mut operations = Vec::new();
+        views.draw_tab_tooltip(&workspace, 1200.0, 700.0, &mut operations);
+        let title = workspace.titles()[1].clone();
+        assert!(
+            operations
+                .iter()
+                .any(|op| matches!(op, DrawOp::Text { text, .. } if *text == title)),
+            "the tooltip names {title}"
+        );
+        // Leaving the tab hides it.
+        assert!(views.hover_tabs(Point { x: 600.0, y: 300.0 }, 1_600));
+        let mut operations = Vec::new();
+        views.draw_tab_tooltip(&workspace, 1200.0, 700.0, &mut operations);
+        assert!(operations.is_empty());
+    }
+
     /// UI-08 acceptance: 30 tabs at 1200 px shrink to share the strip (11
     /// visible instead of 7 fixed 150 px tabs), stay clear of the overflow
     /// buttons, and every tab is reachable through the list of all tabs.
@@ -2801,6 +2855,35 @@ pub(super) struct ViewsRuntime {
     /// tab whose close is in flight (WSP-01).
     close_queue: VecDeque<u64>,
     close_current: Option<u64>,
+    /// The document tab under the pointer and its bounds; after the Find
+    /// bar's hover delay its tooltip names the full path (LNX-UI-014).
+    tab_tooltip_target: Option<(u64, Rect)>,
+    tab_tooltip: bareline_ui::overlays::Tooltip,
+    tab_tooltip_clock_ms: u64,
+    tab_tooltip_wake_sent: bool,
+}
+/// `title` cut to `room` characters in the middle, keeping its start and its
+/// end with the extension, so long names that share a prefix stay apart
+/// ("docu…name-07.txt"; LNX-UI-014).
+fn elide_middle(title: &str, room: usize) -> String {
+    let chars: Vec<char> = title.chars().collect();
+    if chars.len() <= room {
+        return title.to_owned();
+    }
+    let room = room.max(3);
+    let extension = title
+        .rfind('.')
+        .filter(|&dot| dot > 0)
+        .map_or(0, |dot| title[dot..].chars().count());
+    // The end keeps the extension and the few characters before it, where
+    // names that share a prefix usually differ ("-07.txt").
+    let ending = if extension > 0 { extension + 3 } else { 0 };
+    let tail = ((room - 1) - (room - 1) / 2).max(ending.min(room - 2));
+    let head = room - 1 - tail;
+    let mut short: String = chars[..head].iter().collect();
+    short.push('…');
+    short.extend(&chars[chars.len() - tail..]);
+    short
 }
 /// The tabs of one strip that a Close All/Others/Left/Right command closes, in
 /// strip order. Pinned tabs survive Close Others and Close to the Left/Right.
@@ -3222,15 +3305,12 @@ impl ViewsRuntime {
                     bareline_renderer::Color(*color),
                 ));
             }
-            // Fit the title to the (possibly shrunk) tab, ending in an ellipsis.
+            // Fit the title to the (possibly shrunk) tab, cut in the middle so
+            // the end that tells similar names apart stays (LNX-UI-014).
             let room = (((bounds.width - 40.0) / 6.0).floor().max(3.0) as usize)
                 .saturating_sub(usize::from(tab.pinned) * 2 + usize::from(dirty) * 2)
                 .max(1);
-            let mut short: String = title.chars().take(room).collect();
-            if title.chars().count() > room {
-                short.pop();
-                short.push('…');
-            }
+            let short = elide_middle(title, room);
             let label = format!(
                 "{}{}{}",
                 if tab.pinned { "◆ " } else { "" },
@@ -4887,6 +4967,7 @@ impl ViewsRuntime {
                 ops,
             );
             self.draw_mru(workspace, width, height, ops);
+            self.draw_tab_tooltip(workspace, width, height, ops);
             return Ok(caret.map(|caret| rect(caret.x + inset, caret.y, caret.width, caret.height)));
         }
         let pane = self.pane();
@@ -5101,7 +5182,139 @@ impl ViewsRuntime {
             active_caret = Some(caret);
         }
         self.draw_mru(workspace, width, height, ops);
+        self.draw_tab_tooltip(workspace, width, height, ops);
         Ok(active_caret)
+    }
+    #[cfg(test)]
+    pub(super) fn test_set_splitter(&mut self, splitter: Rect) {
+        self.splitter = Some(splitter);
+    }
+    /// The resize cursor over the split divider at editor-local `point`, or
+    /// while it is dragged: a column resize between side-by-side panes.
+    pub(super) fn splitter_cursor(&self, point: Point) -> Option<winit::window::CursorIcon> {
+        let splitter = self.splitter?;
+        (self.dragging || splitter.contains(point)).then_some(if splitter.width <= splitter.height {
+            winit::window::CursorIcon::ColResize
+        } else {
+            winit::window::CursorIcon::RowResize
+        })
+    }
+    /// Whether editor-local `point` is over a pane's text, right of its
+    /// gutter and clear of its tab strip, Find bar, banners, scroll bar and
+    /// status strip. `size` is the editor area's when the view is not split.
+    pub(super) fn over_text(&self, workspace: &Workspace, active: usize, point: Point, size: (f32, f32)) -> bool {
+        let panes = if self.open() {
+            [
+                (
+                    self.primary_index(workspace)
+                        .and_then(|index| workspace.editors.get(index)),
+                    self.bounds[0],
+                ),
+                (self.secondary.as_ref(), self.bounds[1]),
+            ]
+        } else {
+            [
+                (workspace.editors.get(active), Some(rect(0.0, 0.0, size.0, size.1))),
+                (None, None),
+            ]
+        };
+        panes.into_iter().any(|(editor, bounds)| {
+            let (Some(editor), Some(bounds)) = (editor, bounds) else {
+                return false;
+            };
+            let surface = editor.viewport();
+            let local = Point {
+                x: point.x - bounds.x,
+                y: point.y - bounds.y,
+            };
+            bounds.contains(point)
+                && local.x >= surface.text_left()
+                && local.x < bounds.width - 12.0
+                && local.y >= TAB_HEIGHT + surface.top_inset
+                && local.y < bounds.height - 24.0
+        })
+    }
+    /// Track the document tab under `point` (view coordinates) for its
+    /// tooltip. True when the hovered tab changed, so the shell repaints.
+    pub(super) fn hover_tabs(&mut self, point: Point, now_ms: u64) -> bool {
+        self.tab_tooltip_clock_ms = now_ms;
+        let target = self
+            .tab_hits
+            .iter()
+            .find(|hit| hit.bounds.contains(point) && PageTab::from_tab_id(hit.id).is_none())
+            .map(|hit| (hit.id, hit.bounds));
+        let changed = target.map(|(id, _)| id) != self.tab_tooltip_target.map(|(id, _)| id);
+        if changed {
+            let shown = self.tab_tooltip.visible(now_ms);
+            self.tab_tooltip.dismiss();
+            self.tab_tooltip_target = target;
+            self.tab_tooltip_wake_sent = false;
+            self.tab_tooltip.hover(target.is_some(), now_ms);
+            return shown;
+        }
+        self.tab_tooltip.hover(target.is_some(), now_ms);
+        false
+    }
+    /// When the hovered tab's tooltip is due, for the event loop's wake.
+    pub(super) fn tab_tooltip_deadline_ms(&self) -> Option<u64> {
+        (!self.tab_tooltip_wake_sent && self.tab_tooltip_target.is_some())
+            .then(|| self.tab_tooltip.deadline())
+            .flatten()
+    }
+    /// True once, when the hovered tab's tooltip becomes due and needs a paint.
+    pub(super) fn tab_tooltip_tick(&mut self, now_ms: u64) -> bool {
+        self.tab_tooltip_clock_ms = now_ms;
+        if self.tab_tooltip_wake_sent || self.tab_tooltip_target.is_none() || !self.tab_tooltip.visible(now_ms) {
+            return false;
+        }
+        self.tab_tooltip_wake_sent = true;
+        true
+    }
+    /// Hide the tab tooltip (the pointer left the window or pressed).
+    pub(super) fn dismiss_tab_tooltip(&mut self) -> bool {
+        let shown = self.tab_tooltip.visible(self.tab_tooltip_clock_ms);
+        self.tab_tooltip.dismiss();
+        self.tab_tooltip_target = None;
+        self.tab_tooltip_wake_sent = false;
+        shown
+    }
+    /// The full name of the hovered tab's document: its path, or its title
+    /// when it has none.
+    fn tab_tooltip_text(&self, workspace: &Workspace, id: u64) -> Option<String> {
+        let document = self.controller.as_ref()?.tab(id)?.document_id;
+        let index = self.document_index(workspace, document)?;
+        Some(workspace.path(index).map_or_else(
+            || {
+                let title = workspace.titles().get(index).cloned().unwrap_or_default();
+                title.strip_suffix(" •").unwrap_or(&title).to_owned()
+            },
+            |path| path.display().to_string(),
+        ))
+    }
+    fn draw_tab_tooltip(&self, workspace: &Workspace, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+        let Some((id, tab)) = self.tab_tooltip_target else {
+            return;
+        };
+        if !self.tab_tooltip.visible(self.tab_tooltip_clock_ms) {
+            return;
+        }
+        let Some(label) = self.tab_tooltip_text(workspace, id) else {
+            return;
+        };
+        let tip_width = (label.chars().count() as f32 * 7.0 + 16.0).min((width - 8.0).max(0.0));
+        let y = if tab.y + tab.height + 34.0 <= height {
+            tab.y + tab.height + 4.0
+        } else {
+            (tab.y - 34.0).max(0.0)
+        };
+        let bounds = rect(tab.x.min((width - tip_width - 4.0).max(0.0)), y, tip_width, 30.0);
+        self.tab_tooltip.paint(
+            self.tab_tooltip_clock_ms,
+            bounds,
+            &label,
+            workspace.theme.widgets(),
+            ops,
+        );
     }
 }
 

@@ -1320,12 +1320,16 @@ impl ApplicationHandler<Wake> for Handler {
             .shell
             .workspace
             .as_mut()
-            .is_some_and(|workspace| workspace.find.tooltip_tick(tooltip_now_ms));
+            .is_some_and(|workspace| workspace.find.tooltip_tick(tooltip_now_ms))
+            | self.shell.views.tab_tooltip_tick(tooltip_now_ms);
         let tooltip_deadline = self
             .shell
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.find.tooltip_deadline_ms())
+            .into_iter()
+            .chain(self.shell.views.tab_tooltip_deadline_ms())
+            .min()
             .map(|deadline| Instant::now() + Duration::from_millis(deadline.saturating_sub(tooltip_now_ms)));
         if tooltip_due && let Some(window) = &self.shell.window {
             window.request_redraw();
@@ -3484,6 +3488,7 @@ impl ApplicationHandler for Shell {
         {
             window.request_redraw();
         }
+        self.pointer_chrome_event(&event);
         if self.session.closing()
             && matches!(
                 event,

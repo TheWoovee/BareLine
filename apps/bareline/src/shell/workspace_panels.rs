@@ -103,6 +103,11 @@ fn receive_job<T>(receiver: &Option<Receiver<Result<T, String>>>) -> Option<Resu
     }
 }
 impl WorkspacePanelsRuntime {
+    /// Whether window point `point` is on the left dock's splitter, or the
+    /// splitter is being dragged (its pointer shape, LNX-UI-015).
+    pub(super) fn left_splitter_at(&self, point: Point) -> bool {
+        self.dragging_left || (self.splitter_left.width > 0.0 && self.splitter_left.contains(point))
+    }
     fn semantics(&self) -> Vec<bareline_ui::semantics::SemanticEntry> {
         use bareline_ui::{
             ViewId,
