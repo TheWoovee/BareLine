@@ -270,19 +270,22 @@ impl Desktop for X11 {
         }) else {
             return Err("no D-Bus session bus in this session".into());
         };
+        // dbus-send waits up to the D-Bus default (about 25 s) for a reply.
         let names = |method: &str| {
-            Command::new("dbus-send")
-                .env("DBUS_SESSION_BUS_ADDRESS", &bus)
-                .args([
+            output_within(
+                Command::new("dbus-send").env("DBUS_SESSION_BUS_ADDRESS", &bus).args([
                     "--session",
                     "--print-reply",
+                    "--reply-timeout=5000",
                     "--dest=org.freedesktop.DBus",
                     "/org/freedesktop/DBus",
                     &format!("org.freedesktop.DBus.{method}"),
-                ])
-                .output()
-                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-                .unwrap_or_default()
+                ]),
+                "dbus-send",
+                Duration::from_secs(8),
+            )
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            .unwrap_or_default()
         };
         let portal = "org.freedesktop.portal.Desktop";
         if names("ListNames").contains(portal) || names("ListActivatableNames").contains(portal) {
@@ -336,25 +339,45 @@ mod tests {
         assert!(parse_ppm(b"P3\n1 1\n255\n0 0 0").is_err());
     }
 
-    /// Needs an X display (xvfb-run); ignored otherwise.
+    /// Kills the probe window's process when the test ends, also when an
+    /// assertion fails first.
+    struct Probe(std::process::Child);
+
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Needs a disposable X display (xvfb-run). It stays ignored rather than
+    /// gated on DISPLAY alone: a desktop session (WSLg included) sets DISPLAY
+    /// too, and the probe window would open on the user's screen. CI runs it
+    /// with --ignored under xvfb-run; without DISPLAY it returns at once.
     #[test]
     #[ignore = "needs an X11 display with xdotool, ImageMagick and xmessage: \
                 xvfb-run -a cargo test -p xtask -- --ignored finds_and_captures"]
     fn finds_and_captures_a_window_under_xvfb() {
+        if std::env::var_os("DISPLAY").is_none() {
+            eprintln!("no DISPLAY: run under xvfb-run to exercise the X11 desktop");
+            return;
+        }
         let desktop = desktop().expect("an X11 desktop with xdotool and ImageMagick");
         // xmessage ships with x11-utils, like the tools the journeys install.
         // Xt sets no _NET_WM_PID (winit does), so the window is found by title.
         let title = format!("bareline-journey-probe-{}", std::process::id());
-        let mut child = Command::new("xmessage")
-            .args([
-                "-title",
-                &title,
-                "-geometry",
-                "320x120+10+10",
-                "bareline journey harness probe",
-            ])
-            .spawn()
-            .expect("xmessage (x11-utils)");
+        let _probe = Probe(
+            Command::new("xmessage")
+                .args([
+                    "-title",
+                    &title,
+                    "-geometry",
+                    "320x120+10+10",
+                    "bareline journey harness probe",
+                ])
+                .spawn()
+                .expect("xmessage (x11-utils)"),
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         let window = loop {
             let windows = desktop.all_windows().unwrap();
@@ -371,7 +394,5 @@ mod tests {
         let image = desktop.capture(&window).unwrap();
         assert_eq!((image.width, image.height), (window.width, window.height));
         desktop.focus(&window).unwrap();
-        let _ = child.kill();
-        let _ = child.wait();
     }
 }

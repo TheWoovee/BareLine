@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-use super::steps::{self, Failure, Gap, GapKind, Service, StepRecord, StepStatus};
+use super::steps::{self, Class, Failure, Gap, GapKind, Service, StepRecord, StepStatus};
 use super::{Env, Image, Journey, save_bmp};
 
 #[cfg(target_os = "linux")]
@@ -610,12 +610,17 @@ impl Run<'_> {
         let script = format!(
             "import json, sys\nsys.path.insert(0, sys.argv[1])\nprint(json.dumps({expression}, ensure_ascii=False))"
         );
-        let output = Command::new(python)
-            .args(["-c", &script])
-            .arg(self.env.root.join("tests/e2e"))
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .output()
-            .map_err(|error| Failure::harness(format!("python fixture unavailable: {error}")))?;
+        // Generating the 512 MiB log is the slowest evaluation; a wedged
+        // interpreter still ends the step long before the job's timeout.
+        let output = output_within(
+            Command::new(python)
+                .args(["-c", &script])
+                .arg(self.env.root.join("tests/e2e"))
+                .env("PYTHONDONTWRITEBYTECODE", "1"),
+            "python fixture",
+            Duration::from_secs(300),
+        )
+        .map_err(|failure| Failure::harness(format!("python fixture unavailable: {}", failure.detail)))?;
         if !output.status.success() {
             return Err(Failure::harness(format!(
                 "fixture {expression} failed: {}",
@@ -1269,11 +1274,7 @@ fn dialog_owner(window: &Window, editor: u32) -> bool {
 /// `ps -o comm=` of a process: Linux prints the name truncated to 15 bytes,
 /// macOS the executable's path.
 fn process_name(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let output = ps(pid, "comm=")?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (!name.is_empty()).then_some(name)
 }
@@ -1306,20 +1307,25 @@ fn private_kib(pid: u32) -> Option<u64> {
             .find_map(|line| line.strip_prefix("RssAnon:"))
             .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
     } else {
-        let output = Command::new("ps")
-            .args(["-o", "rss=", "-p", &pid.to_string()])
-            .output()
-            .ok()?;
+        let output = ps(pid, "rss=")?;
         String::from_utf8_lossy(&output.stdout).trim().parse().ok()
     }
 }
 
 fn parent_pid(pid: u32) -> Option<u32> {
-    let output = Command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
+    let output = ps(pid, "ppid=")?;
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// One `ps -o <field> -p <pid>` with a deadline, so a wedged `ps` cannot hold
+/// a journey until the job's timeout.
+fn ps(pid: u32, field: &str) -> Option<Output> {
+    output_within(
+        Command::new("ps").args(["-o", field, "-p", &pid.to_string()]),
+        "ps",
+        Duration::from_secs(10),
+    )
+    .ok()
 }
 
 fn alive(pid: u32) -> bool {
@@ -1847,7 +1853,12 @@ fn huge_log_tail(run: &mut Run) -> Result<(), Failure> {
                     .and_then(|()| file.sync_all())
                     .map_err(|error| Failure::harness(error.to_string()))?;
             }
+            // Only a pixel miss points at the watcher; a failed capture or a
+            // harness fault keeps its own class.
             if let Err(failure) = run.expect_change(&before, Region::Body, 0.002, "log appended viewport") {
+                if failure.class != Class::Product {
+                    return Err(failure.into());
+                }
                 return Err(run
                     .needs(
                         Service::FileWatching,
@@ -2023,11 +2034,35 @@ fn macro_external(run: &mut Run) -> Result<(), Failure> {
                 "__import__('macro_fixture').external_definition(__import__('pathlib').Path({:?}))",
                 run.scratch.to_string_lossy()
             ))?;
+            let definition = definition.as_str().unwrap_or_default().as_bytes();
             let toml = run.scratch.join("external-command.toml");
-            run.write(&toml, definition.as_str().unwrap_or_default().as_bytes())?;
+            run.write(&toml, definition)?;
             run.retain(&toml, "external-command.toml");
             run.record("external fixture", serde_json::json!({"python": python}));
-            run.choose_in_dialog(Opener::Command("Load External Command Definition\u{2026}"), &toml)?;
+            // The Windows route loads the definition through a native file
+            // dialog. Without a wired chooser, or in a session that cannot host
+            // one (no XDG portal, as on ubuntu-latest and WSL), the definition
+            // goes where the macro library loads it at startup and the owned
+            // editor is relaunched on the same source file; the consent, argv,
+            // process tree and cancellation checks below run unchanged.
+            let host = run.desktop.dialog_host();
+            let wired = steps::seam_stand_in(&run.env.root, Service::Dialogs) == Some(false);
+            if wired && host.is_ok() {
+                run.choose_in_dialog(Opener::Command("Load External Command Definition\u{2026}"), &toml)?;
+            } else {
+                let library = run.layout.profile.join(steps::EXTERNAL_DEFINITION);
+                run.exit()?;
+                run.write(&library, definition)?;
+                run.launch(Launch::files(&[saved.as_path()]))?;
+                run.substituted(
+                    "Load External Command Definition (native dialog)",
+                    "the definition was placed in the profile's macro library, which the editor loads at startup",
+                );
+                run.record(
+                    "external definition route",
+                    serde_json::json!({"library": library, "dialogs_wired": wired, "dialog_host": format!("{host:?}")}),
+                );
+            }
             run.command(&format!("Run {}", Run::fixture_text(&fixture, "command_name")?))?;
             let receipt = run.scratch.join("external-receipt.json");
             let deadline = Instant::now() + Duration::from_secs(8);

@@ -185,6 +185,13 @@ pub(super) const NATIVE_MENU_STATE: &str = "Win32 menu-bar state (enabled and ch
 pub(super) const WIN32_PROCESS_TREE: &str =
     "Win32 process identities; the parent chain is read from /proc or ps instead";
 
+/// The external command definition, relative to the profile folder that holds
+/// settings.toml, which the editor's macro library loads at startup
+/// (`load_library` in apps/bareline/src/shell/macros.rs reads it from the
+/// `macros` folder beside the settings): the dialog-free route for "Load
+/// External Command Definition…". A unit test ties both names to the editor.
+pub(super) const EXTERNAL_DEFINITION: &str = "macros/external-command.toml";
+
 /// The Linux and macOS shell seam, one file per service.
 const SEAM: &str = "apps/bareline/src/shell/native/unix";
 
@@ -694,6 +701,22 @@ mod tests {
             .map(|row| row["id"].as_str().unwrap())
             .collect();
         assert_eq!(ordinary, ORDINARY);
+    }
+
+    #[test]
+    fn the_external_definition_route_is_the_file_the_macro_library_loads() {
+        let shell = Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps/bareline/src/shell");
+        let (folder, file) = EXTERNAL_DEFINITION.split_once('/').unwrap();
+        let macros = std::fs::read_to_string(shell.join("macros.rs")).unwrap();
+        assert!(
+            macros.contains(&format!("bounded_read(&directory.join(\"{file}\"))")),
+            "the macro library no longer loads {file} at startup; update EXTERNAL_DEFINITION"
+        );
+        let profile = std::fs::read_to_string(shell.join("profile.rs")).unwrap();
+        assert!(
+            profile.contains(&format!(".map(|root| root.join(\"{folder}\"))")),
+            "the macro library is no longer the {folder} folder beside settings.toml; update EXTERNAL_DEFINITION"
+        );
     }
 
     #[test]
