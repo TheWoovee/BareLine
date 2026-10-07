@@ -58,7 +58,7 @@ Changes since the 0.1.0 previews:
 
 ## Download
 
-Bareline 0.2.0 is published as the preview [v0.2.0-preview.2](https://github.com/TheWoovee/BareLine/releases/tag/v0.2.0-preview.2), which has the Windows files only. Later preview releases also carry the Linux and macOS files. Download one of these files:
+Bareline 0.2.0 is published as the preview [v0.2.0-preview.3](https://github.com/TheWoovee/BareLine/releases/tag/v0.2.0-preview.3), the first preview with Windows, Linux and macOS files. Download one of these files:
 
 | File | Use |
 | --- | --- |
