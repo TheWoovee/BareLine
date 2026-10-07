@@ -111,24 +111,55 @@ pub fn translate_event(_event_loop: &ActiveEventLoop, event: WindowEvent) -> Opt
 /// flag `xinput2_mouse_motion` does not check (only the button path does).
 /// XTEST, evdev button wheels and remote desktops send such pairs, so each
 /// notch scrolled twice as far; smooth-scroll wheels under libinput do not
-/// (their emulated button press is the flagged, dropped half). The echo is
-/// the second of two equal line deltas from one device in one batch of
-/// events, and is dropped here; winit itself is left as published
-/// (LNX-UI-011). Wayland reports each notch once.
+/// (their emulated button press is the flagged, dropped half), nor do
+/// high-resolution wheels and touchpads, which report each notch or step once
+/// as a valuator delta. winit reports both kinds alike, by the master pointer.
+///
+/// So a device's echoes are learned, never assumed (LNX-UI-011; winit itself is
+/// left as published). Every line delta of a doubling device arrives as a
+/// whole notch (±1.0 on one axis) followed in the same batch of events by its
+/// equal echo; a device that sends a lone delta (unpaired when another delta
+/// or the end of the batch comes) or a fractional one reports each notch once
+/// and is never deduplicated again this session. A device whose batch ends
+/// with all its deltas in equal notch pairs is doubling, and from its next
+/// batch the second of each pair is dropped. Limits: a doubling device's
+/// first batch scrolls twice as far; a device that reports single notches but
+/// whose first scrolling batch holds only equal pairs (two quick notches) loses
+/// every second notch until its first lone notch, usually the next slow one;
+/// and as XI2 events carry the master pointer, an XTEST pointer stops being
+/// deduplicated once a real wheel on the same master is seen. Wayland reports
+/// each notch once.
 #[cfg(not(target_os = "macos"))]
 pub fn translate_event(event_loop: &ActiveEventLoop, event: WindowEvent) -> Option<WindowEvent> {
     use winit::platform::x11::ActiveEventLoopExtX11;
     (!(event_loop.is_x11() && wheel_echo(&event))).then_some(event)
 }
+/// What a device's line deltas have shown about it (see `translate_event`).
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, PartialEq)]
+enum WheelReport {
+    /// Nothing yet: no delta is dropped.
+    Unknown,
+    /// Each notch arrives with its echo, which is dropped.
+    Doubled,
+    /// Each notch arrives once; nothing is dropped again.
+    Single,
+}
+#[cfg(not(target_os = "macos"))]
+struct WheelDevice {
+    id: winit::event::DeviceId,
+    report: WheelReport,
+    /// The notch that opened a possible notch-and-echo pair in this batch.
+    open: Option<(f32, f32)>,
+    /// Whether a pair closed in this batch.
+    paired: bool,
+}
 #[cfg(not(target_os = "macos"))]
 thread_local! {
-    /// The line delta that opened a possible button-and-valuator pair in this
-    /// batch of events, by device.
-    static WHEEL_PAIR: Cell<Option<(winit::event::DeviceId, (f32, f32))>> = const { Cell::new(None) };
+    static WHEELS: std::cell::RefCell<Vec<WheelDevice>> = const { std::cell::RefCell::new(Vec::new()) };
 }
-/// Whether `event` repeats the wheel notch that came before it in this batch
-/// from the same device (see `translate_event`). Pairs close as they match, so
-/// two notches in one batch (four events) still scroll twice.
+/// Whether `event` is the echo of the wheel notch before it from a doubling
+/// device (see `translate_event`), and what it shows about its device.
 #[cfg(not(target_os = "macos"))]
 fn wheel_echo(event: &WindowEvent) -> bool {
     let WindowEvent::MouseWheel {
@@ -139,13 +170,38 @@ fn wheel_echo(event: &WindowEvent) -> bool {
     else {
         return false;
     };
-    WHEEL_PAIR.with(|pair| {
-        if pair.get() == Some((device_id, (x, y))) {
-            pair.set(None);
-            true
-        } else {
-            pair.set(Some((device_id, (x, y))));
-            false
+    WHEELS.with_borrow_mut(|devices| {
+        let index = devices
+            .iter()
+            .position(|device| device.id == device_id)
+            .unwrap_or_else(|| {
+                devices.push(WheelDevice {
+                    id: device_id,
+                    report: WheelReport::Unknown,
+                    open: None,
+                    paired: false,
+                });
+                devices.len() - 1
+            });
+        let device = &mut devices[index];
+        if device.report == WheelReport::Single {
+            return false;
+        }
+        let notch = matches!((x.abs(), y.abs()), (0.0, 1.0) | (1.0, 0.0));
+        match device.open.take() {
+            Some(open) if notch && open == (x, y) => {
+                device.paired = true;
+                device.report == WheelReport::Doubled
+            }
+            None if notch => {
+                device.open = Some((x, y));
+                false
+            }
+            // A notch with no echo, or a fraction of one.
+            _ => {
+                device.report = WheelReport::Single;
+                false
+            }
         }
     })
 }
@@ -168,7 +224,17 @@ pub fn identify_window(attributes: WindowAttributes) -> WindowAttributes {
 /// The event loop has delivered a batch of events and is about to wait.
 pub fn end_event_batch() {
     #[cfg(not(target_os = "macos"))]
-    WHEEL_PAIR.with(|pair| pair.set(None));
+    WHEELS.with_borrow_mut(|devices| {
+        for device in devices {
+            if device.open.take().is_some() {
+                // A notch whose echo did not follow.
+                device.report = WheelReport::Single;
+            } else if device.paired && device.report == WheelReport::Unknown {
+                device.report = WheelReport::Doubled;
+            }
+            device.paired = false;
+        }
+    });
 }
 
 #[cfg(all(test, not(target_os = "macos")))]
@@ -183,34 +249,84 @@ mod tests {
             phase: TouchPhase::Moved,
         }
     }
+    /// Which of `events` scroll, as one batch of events.
+    fn batch(events: &[WindowEvent]) -> Vec<bool> {
+        let kept = events.iter().map(|event| !wheel_echo(event)).collect();
+        end_event_batch();
+        kept
+    }
+    /// A fresh session: no device has been seen.
+    fn forget_devices() {
+        WHEELS.with_borrow_mut(Vec::clear);
+    }
 
     /// LNX-UI-011: an X11 button wheel's notch arrives as a button press and
-    /// an emulated valuator motion; only one of them scrolls.
+    /// an emulated valuator motion (XTEST, evdev, remote desktops); once the
+    /// device shows it, only one of them scrolls.
     #[test]
-    fn a_wheel_notch_and_its_emulated_echo_scroll_once() {
-        end_event_batch();
-        // Two notches in one batch: press, echo, press, echo.
-        let kept: Vec<_> = [notch(-1.0), notch(-1.0), notch(-1.0), notch(-1.0)]
-            .iter()
-            .map(|event| !wheel_echo(event))
-            .collect();
-        assert_eq!(kept, [true, false, true, false]);
-        // Other deltas and other events are never echoes.
-        end_event_batch();
-        assert!(!wheel_echo(&notch(1.0)));
-        assert!(!wheel_echo(&notch(-1.0)));
+    fn a_doubling_wheel_scrolls_once_per_notch_once_learned() {
+        forget_devices();
+        let down = notch(-1.0);
+        // The first batch is the evidence: a notch and its echo.
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        // From then on the echo is dropped, two notches in a batch included.
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, false]);
+        assert_eq!(
+            batch(&[down.clone(), down.clone(), down.clone(), down.clone()]),
+            [true, false, true, false]
+        );
+        assert_eq!(
+            batch(&[notch(1.0), notch(1.0), down.clone(), down]),
+            [true, false, true, false]
+        );
+        // Other events are never echoes.
         assert!(!wheel_echo(&WindowEvent::RedrawRequested));
-        // A pair never spans two batches.
-        end_event_batch();
-        assert!(!wheel_echo(&notch(1.0)));
-        end_event_batch();
-        assert!(!wheel_echo(&notch(1.0)));
-        // Pixel deltas (touchpads, Wayland smooth scrolling) pass untouched.
+    }
+
+    /// LNX-UI-011 review: libinput, high-resolution and touchpad wheels report
+    /// each notch once; equal notches queued in one batch all scroll.
+    #[test]
+    fn a_single_reporting_wheel_never_loses_a_notch() {
+        let down = notch(-1.0);
+        // A lone notch shows the device reports each notch once.
+        forget_devices();
+        assert_eq!(batch(std::slice::from_ref(&down)), [true]);
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        assert_eq!(
+            batch(&[down.clone(), down.clone(), down.clone(), down.clone()]),
+            [true, true, true, true]
+        );
+        // So does an odd run in the first batch.
+        forget_devices();
+        assert_eq!(batch(&[down.clone(), down.clone(), down.clone()]), [true; 3]);
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        // And a direction change that leaves a notch without an echo.
+        forget_devices();
+        assert_eq!(batch(&[down.clone(), notch(1.0)]), [true, true]);
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        // High-resolution wheels and touchpads send fractions, equal or not.
+        forget_devices();
+        let step = notch(-0.125);
+        assert_eq!(batch(&[step.clone(), step.clone(), step.clone(), step]), [true; 4]);
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        // Two quick notches in the first batch look like a notch and its echo;
+        // the next lone notch corrects that for the rest of the session.
+        forget_devices();
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        assert_eq!(batch(std::slice::from_ref(&down)), [true]);
+        assert_eq!(
+            batch(&[down.clone(), down.clone(), down.clone(), down.clone()]),
+            [true; 4]
+        );
+        // Pixel deltas (Wayland smooth scrolling) are never touched.
+        forget_devices();
         let pixels = WindowEvent::MouseWheel {
             device_id: DeviceId::dummy(),
             delta: MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, 3.0)),
             phase: TouchPhase::Moved,
         };
-        assert!(!wheel_echo(&pixels) && !wheel_echo(&pixels));
+        assert_eq!(batch(&[pixels.clone(), pixels]), [true, true]);
+        assert_eq!(batch(&[down.clone(), down.clone()]), [true, true]);
+        assert_eq!(batch(&[down.clone(), down]), [true, false]);
     }
 }
