@@ -789,10 +789,10 @@ impl Shell {
                     .spawn(move || {
                         let fs = crate::shell::native::FileSystem;
                         let result = match kind.as_str() {
-                            // Restorable from the Recycle Bin; nothing hidden stays in the folder.
+                            // Restorable from the Recycle Bin or Trash; nothing hidden stays in the folder.
                             "workspace.delete" => {
                                 crate::shell::native::recycle_entry(&fs, selected.as_ref().unwrap(), owner)
-                                    .map(|()| "Moved to the Recycle Bin")
+                                    .map(|()| crate::shell::native::RECYCLED)
                             }
                             "workspace.createFile" => fs
                                 .create_entry(destination.as_ref().unwrap(), false)

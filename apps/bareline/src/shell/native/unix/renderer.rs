@@ -32,7 +32,17 @@ pub struct Renderer {
 /// The window must outlive the renderer, as the handle given to
 /// [`Platform::new`] must: the shell keeps both in fields that drop the
 /// renderer first.
-pub fn create_renderer(_platform: &Platform, window: Option<&Window>, _software: bool) -> Result<Renderer> {
+///
+/// It is also the first point where the platform sees the window: the portal's
+/// dialogs attach to it (Linux, X11) and the menu target joins its responder
+/// chain (macOS).
+pub fn create_renderer(platform: &Platform, window: Option<&Window>, _software: bool) -> Result<Renderer> {
+    if let Some(window) = window {
+        platform.attach_window(window);
+    }
+    renderer_for(window)
+}
+fn renderer_for(window: Option<&Window>) -> Result<Renderer> {
     let backend = match window {
         // SAFETY: the shell owns `window` in `Shell::window`, declared after
         // `Shell::renderer`, so this renderer is dropped before the window, and
@@ -232,7 +242,7 @@ mod tests {
 
     #[test]
     fn renderer_lays_out_text_and_reports_device_loss() {
-        let mut renderer = create_renderer(&Platform::for_tests(), None, false).unwrap();
+        let mut renderer = renderer_for(None).unwrap();
         assert!(renderer.software && !renderer.hardware_pending());
         renderer.resize(320, 200, 1.0).unwrap();
         let layout = renderer.shape("Bareline", 14.0, 300.0).unwrap();

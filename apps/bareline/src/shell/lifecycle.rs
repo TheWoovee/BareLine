@@ -59,6 +59,9 @@ struct PendingDestination {
     cancellation: Cancellation,
     cancelled: bool,
     receiver: Receiver<Result<DestinationPreflight, bareline_file_io::lifecycle::FileError>>,
+    /// The checked destination waits for the person's overwrite answer, which
+    /// the shell's own prompt gives later (Linux); `receiver` holds it again.
+    asking: bool,
 }
 enum SaveAllStep {
     Waiting,
@@ -162,6 +165,10 @@ impl LifecycleRuntime {
     }
     pub(super) fn busy(&self) -> bool {
         self.running || self.preflight.is_some()
+    }
+    /// A checked destination waits to ask whether to replace its file (Linux).
+    pub(super) fn destination_asking(&self) -> bool {
+        self.preflight.as_ref().is_some_and(|pending| pending.asking)
     }
     pub(super) fn preparing(&self, identity: (u64, u64)) -> bool {
         self.preflight
@@ -504,6 +511,7 @@ impl Shell {
                     cancellation,
                     cancelled: false,
                     receiver,
+                    asking: false,
                 });
                 if let Some(workspace) = &mut self.workspace {
                     workspace.message = Some("Checking save destination…".into());
@@ -735,6 +743,10 @@ impl Shell {
         true
     }
     pub(super) fn lifecycle_pump(&mut self, _el: &ActiveEventLoop) {
+        // Save All may ask for a destination that answers later (Linux); the
+        // pump then runs again and receives it.
+        let _interaction =
+            crate::shell::native::interaction_scope(self.platform.as_ref(), || super::prompt::Replay::Lifecycle);
         self.lifecycle_pump_inner();
     }
     #[allow(clippy::too_many_lines)]
@@ -1002,6 +1014,7 @@ impl Shell {
                     return;
                 }
                 Err(TryRecvError::Disconnected) => {
+                    crate::shell::native::save_destination_settled(self.platform.as_ref());
                     if pending.cancelled {
                         if pending.save_all && self.lifecycle.running {
                             self.lifecycle.skipped += 1;
@@ -1026,6 +1039,7 @@ impl Shell {
                     }
                 }
                 Ok(Err(error)) => {
+                    crate::shell::native::save_destination_settled(self.platform.as_ref());
                     if pending.cancelled {
                         if pending.save_all && self.lifecycle.running {
                             self.lifecycle.skipped += 1;
@@ -1051,6 +1065,7 @@ impl Shell {
                 }
                 Ok(Ok(preflight)) => {
                     if pending.cancelled {
+                        crate::shell::native::save_destination_settled(self.platform.as_ref());
                         if pending.save_all && self.lifecycle.running {
                             self.lifecycle.skipped += 1;
                             (self.notify)();
@@ -1063,6 +1078,7 @@ impl Shell {
                             .iter()
                             .position(|editor| pending.identity.matches(editor))
                     }) else {
+                        crate::shell::native::save_destination_settled(self.platform.as_ref());
                         if pending.save_all {
                             self.lifecycle.skipped += 1;
                             (self.notify)();
@@ -1074,6 +1090,22 @@ impl Shell {
                             .platform
                             .as_ref()
                             .is_some_and(|platform| platform.confirm_overwrite(preflight.path()));
+                    if !confirmed && crate::shell::native::interaction_waiting(self.platform.as_ref()) {
+                        // The overwrite question answers later (Linux), or
+                        // another question is still open: the checked
+                        // destination waits, and this pump asks again (and
+                        // receives the answer) when the question closes.
+                        let (resend, receiver) = std::sync::mpsc::sync_channel(1);
+                        let _ = resend.send(Ok(preflight));
+                        let mut pending = pending;
+                        pending.receiver = receiver;
+                        pending.asking = true;
+                        self.lifecycle.preflight = Some(pending);
+                        return;
+                    }
+                    // The Save dialog's confirmation (Linux) was for this
+                    // destination only.
+                    crate::shell::native::save_destination_settled(self.platform.as_ref());
                     let Some(destination) = preflight.approve(confirmed) else {
                         if pending.save_all {
                             self.lifecycle.skipped += 1;
@@ -1130,6 +1162,12 @@ impl Shell {
                     let options = self.save_dialog_options(index);
                     let path = match self.platform.as_ref().map(|p| p.save_file_with(&options)) {
                         Some(Ok(Some(path))) => path,
+                        Some(Ok(None)) if crate::shell::native::interaction_waiting(self.platform.as_ref()) => {
+                            // The dialog answers later (Linux): this document
+                            // waits at the head of the queue until it does.
+                            self.lifecycle.queue.push_front(identity);
+                            return;
+                        }
                         Some(Ok(None)) => {
                             self.lifecycle.skipped += 1;
                             continue;

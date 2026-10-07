@@ -56,7 +56,9 @@ FAKE_EDITOR = textwrap.dedent("""\
     print("event=startup_phase phase=ready", file=sys.stderr, flush=True)
     if mode == "panic":
         print('{"event":"panic","version":"0","file":"x.rs","line":1,"column":1}', file=sys.stderr, flush=True)
-        os.abort()
+        # An abnormal exit without SIGABRT: macOS shows a crash-reporter dialog
+        # for aborted processes, and it would sit on top of the smoke screenshot.
+        os._exit(101)
     if mode == "stubborn":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(60)
@@ -85,10 +87,18 @@ class FakeEditorTests(unittest.TestCase):
     def run_fake(self, mode, finders=None):
         os.environ["FAKE_MODE"] = mode
         polls = []
+        stdout_log = Path(self.options.evidence) / f"{self.options.label}-editor.stdout.log"
 
         def window_after_three_polls(pid):
+            # Synchronise on the fake editor's state, not on time: the window
+            # "appears" only once the editor has logged its first frame, so a
+            # slow interpreter start-up cannot make SIGTERM arrive first.
             polls.append(pid)
-            return ["4242"] if len(polls) >= 3 else []
+            try:
+                logged = "first_frame" in stdout_log.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                logged = False
+            return ["4242"] if logged and len(polls) >= 3 else []
 
         def screenshot(_system, path):
             path.write_bytes(b"png")

@@ -871,7 +871,7 @@ fn draw_row(
     );
 }
 
-fn wrap_measured(renderer: &mut impl TextBackend, text: &str, size: f32, width: f32) -> Vec<String> {
+pub(super) fn wrap_measured(renderer: &mut impl TextBackend, text: &str, size: f32, width: f32) -> Vec<String> {
     let mut lines = Vec::new();
     for source in text.lines() {
         let mut rest = source;

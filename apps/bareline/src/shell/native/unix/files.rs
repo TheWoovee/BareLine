@@ -24,6 +24,8 @@ pub use bareline_platform_posix::{
 pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path, _owner: RawWindow) -> io::Result<()> {
     bareline_platform_posix::trash::trash(fs, path).map(|_| ())
 }
+/// What the workspace says after `recycle_entry`, in the words of this system.
+pub const RECYCLED: &str = "Moved to the Trash";
 
 #[cfg(test)]
 mod tests {

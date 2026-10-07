@@ -50,6 +50,10 @@ pub use macos::{
     watch::MacWatchService,
 };
 pub use menu_plan::CommandMessage;
+/// The proof of running on the main thread that every AppKit constructor
+/// takes, so the shell's seam need not depend on objc2 itself.
+#[cfg(target_os = "macos")]
+pub use objc2_foundation::MainThreadMarker;
 pub use prompts::{AboutAction, SaveChoice, SavePromptOutcome};
 
 /// The shell's stand-in until wave 3 wires the services above into the seam:

@@ -852,6 +852,18 @@ impl Shell {
             Some(SettingsEffect::PreviewChanged) | None => {}
         }
     }
+    /// The desktop's appearance changed without a window event (Linux: the
+    /// portal's color scheme or contrast); read it again as `ThemeChanged` does.
+    pub(super) fn follow_system_appearance(&mut self) {
+        self.settings.controller.system.high_contrast = crate::shell::native::high_contrast_enabled().unwrap_or(false);
+        self.settings.controller.system.highlight = crate::shell::native::high_contrast_highlight();
+        if let Some(window) = &self.window {
+            self.settings
+                .apply_window_theme(crate::shell::native::window_theme(window));
+            window.request_redraw();
+        }
+        self.applied_settings = None;
+    }
     pub(super) fn settings_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if let WindowEvent::ThemeChanged(theme) = event {
             self.settings.controller.system.high_contrast =
@@ -1023,6 +1035,12 @@ impl Shell {
             return;
         }
         if !self.confirm_exit() {
+            if crate::shell::native::interaction_waiting(self.platform.as_ref()) {
+                // The save-changes prompt answers later (Linux): the "Restart
+                // now" that asked stays offered, so pressing it again when the
+                // input runs again receives the answer.
+                self.settings.controller.restart_pending = true;
+            }
             self.instance_resume();
             return;
         }

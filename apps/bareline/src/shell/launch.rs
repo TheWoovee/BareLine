@@ -323,6 +323,12 @@ impl super::Shell {
         if !self.session.restore_settled() {
             return;
         }
+        // Nor while a prompt or file dialog waits for its answer (Linux): a
+        // launch must not open or activate a document under the command that
+        // asked (`Shell::interaction_hold`).
+        if self.interaction_hold() {
+            return;
+        }
         let Some(workspace) = &mut self.workspace else {
             return;
         };
