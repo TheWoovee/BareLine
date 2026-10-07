@@ -258,6 +258,7 @@ impl Workspace {
         if let Some(conflict) = error.save_conflict() {
             self.record_save_conflict(conflict);
         }
+        Self::record_deleted_destination(&mut self.deleted_destinations, &error);
         self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
         self.resume_abandoned_reload(pending.reload.as_ref());
         // A user-cancelled open drops its tab; any other failure keeps it.

@@ -54,7 +54,12 @@ impl Workspace {
                             }
                         }
                         Ok(_) => {}
-                        Err(error) => self.message = Some(error.to_string()),
+                        Err(error) => {
+                            if let bareline_file_io::paged_service::PagedLifecycleError::Failed(error) = &error {
+                                Self::record_deleted_destination(&mut self.deleted_destinations, error);
+                            }
+                            self.message = Some(error.to_string());
+                        }
                     }
                 }
                 if let Some(error) = &paged.error {

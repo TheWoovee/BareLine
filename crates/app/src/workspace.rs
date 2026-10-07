@@ -907,6 +907,12 @@ pub struct Workspace {
     eol_status: std::cell::RefCell<encoding::EolTracker>,
     encoding_failures: Vec<EncodingFailure>,
     save_conflicts: Vec<SaveConflict>,
+    /// Destinations a save found deleted outside Bareline, until the shell takes
+    /// them for the document's banner (LNX-FILE-003).
+    deleted_destinations: Vec<PathBuf>,
+    /// Leftovers of interrupted saves removed when their folder was inspected,
+    /// until the shell reports them (LNX-FILE-007).
+    reclaimed_leftovers: Vec<PathBuf>,
     selected_save_conflict: Option<(PathBuf, (u64, u64))>,
     save_cleanups: Vec<SaveCleanup>,
     selected_save_cleanup: Option<PathBuf>,
@@ -1228,6 +1234,8 @@ impl Workspace {
             eol_status: Default::default(),
             encoding_failures: Vec::new(),
             save_conflicts: Vec::new(),
+            deleted_destinations: Vec::new(),
+            reclaimed_leftovers: Vec::new(),
             selected_save_conflict: None,
             save_cleanups: Vec::new(),
             selected_save_cleanup: None,
@@ -1759,6 +1767,30 @@ impl Workspace {
     /// the shell moves the closed tab's pin, position and view to it (WSP-05).
     pub fn take_reopened_tabs(&mut self) -> Vec<(u64, u64)> {
         std::mem::take(&mut self.reopened)
+    }
+    /// Paths whose save found the file deleted outside Bareline since the last
+    /// call; the shell shows each document's Recreate banner (LNX-FILE-003).
+    pub fn take_deleted_destinations(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.deleted_destinations)
+    }
+    /// Keep the path of a save that found its file deleted outside Bareline.
+    /// Leftover stages and transactions of interrupted saves removed since the
+    /// last call, for the shell to report (LNX-FILE-007).
+    pub fn take_reclaimed_leftovers(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.reclaimed_leftovers)
+    }
+    fn record_reclaimed_leftovers(&mut self, reclaimed: Vec<PathBuf>) {
+        for removed in reclaimed {
+            eprintln!("event=save_leftover_removed path={}", removed.display());
+            self.reclaimed_leftovers.push(removed);
+        }
+    }
+    fn record_deleted_destination(deleted: &mut Vec<PathBuf>, error: &FileError) {
+        if let FileError::DeletedOutside { target } = error
+            && !deleted.contains(target)
+        {
+            deleted.push(target.clone());
+        }
     }
     pub fn open_recovery_tracked(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
         self.open_for_launch(path, Some(request_id), false, true)
@@ -3178,6 +3210,22 @@ impl Workspace {
                 operation,
             },
         )
+    }
+    /// Save a document whose file was deleted outside Bareline at its own path
+    /// again. The save creates the file only while the name is still free, so a
+    /// file that reappeared meanwhile is never replaced (LNX-FILE-003).
+    pub fn recreate(&mut self, index: usize) -> bool {
+        let (Some(editor), Some(path)) = (self.editors.get(index), self.path(index)) else {
+            return false;
+        };
+        let destination = PreparedDestination {
+            path: path.to_path_buf(),
+            condition: DestinationCondition::MustBeAbsent,
+            consent: DestinationConsent::NotRequired,
+            document: editor.document_identity(),
+            operation: SaveOperation::Save,
+        };
+        self.save_prepared(index, destination)
     }
     pub fn save_copy(&mut self, index: usize, path: PathBuf) -> bool {
         let Some(editor) = self.editors.get(index) else {
