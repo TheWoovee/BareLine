@@ -3481,6 +3481,9 @@ impl PagedEditorSurface {
         let save_terminals = self.save_terminals.clone();
         let revision = self.snapshot.revision;
         let current_start = self.viewport_start;
+        // A folded view shows its text through a projection that reaches past
+        // hidden bodies; its window is read as before (LNX-EDIT-006).
+        let unfolded = self.mapped.is_none();
         let current_caret = self.global_selections.primary().caret;
         let current_selections = self.global_selections.clone();
         let view_identity = self.snapshot.identity_token();
@@ -3535,8 +3538,8 @@ impl PagedEditorSurface {
                         let mut retry_recovery = false;
                         let mut recovery_edits = Vec::new();
                         let mut streaming_protected = false;
-                        // Typing and prepared edits keep the window where it is.
-                        let in_place = matches!(&action, Action::Edit { .. } | Action::Prepared(..));
+                        // Typing and prepared edits keep an unfolded window where it is.
+                        let in_place = unfolded && matches!(&action, Action::Edit { .. } | Action::Prepared(..));
                         match action {
                             Action::Tail {
                                 platform,
