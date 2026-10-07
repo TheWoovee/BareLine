@@ -256,6 +256,12 @@ mod tests {
                 transaction: None,
                 error: io_error(),
             })),
+            FileError::DeletedOutside { target: path() },
+            FileError::FolderNotWritable { folder: path() },
+            FileError::StorageFull {
+                target: path(),
+                volume: path(),
+            },
         ];
         for displaced in [None, Some(path())] {
             files.push(FileError::CancelledAfterCommit(Box::new(PostCommitCancellation {
@@ -284,7 +290,10 @@ mod tests {
                 | FileError::ConflictAfterCreate { .. }
                 | FileError::CancelledAfterCommit(_)
                 | FileError::VerificationAfterCommit(_)
-                | FileError::Commit(_) => {}
+                | FileError::Commit(_)
+                | FileError::DeletedOutside { .. }
+                | FileError::FolderNotWritable { .. }
+                | FileError::StorageFull { .. } => {}
             }
         }
         check(files);

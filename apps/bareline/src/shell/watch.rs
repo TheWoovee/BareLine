@@ -13,6 +13,8 @@ use std::{
 
 type Registration = Result<Option<WindowsWatchService>, String>;
 type Checked = (PathBuf, FileIdentity, Result<bool, String>);
+/// A batch of checks and the paths whose file it found gone (LNX-FILE-003).
+type CheckBatch = (Vec<Checked>, BTreeSet<PathBuf>);
 type CapabilityNotes = Vec<(PathBuf, Option<&'static str>)>;
 /// A drawn banner, its message and the full path of its document: the
 /// accessible description and hover tooltip carry the path (UI-02).
@@ -38,6 +40,19 @@ const CONFLICT_ACTIONS: [(&str, &str); 4] = [
 /// description (UI-02).
 fn conflict_message(path: &std::path::Path) -> String {
     format!("{} changed on disk · current bytes preserved", banner_name(path))
+}
+/// The banner's actions when the file was deleted outside Bareline
+/// (LNX-FILE-003): there is nothing to compare or reload.
+const DELETED_ACTIONS: [(&str, &str); 3] = [
+    ("Recreate", "file.external.recreate"),
+    ("Save As…", "file.save_as"),
+    ("Keep editing", "file.external.keep"),
+];
+fn deleted_message(path: &std::path::Path) -> String {
+    format!(
+        "{} was deleted outside Bareline · your text is still open",
+        banner_name(path)
+    )
 }
 /// A painted banner action: accessibility ID, pane, document index, command
 /// and bounds.
@@ -193,8 +208,13 @@ pub(super) struct WatchRuntime {
     registered: Vec<PathBuf>,
     desired: Vec<PathBuf>,
     queue: VecDeque<(PathBuf, FileIdentity)>,
-    checking: Option<Receiver<Vec<Checked>>>,
+    checking: Option<Receiver<CheckBatch>>,
+    /// Paths whose file the last check found gone.
+    missing: BTreeSet<PathBuf>,
     conflicts: BTreeSet<PathBuf>,
+    /// The conflicts whose file was deleted outside Bareline: their banner
+    /// offers Recreate (LNX-FILE-003).
+    deleted: BTreeSet<PathBuf>,
     observed_identities: std::collections::BTreeMap<PathBuf, FileIdentity>,
     requested: bool,
     auto_reload_clean: bool,
@@ -219,6 +239,7 @@ pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
         ("file.external.check", "Check for External Changes"),
         ("file.external.keep", "Keep Current Buffer"),
         ("file.external.reload", "Reload External Changes"),
+        ("file.external.recreate", "Recreate Deleted File"),
         ("file.monitor.start", "Follow New Content"),
         ("file.monitor.pause", "Pause Following Scroll"),
         ("file.monitor.resume", "Resume Following"),
@@ -275,6 +296,7 @@ impl Shell {
     /// Rename) and recheck the open files, so the move itself never reads as an
     /// external deletion.
     pub(super) fn watch_forget(&mut self, path: &std::path::Path) {
+        self.watch.deleted.remove(path);
         if self.watch.conflicts.remove(path) {
             self.toasts.resolve(&conflict_notification_id(path));
         }
@@ -503,9 +525,17 @@ impl Shell {
                 }
                 true
             }
+            "file.external.recreate" => {
+                // The banner stays until the next check finds the recreated file.
+                if let Some(w) = &mut self.workspace {
+                    w.recreate(self.app.active);
+                }
+                true
+            }
             "file.external.keep" => {
                 if let Some(w) = &mut self.workspace {
                     if let Some(path) = w.path(self.app.active) {
+                        self.watch.deleted.remove(path);
                         self.watch.conflicts.remove(path);
                         self.toasts.resolve(&conflict_notification_id(path));
                     }
@@ -523,6 +553,7 @@ impl Shell {
         let page_open = self.settings.controller.open || self.extensions.open;
         if let Some(w) = &mut self.workspace {
             for (path, expected, result) in results {
+                let missing = self.watch.missing.contains(&path);
                 if let Some(index) = (0..w.editors.len()).find(|&i| w.path(i) == Some(path.as_path())) {
                     if w.editors[index].busy()
                         || w.fingerprint(index).map(|fingerprint| fingerprint.identity) != Some(expected)
@@ -531,6 +562,7 @@ impl Shell {
                         continue;
                     }
                     if result == Ok(false) {
+                        self.watch.deleted.remove(&path);
                         self.watch.conflicts.remove(&path);
                         self.toasts.resolve(&conflict_notification_id(&path));
                     }
@@ -564,6 +596,11 @@ impl Shell {
                         continue;
                     }
                     self.watch.conflicts.insert(path.clone());
+                    if missing {
+                        self.watch.deleted.insert(path.clone());
+                    } else {
+                        self.watch.deleted.remove(&path);
+                    }
                     // A shown document's banner already carries this event; a
                     // toast would duplicate it (UI-02: one notification).
                     if document_shown(&self.views, self.app.active, page_open, w, index) {
@@ -571,7 +608,9 @@ impl Shell {
                     }
                     let document = w.editors[index].snapshot().identity_token();
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    let message = if w.editors[index].dirty() {
+                    let message = if missing {
+                        format!("Deleted outside Bareline: {name}. Your text is still open; Recreate or Save As.")
+                    } else if w.editors[index].dirty() {
                         format!("External change detected: {name}. Your edits are preserved.")
                     } else {
                         format!("External change or unavailable file: {name}. Current bytes are preserved.")
@@ -595,6 +634,34 @@ impl Shell {
         }
     }
     pub(super) fn watch_pump(&mut self, _: &ActiveEventLoop) {
+        // A save that found its file deleted outside Bareline raises the
+        // document's Recreate banner (LNX-FILE-003).
+        if let Some(w) = &mut self.workspace {
+            for path in w.take_deleted_destinations() {
+                self.watch.conflicts.insert(path.clone());
+                self.watch.deleted.insert(path);
+            }
+            // A deleted file's banner lasts only as long as its conflict.
+            let conflicts = &self.watch.conflicts;
+            self.watch.deleted.retain(|path| conflicts.contains(path));
+            // Leftovers of a save a crash interrupted were removed when the
+            // folder's document opened; say what went (LNX-FILE-007).
+            let reclaimed = w.take_reclaimed_leftovers();
+            if !reclaimed.is_empty() {
+                let listed: Vec<String> = reclaimed.iter().map(|path| path.display().to_string()).collect();
+                self.toasts.push_typed(
+                    "save-leftovers",
+                    toast::next_revision(),
+                    bareline_ui::theme::ToastLevel::Info,
+                    toast::NotificationKind::Outcome,
+                    format!("Removed {} leftover file(s) of an interrupted save.", reclaimed.len()),
+                    Some(listed.join("\n")),
+                    None,
+                    toast::NotificationLifetime::Transient,
+                    Instant::now(),
+                );
+            }
+        }
         // Save acknowledgments can arrive after the filesystem event batch. Recheck
         // against the new identity even when no further OS event will wake watching.
         // Retain conflicts until this fresh check actually verifies the disk bytes.
@@ -791,8 +858,9 @@ impl Shell {
         }
         if let Some(rx) = &self.watch.checking {
             match rx.try_recv() {
-                Ok(results) => {
+                Ok((results, missing)) => {
                     self.watch.checking = None;
+                    self.watch.missing = missing;
                     self.apply_watch_check_results(results);
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -830,22 +898,28 @@ impl Shell {
             match std::thread::Builder::new()
                 .name("bareline-watch-check".into())
                 .spawn(move || {
+                    let mut missing = BTreeSet::new();
                     let results = batch
                         .into_iter()
                         .map(|(path, expected)| {
                             // Documents behind local junctions or in cloud folders are
                             // outside the pinned walk; their check resolves the links and
                             // never follows a name, like the open itself.
-                            let result = WindowsPathTrustProvider
+                            let checked = WindowsPathTrustProvider
                                 .open_read(&path, PathOrigin::User)
                                 .and_then(|opened| WindowsFileSystem.identity(&opened.file))
-                                .or_else(|_| WindowsFileSystem.current_identity(&path))
-                                .map(|actual| actual != expected)
-                                .map_err(|e| e.to_string());
+                                .or_else(|_| WindowsFileSystem.current_identity(&path));
+                            if checked
+                                .as_ref()
+                                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                            {
+                                missing.insert(path.clone());
+                            }
+                            let result = checked.map(|actual| actual != expected).map_err(|e| e.to_string());
                             (path, expected, result)
                         })
                         .collect();
-                    let _ = tx.send(results);
+                    let _ = tx.send((results, missing));
                     notify();
                 }) {
                 Ok(_) => self.watch.checking = Some(rx),
@@ -1002,6 +1076,11 @@ impl Shell {
                 "Save this document first or wait for its current operation",
             ),
             (
+                "file.external.recreate",
+                path.is_some_and(|p| self.watch.deleted.contains(p)) && !busy,
+                "The file was not deleted outside Bareline, or work is pending",
+            ),
+            (
                 "file.monitor.start",
                 path.is_some() && !busy && follow.is_none() && !editor.is_some_and(|e| e.dirty()),
                 "Save edits and wait for current work before following",
@@ -1131,14 +1210,19 @@ impl WatchRuntime {
         // the full path is the tooltip and accessible description (UI-02).
         // The same message names the banner's accessible alert (A11Y-03).
         let message = rect(banner.x + 10.0, banner.y, (banner.width - 20.0).max(0.0), 26.0);
-        let label = conflict_message(path);
+        let deleted = self.deleted.contains(path);
+        let (label, actions) = if deleted {
+            (deleted_message(path), DELETED_ACTIONS.to_vec())
+        } else {
+            (conflict_message(path), CONFLICT_ACTIONS.to_vec())
+        };
         ops.push(DrawOp::PushClip(message));
         text(ops, message.x, banner.y + 6.0, label.clone(), 13.0, TEXT);
         ops.push(DrawOp::PopClip);
         self.banners.push((banner, label, path.to_path_buf()));
         let action_width = ((banner.width - 16.0) / 4.0).clamp(0.0, 110.0);
         let mut hits = Vec::new();
-        for (i, (label, id)) in CONFLICT_ACTIONS.into_iter().enumerate() {
+        for (i, (label, id)) in actions.into_iter().enumerate() {
             let hit = rect(
                 banner.x + 8.0 + i as f32 * action_width,
                 banner.y + 30.0,
@@ -1262,6 +1346,7 @@ impl Shell {
                 None => {
                     let message = match (&follow, workspace.path(index)) {
                         (Some((message, ..)), _) => message.clone(),
+                        (None, Some(path)) if self.watch.deleted.contains(path) => deleted_message(path),
                         (None, Some(path)) => conflict_message(path),
                         (None, None) => continue,
                     };
@@ -1275,7 +1360,19 @@ impl Shell {
                     (message, path, bareline_ui::rect(x, y, right - x, bottom - y))
                 }
             };
-            let labels = follow.map_or_else(|| CONFLICT_ACTIONS.to_vec(), |(_, _, labels)| labels);
+            let deleted = workspace
+                .path(index)
+                .is_some_and(|path| self.watch.deleted.contains(path));
+            let labels = follow.map_or_else(
+                || {
+                    if deleted {
+                        DELETED_ACTIONS.to_vec()
+                    } else {
+                        CONFLICT_ACTIONS.to_vec()
+                    }
+                },
+                |(_, _, labels)| labels,
+            );
             used[pane as usize] = true;
             nodes.push(node(
                 BANNER_ID[pane as usize],
@@ -1594,6 +1691,146 @@ mod tests {
                 .map(|(label, _)| (AccessibilityRole::Button, *label, true, true))
                 .collect::<Vec<_>>()
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    /// LNX-FILE-003: a save that finds its file deleted outside Bareline leaves
+    /// no conflict folder, raises a banner offering Recreate, Save As and Keep
+    /// editing under a live alert, and Recreate writes the file at its path.
+    #[test]
+    fn deleted_file_banner_offers_recreate_and_recreate_writes_the_file() {
+        use bareline_platform::accessibility::AccessibilityRole;
+        fn settle(workspace: &mut bareline_app::workspace::Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+                workspace.pump();
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::yield_now();
+            }
+            workspace.pump();
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-watch-deleted-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("note.txt");
+        std::fs::write(&path, b"alpha\n").unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.open(path.clone());
+        settle(&mut workspace);
+        let canonical = workspace.path(0).unwrap().to_owned();
+        std::fs::remove_file(&path).unwrap();
+        workspace.editors[0].enqueue(bareline_app::workspace::Input::Insert("kept ".into()));
+        settle(&mut workspace);
+        for _ in 0..2 {
+            assert!(workspace.save(0, canonical.clone()));
+            settle(&mut workspace);
+            assert_eq!(workspace.take_deleted_destinations(), vec![canonical.clone()]);
+            assert!(workspace.save_conflicts().is_empty());
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "no conflict folder");
+            assert!(workspace.editors[0].dirty());
+        }
+
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell.watch.conflicts.insert(canonical.clone());
+        shell.watch.deleted.insert(canonical.clone());
+        let workspace = shell.workspace.as_ref().unwrap();
+        let hits = shell.watch.draw_banner(
+            workspace,
+            0,
+            &workspace.editors[0],
+            bareline_ui::rect(0.0, 60.0, 900.0, CONFLICT_BANNER_BAND),
+            Point { x: 0.0, y: 0.0 },
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            hits.iter().map(|(_, id)| id.0).collect::<Vec<_>>(),
+            DELETED_ACTIONS.iter().map(|(_, id)| *id).collect::<Vec<_>>()
+        );
+        shell.watch.hits = hits.into_iter().map(|(bounds, id)| (bounds, 0, 0, id)).collect();
+        let snapshot = shell.accessibility_snapshot(1000.0, 800.0, 1.0);
+        snapshot.validate().unwrap();
+        let alert = snapshot.nodes.iter().find(|node| node.id == BANNER_ID[0]).unwrap();
+        assert_eq!(alert.role, AccessibilityRole::Alert);
+        assert_eq!(
+            alert.name,
+            "note.txt was deleted outside Bareline · your text is still open"
+        );
+        let buttons: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BANNER_ID[0])
+            .map(|node| node.name.as_str())
+            .collect();
+        assert_eq!(buttons, ["Recreate", "Save As…", "Keep editing"]);
+
+        let workspace = shell.workspace.as_mut().unwrap();
+        assert!(workspace.recreate(0));
+        settle(workspace);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept alpha\n");
+        assert!(!workspace.editors[0].dirty());
+        assert!(workspace.take_deleted_destinations().is_empty());
+        // File > Rename forgets the old path's banner, Recreate included.
+        shell.watch.conflicts.insert(canonical.clone());
+        shell.watch.deleted.insert(canonical.clone());
+        shell.watch_forget(&canonical);
+        assert!(!shell.watch.conflicts.contains(&canonical) && !shell.watch.deleted.contains(&canonical));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    /// LNX-FILE-007: opening a document removes the stage a killed save left
+    /// beside it, and the workspace hands the removed path to the shell.
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_document_reclaims_a_dead_save_stage() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-watch-leftover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("big.log");
+        std::fs::write(&path, b"old\n").unwrap();
+        // A process that has ended owned the stage.
+        let mut ended = std::process::Command::new("true").spawn().unwrap();
+        let pid = ended.id();
+        ended.wait().unwrap();
+        let stage = root.join(format!(".bareline-{pid}-1.tmp"));
+        std::fs::write(&stage, b"half a save").unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.open(path.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut reclaimed = Vec::new();
+        while reclaimed.is_empty() {
+            workspace.pump();
+            reclaimed = workspace.take_reclaimed_leftovers();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert_eq!(reclaimed.len(), 1);
+        assert_eq!(reclaimed[0].file_name(), stage.file_name());
+        assert!(!stage.exists());
+        assert_eq!(std::fs::read(&path).unwrap(), b"old\n");
+        while workspace.io_busy() {
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        drop(workspace);
         let _ = std::fs::remove_dir_all(&root);
     }
     /// UNC prefixes exist only in Windows paths. Elsewhere a share is a mount with an ordinary

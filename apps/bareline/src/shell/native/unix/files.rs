@@ -27,6 +27,14 @@ pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path, _owner: RawWindow) -
 /// What the workspace says after `recycle_entry`, in the words of this system.
 pub const RECYCLED: &str = "Moved to the Trash";
 
+/// Saves into a folder that accepts no new entries keep their stage and the
+/// previous version in `in-place-saves` of this launch's recovery folder (the
+/// shell's profile, portable or installed), where the next open finds them
+/// again; a launch without one refuses such saves.
+pub fn use_recovery_folder(recovery: Option<&Path>) {
+    FileSystem::set_locked_folder_stage(recovery.map(|recovery| recovery.join("in-place-saves")));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

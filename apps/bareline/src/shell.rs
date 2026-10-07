@@ -951,6 +951,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         shell.recovery.configure(launch.recovery_path.clone(), true);
     }
+    // Saves into folders that accept no new entries keep the previous version in
+    // this launch's profile, never another one (LNX-EDIT-003).
+    crate::shell::native::use_recovery_folder(launch.recovery_path.as_deref());
     shell.macros.configure(
         launch
             .settings_path

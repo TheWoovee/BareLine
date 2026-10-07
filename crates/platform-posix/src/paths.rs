@@ -18,6 +18,13 @@ use std::{
 };
 
 pub const PORTABLE_MARKER: &str = "bareline.portable";
+/// The application's folder name: lowercase by the XDG convention, the
+/// product name on macOS.
+pub const APPLICATION: &str = if cfg!(target_os = "macos") {
+    "Bareline"
+} else {
+    "bareline"
+};
 
 /// Folder conventions of the host OS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

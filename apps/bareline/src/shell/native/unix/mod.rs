@@ -48,7 +48,7 @@ mod tests;
 
 pub use accessibility::Accessibility;
 pub use error::Result;
-pub use files::{FileSystem, PathTrust, RECYCLED, SessionPathTrust, recycle_entry};
+pub use files::{FileSystem, PathTrust, RECYCLED, SessionPathTrust, recycle_entry, use_recovery_folder};
 pub use launch::{installed_folders, user_home, valid_launch_path};
 pub use platform::{
     AboutAction, CommandMessage, Platform, SaveChoice, SavePromptOutcome, answer_prompt, command_window, in_app_prompt,

@@ -16,11 +16,7 @@ use std::{
 
 /// The application's folder name: lowercase by the XDG convention, the
 /// product name on macOS.
-const APPLICATION: &str = if cfg!(target_os = "macos") {
-    "Bareline"
-} else {
-    "bareline"
-};
+const APPLICATION: &str = bareline_platform_posix::paths::APPLICATION;
 
 /// Where an installed Bareline keeps its profile.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

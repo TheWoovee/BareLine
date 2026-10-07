@@ -258,6 +258,13 @@ impl Workspace {
         if let Some(conflict) = error.save_conflict() {
             self.record_save_conflict(conflict);
         }
+        let own = pending
+            .save
+            .as_ref()
+            .and_then(|(tab, _, _)| self.tab_index(*tab))
+            .and_then(|index| self.path(index))
+            .map(std::path::Path::to_path_buf);
+        Self::record_deleted_destination(&mut self.deleted_destinations, &error, own.as_deref());
         self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
         self.resume_abandoned_reload(pending.reload.as_ref());
         // A user-cancelled open drops its tab; any other failure keeps it.

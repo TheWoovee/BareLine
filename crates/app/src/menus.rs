@@ -35,6 +35,7 @@ pub const WHEN_ENABLED: &[&str] = &[
     "file.retry_open",
     "file.open_large_file_mode",
     "file.external.keep",
+    "file.external.recreate",
     "file.monitor.pause",
     "file.monitor.resume",
     "file.monitor.reopen",
@@ -212,6 +213,7 @@ pub const TREE: &[MenuTemplate] = &[
                     C("file.external.check"),
                     C("file.external.reload"),
                     C("file.external.keep"),
+                    C("file.external.recreate"),
                     C("file.external.auto_reload"),
                     Sub(
                         "Monitoring and Remote",
