@@ -2793,6 +2793,9 @@ mod sweep_tests {
         for directory in [&retired, &referenced, &live] {
             crate::recovery::discard(directory, &Platform).unwrap();
         }
+        // An exit while the cleanup proof was being published leaves its staged
+        // file in the retired journal; the next start still removes the journal.
+        fs::write(retired.join(".bareline-session-424244-6.tmp"), b"").unwrap();
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join("manifest.json"), b"{}").unwrap();
         let references: std::collections::HashSet<PathBuf> = [referenced.clone()].into_iter().collect();
