@@ -310,6 +310,9 @@ fn advance_existing_save_all(runtime: &mut LifecycleRuntime, workspace: &mut Wor
 }
 /// Save As waits no longer than this for its default folder check (APP-19).
 const SAVE_FOLDER_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+/// The message bar while a save destination is being checked; cleared when the
+/// check ends.
+const CHECKING_DESTINATION: &str = "Checking save destination…";
 type FolderProbe = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
 /// The first candidate folder that exists, checked on a worker thread: a folder
 /// on an unreachable share would otherwise freeze the UI thread for the network
@@ -514,7 +517,7 @@ impl Shell {
                     asking: false,
                 });
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.message = Some("Checking save destination…".into());
+                    workspace.message = Some(CHECKING_DESTINATION.into());
                 }
                 true
             }
@@ -1008,7 +1011,17 @@ impl Shell {
             );
         }
         if let Some(pending) = self.lifecycle.preflight.take() {
-            match pending.receiver.try_recv() {
+            let received = pending.receiver.try_recv();
+            if !matches!(received, Err(TryRecvError::Empty)) {
+                // The check is over, however it ended; its progress text must
+                // not outlive it (a rejection reports through its toast).
+                if let Some(workspace) = &mut self.workspace
+                    && workspace.message.as_deref() == Some(CHECKING_DESTINATION)
+                {
+                    workspace.message = None;
+                }
+            }
+            match received {
                 Err(TryRecvError::Empty) => {
                     self.lifecycle.preflight = Some(pending);
                     return;
@@ -1053,7 +1066,7 @@ impl Shell {
                         toast::next_revision(),
                         bareline_ui::theme::ToastLevel::Error,
                         toast::NotificationKind::Outcome,
-                        "Save destination rejected.",
+                        format!("Save destination rejected: {error}"),
                         Some(error.to_string()),
                         Some(document),
                         toast::NotificationLifetime::Persistent,
@@ -1595,5 +1608,41 @@ mod tests {
         }
         drop(workspace);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_rejected_destination_clears_its_progress_text_and_names_the_reason() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        // An empty path is rejected on every system.
+        assert!(shell.begin_destination_preflight(0, std::path::PathBuf::new(), super::SaveOperation::SaveAs, false));
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().message.as_deref(),
+            Some(super::CHECKING_DESTINATION)
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while shell.lifecycle.preflight.is_some() {
+            shell.lifecycle_pump_inner();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(shell.workspace.as_ref().unwrap().message, None);
+        shell.toasts.draw(
+            &mut bareline_renderer_recording::RecordingBackend::default(),
+            800.0,
+            600.0,
+            Default::default(),
+            &mut Vec::new(),
+        );
+        assert!(
+            shell
+                .toasts
+                .accessibility()
+                .iter()
+                .any(|notice| notice.text.starts_with("Save destination rejected: ")),
+            "the toast title carries the reason"
+        );
     }
 }
