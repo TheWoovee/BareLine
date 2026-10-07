@@ -91,9 +91,27 @@ pub fn save_prompt_failed(exit: bool, code: i32) -> String {
 
 /// The Windows services wake the loop through their own window messages.
 pub fn set_event_notify(_notify: std::sync::Arc<dyn Fn() + Send + Sync>) {}
-/// winit's events already carry the keymap's modifiers on Windows.
-pub fn translate_event(event: winit::event::WindowEvent) -> winit::event::WindowEvent {
-    event
+/// winit's events already carry the keymap's modifiers on Windows, and
+/// WM_MOUSEWHEEL arrives once per notch.
+pub fn translate_event(
+    _event_loop: &winit::event_loop::ActiveEventLoop,
+    event: winit::event::WindowEvent,
+) -> Option<winit::event::WindowEvent> {
+    Some(event)
+}
+/// The editor font a profile uses until the user picks one: the settings
+/// default, Cascadia Mono, which the Direct2D renderer falls back from itself.
+pub fn default_font_family(_renderer: &Renderer) -> Option<String> {
+    None
+}
+/// Windows provides every service the shell reports on, so no notice is a
+/// known gap.
+pub const KNOWN_GAP_NOTICES: &[&str] = &[];
+/// Nothing on Windows spans a batch of events.
+pub fn end_event_batch() {}
+/// The window's identity on Windows is the process's AppUserModelID.
+pub fn identify_window(attributes: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    attributes
 }
 /// The `AppsUseLightTheme` preference, as winit reads it.
 pub fn window_theme(window: &Window) -> Option<winit::window::Theme> {

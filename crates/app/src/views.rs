@@ -341,11 +341,24 @@ impl ViewController {
             .chain(self.tabs.iter().map(|t| t.id))
             .filter(move |id| seen.insert(*id))
     }
+    /// Show tab `id`'s document in the other pane. A pane holds one tab per
+    /// document, as a Notepad++ view does: when the other pane already shows
+    /// it, that tab is activated instead of adding another (LNX-UI-013).
     pub fn clone_to_other(&mut self, id: u64) -> Result<u64, ViewError> {
         if self.tabs.len() >= 10_000 {
             return Err(ViewError::InvalidState);
         }
         let mut tab = self.tab(id).ok_or(ViewError::Missing)?.clone();
+        if let Some(existing) = self
+            .tabs
+            .iter()
+            .find(|other| other.view.split != tab.view.split && other.document_id == tab.document_id)
+            .map(|other| other.id)
+        {
+            self.split = true;
+            self.activate(existing)?;
+            return Ok(existing);
+        }
         let new_id = self.next_id;
         if new_id > MAX_VIEW_TAB_ID {
             return Err(ViewError::IdentityExhausted);
@@ -392,10 +405,46 @@ impl ViewController {
             last_reference,
         })
     }
+    /// Close the second pane. Its tabs join the first pane, except views of a
+    /// document the first pane already shows: those close, so one tab per
+    /// document remains and the first pane's tab keeps its caret, scroll and
+    /// folds, as in Notepad++ (LNX-UI-013).
     pub fn collapse(&mut self) {
-        let active = self.active[self.active_pane as usize]
+        let mut active = self.active[self.active_pane as usize]
             .or(self.active[0])
             .or(self.active[1]);
+        let duplicates: Vec<(u64, u64)> = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.view.split == 1)
+            .filter_map(|tab| {
+                self.tabs
+                    .iter()
+                    .find(|kept| kept.view.split == 0 && kept.document_id == tab.document_id)
+                    .map(|kept| (tab.id, kept.id))
+            })
+            .collect();
+        for (closed, kept) in duplicates {
+            if active == Some(closed) {
+                active = Some(kept);
+            }
+            self.tabs.retain(|tab| tab.id != closed);
+            self.tab_colors.remove(&closed);
+            // The surviving view takes the closed one's place in the MRU order
+            // when the closed one was used more recently.
+            let closed_at = self.mru.iter().position(|id| *id == closed);
+            self.mru.retain(|id| *id != closed);
+            if let Some(position) = closed_at
+                && self
+                    .mru
+                    .iter()
+                    .position(|id| *id == kept)
+                    .is_none_or(|at| at > position)
+            {
+                self.mru.retain(|id| *id != kept);
+                self.mru.insert(position.min(self.mru.len()), kept);
+            }
+        }
         for tab in &mut self.tabs {
             tab.view.split = 0;
         }
@@ -659,6 +708,66 @@ mod tests {
         assert!(!views.split);
     }
 
+    /// LNX-UI-013: closing the second pane used to append every one of its
+    /// tabs to the first, so clones and compare views piled up as duplicates.
+    #[test]
+    fn collapsing_keeps_one_tab_per_document_with_the_first_panes_view() {
+        // Clone a.txt and b.txt to the other view, open c.txt there, then close the split.
+        let mut views = ViewController::new(vec![tab(1, false), tab(2, false)], Some(2)).unwrap();
+        views
+            .set_view_state(
+                2,
+                ViewState {
+                    caret: 7,
+                    anchor: 3,
+                    scroll_y_bits: 120.0f64.to_bits(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let clone_a = views.clone_to_other(1).unwrap();
+        let clone_b = views.clone_to_other(2).unwrap();
+        views.set_view_state(clone_b, ViewState::default()).unwrap();
+        let c = views.add_document(3).unwrap();
+        assert_eq!(views.tab(c).unwrap().view.split, 1);
+        views.activate(clone_b).unwrap();
+        views.collapse();
+        assert!(!views.split);
+        let documents: Vec<_> = views.tabs().iter().map(|tab| tab.document_id).collect();
+        assert_eq!(documents, [1, 2, 3]);
+        assert!(views.tab(clone_a).is_none() && views.tab(clone_b).is_none());
+        // The active clone hands over to the first pane's tab, whose caret and
+        // scroll are kept.
+        assert_eq!(views.active_tab(0), Some(2));
+        let kept = &views.tab(2).unwrap().view;
+        assert_eq!(
+            (kept.caret, kept.anchor, f64::from_bits(kept.scroll_y_bits)),
+            (7, 3, 120.0)
+        );
+        assert!(views.mru().all(|id| views.tab(id).is_some()));
+        assert_eq!(views.mru().next(), Some(2));
+
+        // Compare: the second pane shows a.txt beside b.txt; closing compare
+        // leaves a.txt and b.txt once each.
+        let mut views = ViewController::new(vec![tab(1, false), tab(2, false)], Some(1)).unwrap();
+        let compared = views.clone_to_other(2).unwrap();
+        views.assign_document(compared, 1).unwrap();
+        views.collapse();
+        let documents: Vec<_> = views.tabs().iter().map(|tab| tab.document_id).collect();
+        assert_eq!(documents, [1, 2]);
+        assert_eq!(views.active_tab(0), Some(1));
+        // A second split and close adds nothing either.
+        let again = views.clone_to_other(1).unwrap();
+        views.activate(again).unwrap();
+        views.collapse();
+        assert_eq!(views.tabs().len(), 2);
+        // Cloning back to a pane that already shows the document activates
+        // its tab there instead of adding a second one.
+        let other = views.clone_to_other(1).unwrap();
+        assert_eq!(views.clone_to_other(other).unwrap(), 1);
+        assert_eq!(views.tabs().len(), 3);
+        assert_eq!(views.active_tab(0), Some(1));
+    }
     #[test]
     fn restored_tab_ids_must_fit_the_native_provider_block_contract() {
         let mut valid = tab(MAX_VIEW_TAB_ID, false);

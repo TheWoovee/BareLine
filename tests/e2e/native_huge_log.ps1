@@ -33,7 +33,7 @@ function Run-HugeLog {
   Regex-Field 'Find' $script:logFixture.needle 'log query'
   $deadline=[DateTime]::UtcNow.AddSeconds(40)
   do {
-   Guard;$status=@(Elements | Where-Object {$_.Current.Name -ceq 'Find results: 1 matches'})
+   Guard;$status=@(Elements | Where-Object {$_.Current.Name -ceq 'Find results: 1 match'})
    if($status.Count -eq 1){break};Start-Sleep -Milliseconds 100
   }while([DateTime]::UtcNow -lt $deadline)
   if($status.Count -ne 1){throw 'Global log search did not complete with exactly one match'}

@@ -58,6 +58,13 @@ struct ResolvedCache {
 }
 
 pub(super) struct SettingsRuntime {
+    /// Known-gap notices already noted this run (`note_known_gap`), the
+    /// profile's record of those shown before, the workers checking it, and
+    /// the notices new to the profile that are ready to show.
+    known_gaps_shown: std::collections::BTreeSet<String>,
+    known_gaps_file: Option<PathBuf>,
+    known_gaps_checks: Vec<Receiver<(String, bool)>>,
+    known_gaps_ready: Vec<String>,
     pub controller: SettingsController,
     pub keymap: KeymapDocument,
     path: Option<PathBuf>,
@@ -129,12 +136,97 @@ pub(super) fn read_migrated_user(path: &std::path::Path) -> Result<SettingsDocum
     }
     SettingsDocument::parse(&bytes, Scope::User).map_err(|error| error.to_string())
 }
+/// How long a first launch's known-gap record waits for the profile folder,
+/// which is created after the first notices.
+const KNOWN_GAP_FOLDER_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Runs on a known-gaps worker: `answer`s whether `path` lacks `notice` (so it
+/// is new to the profile and shows) and records it there, once. Best effort:
+/// a notice left unrecorded (a failed write, or no profile folder in time)
+/// shows again at the next launch.
+fn record_known_gap(path: &std::path::Path, notice: &str, answer: impl FnOnce(bool)) {
+    if std::fs::read_to_string(path).is_ok_and(|recorded| recorded.lines().any(|line| line == notice)) {
+        answer(false);
+        return;
+    }
+    let folder = || path.parent().is_some_and(std::path::Path::is_dir);
+    let append = || {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut file| writeln!(file, "{notice}"));
+    };
+    if folder() {
+        append();
+        answer(true);
+        return;
+    }
+    answer(true);
+    let deadline = Instant::now() + KNOWN_GAP_FOLDER_WAIT;
+    while Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if folder() {
+            append();
+            return;
+        }
+    }
+}
 impl Default for SettingsRuntime {
     fn default() -> Self {
         Self::new(SettingsDocument::empty(Scope::User), None, Arc::new(|| {}))
     }
 }
 impl SettingsRuntime {
+    /// The known-gap `notice` is due. The first time this run, a worker checks
+    /// the profile's record, `known-gaps.txt` beside settings.toml, and records
+    /// the notice there, off the UI thread; `take_known_gaps` then returns it
+    /// if the profile had not shown it (every run when there is no profile).
+    pub(super) fn note_known_gap(&mut self, notice: &str) {
+        if !self.known_gaps_shown.insert(notice.to_owned()) {
+            return;
+        }
+        let Some(path) = self.known_gaps_file.clone() else {
+            self.known_gaps_ready.push(notice.to_owned());
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(1);
+        let wake = self.notify.clone();
+        let owned = notice.to_owned();
+        let spawned = std::thread::Builder::new()
+            .name("bareline-known-gaps".into())
+            .spawn(move || {
+                record_known_gap(&path, &owned, |new| {
+                    let _ = tx.send((owned.clone(), new));
+                    wake();
+                });
+            });
+        if spawned.is_ok() {
+            self.known_gaps_checks.push(rx);
+        } else {
+            // Unchecked, the notice shows, as on a first launch.
+            self.known_gaps_ready.push(notice.to_owned());
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn known_gaps_checking(&self) -> bool {
+        !self.known_gaps_checks.is_empty()
+    }
+    /// The known-gap notices new to this profile, as their checks finish.
+    pub(super) fn take_known_gaps(&mut self) -> Vec<String> {
+        let mut ready = std::mem::take(&mut self.known_gaps_ready);
+        self.known_gaps_checks.retain(|check| match check.try_recv() {
+            Ok((notice, new)) => {
+                if new {
+                    ready.push(notice);
+                }
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        });
+        ready
+    }
     pub fn new(document: SettingsDocument, path: Option<PathBuf>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
         let controller = SettingsController::new(
             document,
@@ -146,6 +238,7 @@ impl SettingsRuntime {
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
+        let known_gaps_file = path.as_ref().map(|p| p.with_file_name("known-gaps.txt"));
         Self {
             controller,
             keymap: KeymapDocument::defaults(&bareline_commands::shell_commands()),
@@ -173,6 +266,10 @@ impl SettingsRuntime {
             default_keymap_key: Cell::new(None),
             keymap_rebuilds: Cell::new(0),
             keymap_revision: 0,
+            known_gaps_shown: Default::default(),
+            known_gaps_file,
+            known_gaps_checks: Vec::new(),
+            known_gaps_ready: Vec::new(),
             pending_at: Instant::now(),
             alt_gr: false,
             ime: false,
@@ -1405,6 +1502,96 @@ mod keymap_cache_tests {
         assert!(runtime.controller.open);
         assert!(runtime.controller.revision > revision);
         let _ = std::fs::remove_dir_all(root);
+    }
+    /// LNX-EDIT-005: with the Find field focused, global chords resolve and
+    /// dispatch as from the editor, and the field keeps its own editing keys.
+    #[test]
+    fn find_field_keeps_its_keys_and_passes_global_chords_to_the_keymap() {
+        use crate::shell::find_field_owns_key;
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        super::super::views::accessibility_test_setup(&mut shell, "open");
+        // The commands the running shell registers (Go to Line, the tab commands).
+        crate::shell::register_all_commands(&mut shell.app.commands);
+        let workspace = shell.workspace.as_mut().unwrap();
+        workspace.find.show();
+        workspace.find.focused = true;
+        assert!(workspace.find.has_focus());
+        let ctrl = ModifiersState::CONTROL;
+        let character = |value: &str| Key::Character(value.into());
+        for (chord, key, command) in [
+            ("Ctrl+S", character("s"), "file.save"),
+            ("Ctrl+H", character("h"), "search.replace"),
+            ("Ctrl+G", character("g"), "search.goto"),
+            ("Ctrl+W", character("w"), "file.close"),
+            ("Ctrl+F", character("f"), "search.find"),
+            ("Ctrl+Tab", Key::Named(NamedKey::Tab), "view.tabs.mru"),
+            ("Ctrl+PageDown", Key::Named(NamedKey::PageDown), "view.tabs.next"),
+        ] {
+            assert!(!find_field_owns_key(true, &key, None, ctrl), "{chord} leaves the field");
+            let KeyResolution::Command(id) = shell.settings.resolve_default(
+                &shell.app.commands,
+                &[KeyChord::parse(chord).unwrap()],
+                InputContext::default(),
+            ) else {
+                panic!("{chord} resolves");
+            };
+            assert_eq!(id.0, command, "{chord}");
+            // The command is as available from the field as from the editor.
+            let from_field = shell.app.commands.dispatch_in(id, &shell.command_state_context(id));
+            shell.workspace.as_mut().unwrap().find.focused = false;
+            let from_editor = shell.app.commands.dispatch_in(id, &shell.command_state_context(id));
+            shell.workspace.as_mut().unwrap().find.focused = true;
+            assert_eq!(from_field, from_editor, "{chord}");
+        }
+        // Function keys and bare Alt chords are shortcuts too.
+        assert!(!find_field_owns_key(
+            true,
+            &Key::Named(NamedKey::F2),
+            None,
+            ModifiersState::empty()
+        ));
+        assert!(!find_field_owns_key(
+            true,
+            &character("u"),
+            Some("u"),
+            ModifiersState::ALT
+        ));
+        // The field keeps typing (AltGr included), caret moves, deletion,
+        // traversal and its own Enter, F3 and Escape.
+        let none = ModifiersState::empty();
+        for (key, text, modifiers) in [
+            (character("a"), Some("a"), none),
+            (character("A"), Some("A"), ModifiersState::SHIFT),
+            (character("@"), Some("@"), ModifiersState::CONTROL | ModifiersState::ALT),
+            (Key::Named(NamedKey::Space), Some(" "), none),
+            (Key::Named(NamedKey::Backspace), None, none),
+            (Key::Named(NamedKey::Delete), None, none),
+            (Key::Named(NamedKey::ArrowLeft), None, ctrl),
+            (Key::Named(NamedKey::Home), None, ModifiersState::SHIFT),
+            (Key::Named(NamedKey::Tab), None, ModifiersState::SHIFT),
+            (Key::Named(NamedKey::Enter), None, none),
+            (Key::Named(NamedKey::F3), None, ModifiersState::SHIFT),
+            (Key::Named(NamedKey::Escape), None, none),
+        ] {
+            assert!(
+                find_field_owns_key(true, &key, text, modifiers),
+                "{key:?} {modifiers:?}"
+            );
+        }
+        // On a focused toggle, Space presses it; typing is not the toggle's.
+        assert!(find_field_owns_key(
+            false,
+            &Key::Named(NamedKey::Space),
+            Some(" "),
+            none
+        ));
+        assert!(!find_field_owns_key(false, &character("a"), Some("a"), none));
+        assert!(!find_field_owns_key(
+            true,
+            &Key::Named(NamedKey::Space),
+            Some(" "),
+            ctrl
+        ));
     }
     #[test]
     fn resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not() {

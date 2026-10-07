@@ -130,6 +130,11 @@ pub(super) struct ToastStack {
     hits: Vec<(Rect, Hit)>,
     focus: Option<u64>,
     details_open: Option<u64>,
+    /// The highest bottom edge notifications may use this frame: the top of
+    /// the message bar or a modal's action row, in window coordinates.
+    floor: Option<f32>,
+    /// The last `draw` painted the details panel.
+    details_painted: bool,
     details_scroll: usize,
     overflow_bounds: Rect,
     overflow_painted: bool,
@@ -478,6 +483,17 @@ impl ToastStack {
         self.details_open.is_some()
     }
 
+    /// Keep notifications above window y `floor` (see `ToastStack::floor`).
+    pub(super) fn set_floor(&mut self, floor: Option<f32>) {
+        self.floor = floor;
+    }
+
+    /// Whether the last frame painted the open details panel; the shell
+    /// keeps the details modal only while it does (LNX-UI-001).
+    pub(super) fn details_painted(&self) -> bool {
+        self.details_open.is_some() && self.details_painted
+    }
+
     pub(super) fn open_details(&mut self, id: u64) -> bool {
         if id != OVERFLOW_ID && !self.toasts.iter().any(|toast| toast.accessibility_id == id) {
             return false;
@@ -504,6 +520,17 @@ impl ToastStack {
 
     pub(super) fn details_pointer_close(&self, point: Point) -> bool {
         self.details_open.is_some() && self.details_close_bounds.contains(point)
+    }
+
+    /// Whether window point `point` is on a painted notification or the
+    /// open details panel.
+    pub(super) fn contains(&self, point: Point) -> bool {
+        self.details_contains(point)
+            || (self.overflow_painted && self.overflow_bounds.contains(point))
+            || self
+                .toasts
+                .iter()
+                .any(|toast| self.painted.contains(&toast.accessibility_id) && toast.bounds.contains(point))
     }
 
     pub(super) fn details_contains(&self, point: Point) -> bool {
@@ -664,6 +691,9 @@ impl ToastStack {
         let toast_width = (width - 32.0).min(WIDTH).max(80.0).min(width.max(0.0));
         let x = ((width - toast_width) / 2.0).max(0.0);
         let mut y = height - bareline_ui::STATUS_HEIGHT - GAP;
+        if let Some(floor) = self.floor {
+            y = y.min(floor - GAP);
+        }
         let available = ((y - bareline_ui::TAB_HEIGHT) / (ROW_HEIGHT + GAP)).floor().max(0.0) as usize;
         let capacity = available.min(MAX_VISIBLE);
         let visible_count =
@@ -740,6 +770,7 @@ impl ToastStack {
             );
             self.hits.push((bounds, Hit::Details(OVERFLOW_ID)));
         }
+        self.details_painted = self.details_open.is_some();
         if let Some(id) = self.details_open {
             self.draw_details(renderer, id, width, height, theme, ops);
         }
@@ -1198,5 +1229,39 @@ mod tests {
         stack.resolve(&NotificationId::from("owned"));
         assert!(!stack.details_open());
         assert_eq!(stack.accessibility_focus(), None);
+    }
+
+    /// LNX-EDIT-011 / robustness LNX-UI-013: notifications sat on the message
+    /// bar and on the Recovery Center's action buttons.
+    #[test]
+    fn notifications_stay_above_their_floor() {
+        let mut stack = ToastStack::default();
+        stack.enqueue(notice("first", 1, NotificationLifetime::Persistent), Instant::now());
+        stack.enqueue(notice("second", 1, NotificationLifetime::Persistent), Instant::now());
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let height = 760.0;
+        stack.draw(&mut renderer, 1200.0, height, UiTheme::default(), &mut Vec::new());
+        let lowest = |stack: &ToastStack| {
+            stack
+                .accessibility()
+                .iter()
+                .map(|notice| notice.bounds.y + notice.bounds.height)
+                .fold(0.0f32, f32::max)
+        };
+        assert!(
+            lowest(&stack) > 700.0,
+            "without a floor the stack sits on the status strip"
+        );
+        let floor = 640.0;
+        stack.set_floor(Some(floor));
+        stack.draw(&mut renderer, 1200.0, height, UiTheme::default(), &mut Vec::new());
+        assert_eq!(stack.accessibility().len(), 2);
+        assert!(lowest(&stack) <= floor - GAP, "{} is above {floor}", lowest(&stack));
+        // Every notification is still reachable through the pointer.
+        let first = stack.accessibility()[0].bounds;
+        assert!(stack.contains(Point {
+            x: first.x + 4.0,
+            y: first.y + 4.0,
+        }));
     }
 }

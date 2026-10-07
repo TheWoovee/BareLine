@@ -83,7 +83,7 @@ try {
   Key 36 $true;Text 'X';Expect-Text $changed 'cycle edited';Key 83 $true
   Expect-File $source $utf8.GetBytes($changed) 'cycle saved';Expect-Dirty $false 'cycle clean'
   Regex-Menu 'Literal Search Mode';Regex-Field 'Find' 'needle' 'cycle query'
-  $null=Regex-Status 'Find results: 1 matches' 'cycle search complete'
+  $null=Regex-Status 'Find results: 1 match' 'cycle search complete'
   Key 13;Key 27;Focus-Editor;Regex-Menu 'Follow New Content'
   # Resident files must finish conversion before the external writer appends.
   Record 'native command ready' (Regex-WaitMenuEnabled 'Pause Following Scroll')

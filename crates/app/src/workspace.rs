@@ -100,6 +100,9 @@ struct ClosedCheck {
 /// Whether a closed document's file is still on disk; runs on a worker only.
 type ClosedPathProbe = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 const MAX_CLOSED_DOCUMENTS: usize = 20;
+/// The message bar's band above the status strip (or the bottom panel): a
+/// 30-pixel bar and its gap. The text view ends above it.
+const MESSAGE_BAND: f32 = 34.0;
 const MAX_OPEN_OUTCOMES: usize = 256;
 /// Unresolved save conflicts and cleanups stay listed (their files remain on disk),
 /// but a burst of failures cannot grow the lists without bound.
@@ -862,6 +865,9 @@ pub struct Workspace {
     failed_save_recovery: std::collections::BTreeSet<PathBuf>,
     replacement_registry: bareline_search::replace_disk::OpenFileRegistry,
     pub message: Option<String>,
+    /// Where the last `draw` put the message bar, in view coordinates; the
+    /// shell keeps notifications above it.
+    pub message_bar: Option<Rect>,
     pub find: crate::find::FindController,
     pub search_panel: crate::search_panel::SearchPanel,
     pub search_focus: bool,
@@ -1209,6 +1215,7 @@ impl Workspace {
             failed_save_recovery: std::collections::BTreeSet::new(),
             replacement_registry: Default::default(),
             message: None,
+            message_bar: None,
             find: crate::find::FindController::default(),
             search_panel: Default::default(),
             search_focus: false,
@@ -3796,6 +3803,15 @@ impl Workspace {
             .map(|(path, error)| (path.to_path_buf(), error.to_owned()));
         let banner_band = self.banner_band(active);
         let file_bytes = self.file_bytes(active);
+        let panel_inset = if self.external_search_panel {
+            self.bottom_panel_height
+        } else {
+            self.search_panel.height()
+        };
+        // The message bar takes its own band above the bottom panel instead of
+        // covering the last text lines, so the caret and a match revealed
+        // there stay visible (LNX-EDIT-011).
+        let message_band = if self.message.is_some() { MESSAGE_BAND } else { 0.0 };
         let mut result = match self.editors.get_mut(active) {
             Some(editor) => {
                 match editor {
@@ -3808,11 +3824,7 @@ impl Workspace {
                 editor.viewport_mut().top_inset = find_height + banner_band + notice_band;
                 editor.viewport_mut().file_bytes = file_bytes;
                 editor.viewport_mut().not_loaded = failed_open.is_some();
-                editor.viewport_mut().bottom_inset = if self.external_search_panel {
-                    self.bottom_panel_height
-                } else {
-                    self.search_panel.height()
-                };
+                editor.viewport_mut().bottom_inset = panel_inset + message_band;
                 let language = self
                     .tabs
                     .get(active)
@@ -3969,13 +3981,13 @@ impl Workspace {
         {
             result = Ok(Some(caret));
         }
+        self.message_bar = None;
         if let Some(message) = &self.message {
-            let y = (height - 58.0).max(34.0);
-            ops.push(DrawOp::Fill(
-                bareline_ui::rect(50.0, y, width - 66.0, 30.0),
-                bareline_ui::ELEVATED,
-            ));
+            let y = (height - bareline_ui::STATUS_HEIGHT - panel_inset - MESSAGE_BAND).max(34.0);
+            let bar = bareline_ui::rect(50.0, y, width - 66.0, 30.0);
+            ops.push(DrawOp::Fill(bar, bareline_ui::ELEVATED));
             bareline_ui::text(ops, 64.0, y + 6.0, message, 13.0, bareline_ui::TEXT);
+            self.message_bar = Some(bar);
         }
         result
     }
@@ -4841,6 +4853,31 @@ mod tests {
         assert!(matches!(workspace.closed.last(), Some(ClosedDocument::Reopen(reopen)) if reopen.path == missing));
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
+    }
+    /// LNX-EDIT-011: the message bar covered the last text lines, so the caret
+    /// after Ctrl+End or a match near the end was hidden behind it.
+    #[test]
+    fn the_message_bar_takes_its_own_band_below_the_text() {
+        let (directory, mut workspace) = failed_open_fixture("message-band");
+        workspace.new_document().unwrap();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(workspace.editors[0].viewport().bottom_inset, 0.0);
+        assert_eq!(workspace.message_bar, None);
+        workspace.message = Some("This system does not support spell checking yet".into());
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let bar = workspace.message_bar.expect("the message bar is drawn");
+        let view = workspace.editors[0].viewport();
+        assert_eq!(view.bottom_inset, MESSAGE_BAND);
+        // The text ends at the bar's band; the bar sits on the status strip.
+        let text_bottom = 600.0 - bareline_ui::STATUS_HEIGHT - view.bottom_inset;
+        assert!(bar.y >= text_bottom && bar.y + bar.height <= 600.0 - bareline_ui::STATUS_HEIGHT);
+        workspace.message = None;
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(workspace.editors[0].viewport().bottom_inset, 0.0);
+        assert_eq!(workspace.message_bar, None);
+        drop(workspace);
+        remove_test_directory(directory);
     }
     /// WSP-01: Rename keeps the document itself. A saved document is retargeted
     /// in place, keeping its tab position, identity and undo history; an

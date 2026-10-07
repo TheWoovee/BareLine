@@ -1183,7 +1183,9 @@ impl ApplicationHandler<Wake> for Handler {
         self.shell.resumed(el);
     }
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let event = native::translate_event(event);
+        let Some(event) = native::translate_event(el, event) else {
+            return;
+        };
         // A tab switch, open or close by key or click is the user's choice of tab.
         let input = matches!(
             event,
@@ -1223,6 +1225,7 @@ impl ApplicationHandler<Wake> for Handler {
             poll_when_exiting(el);
             return;
         }
+        native::end_event_batch();
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
         // A prompt or dialog that answers later (Linux) runs its asker again.
@@ -1344,12 +1347,16 @@ impl ApplicationHandler<Wake> for Handler {
             .shell
             .workspace
             .as_mut()
-            .is_some_and(|workspace| workspace.find.tooltip_tick(tooltip_now_ms));
+            .is_some_and(|workspace| workspace.find.tooltip_tick(tooltip_now_ms))
+            | self.shell.views.tab_tooltip_tick(tooltip_now_ms);
         let tooltip_deadline = self
             .shell
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.find.tooltip_deadline_ms())
+            .into_iter()
+            .chain(self.shell.views.tab_tooltip_deadline_ms())
+            .min()
             .map(|deadline| Instant::now() + Duration::from_millis(deadline.saturating_sub(tooltip_now_ms)));
         if tooltip_due && let Some(window) = &self.shell.window {
             window.request_redraw();
@@ -3019,7 +3026,7 @@ impl Shell {
     /// open-documents field, a Settings/Shortcuts field, the command palette, a
     /// split pane, or the Find field. Returns `true` when the action was
     /// consumed and `dispatch` should stop.
-    fn route_text_and_clipboard(&mut self, el: &ActiveEventLoop, action: Action) -> bool {
+    fn route_text_and_clipboard(&mut self, action: Action) -> bool {
         if !self.palette.open
             && matches!(
                 action,
@@ -3141,48 +3148,57 @@ impl Shell {
             self.window.as_ref().unwrap().request_redraw();
             return true;
         }
-        // Clipboard and edit actions belong to the palette before either split pane.
-        if self.views_action(el, action) {
-            return true;
+        // Clipboard and edit actions belong to the palette, then to the focused
+        // Find field, before either split pane: with a split or comparison open,
+        // Ctrl+A, Ctrl+V or Ctrl+Z typed in the field edit the field, never the
+        // pane's document (LNX-EDIT-005).
+        self.find_field_text_action(action) || self.views_action(action)
+    }
+    /// Select All, Copy, Cut, Paste, Undo and Redo while the Find bar has focus
+    /// act on its focused field. Returns `true` when the field consumed the action.
+    fn find_field_text_action(&mut self, action: Action) -> bool {
+        let Some(workspace) = self.workspace.as_mut().filter(|workspace| workspace.find.has_focus()) else {
+            return false;
+        };
+        if !matches!(
+            action,
+            Action::SelectAll | Action::Copy | Action::Cut | Action::Paste | Action::Undo | Action::Redo
+        ) {
+            return false;
         }
-        if let Some(workspace) = &mut self.workspace
-            && workspace.find.has_focus()
-            && matches!(
-                action,
-                Action::SelectAll | Action::Copy | Action::Cut | Action::Paste | Action::Undo | Action::Redo
-            )
-        {
-            let field = workspace.find.active_field();
-            let platform = self.platform.as_ref().unwrap();
-            match action {
-                Action::SelectAll => field.select_all(),
-                Action::Undo => field.undo(false),
-                Action::Redo => field.undo(true),
-                Action::Paste => match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+        let field = workspace.find.active_field();
+        let platform = self.platform.as_ref();
+        match action {
+            Action::SelectAll => field.select_all(),
+            Action::Undo => field.undo(false),
+            Action::Redo => field.undo(true),
+            Action::Paste => {
+                match platform.map(|platform| platform.clipboard_text_within(bareline_ui::text_field::LIMIT)) {
                     // An empty or non-text clipboard is a no-op, not an error.
-                    Ok(None) => {}
-                    Ok(Some(value)) => {
+                    None | Some(Ok(None)) => {}
+                    Some(Ok(Some(value))) => {
                         if !field.commit(&value) {
                             workspace.message = Some("Find accepts a single line up to 16 KiB.".into());
                         }
                     }
-                    Err(error) => workspace.message = Some(error.message()),
-                },
-                Action::Copy | Action::Cut if !field.selected().is_empty() => {
-                    if platform.set_clipboard_text(field.selected()).is_ok() {
-                        if action == Action::Cut {
-                            field.insert("");
-                        }
-                    } else {
-                        workspace.message = Some("Clipboard write failed; selection was preserved.".into());
-                    }
+                    Some(Err(error)) => workspace.message = Some(error.message()),
                 }
-                _ => {}
             }
-            self.window.as_ref().unwrap().request_redraw();
-            return true;
+            Action::Copy | Action::Cut if !field.selected().is_empty() => {
+                if platform.is_some_and(|platform| platform.set_clipboard_text(field.selected()).is_ok()) {
+                    if action == Action::Cut {
+                        field.insert("");
+                    }
+                } else {
+                    workspace.message = Some("Clipboard write failed; selection was preserved.".into());
+                }
+            }
+            _ => {}
         }
-        false
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
     }
     fn dispatch(&mut self, el: &ActiveEventLoop, action: Action) {
         // A command may ask a question that answers later (Linux); it then runs
@@ -3201,7 +3217,7 @@ impl Shell {
         }
         self.sync_contributions();
         self.record_acknowledged_inputs();
-        if self.route_text_and_clipboard(el, action) {
+        if self.route_text_and_clipboard(action) {
             return;
         }
         match action {
@@ -3460,7 +3476,7 @@ impl ApplicationHandler for Shell {
         self.ledger.record(StartupAction::CreateWindow);
         let window = {
             let _window_phase = bareline_diagnostics::startup_span(StartupAction::CreateWindow);
-            match el.create_window(
+            match el.create_window(native::identify_window(
                 Window::default_attributes()
                     .with_title("Bareline")
                     .with_inner_size(LogicalSize::new(1200.0, 760.0))
@@ -3470,7 +3486,7 @@ impl ApplicationHandler for Shell {
                     // window is shown). We reveal it below, after accessibility and
                     // the renderer are ready.
                     .with_visible(false),
-            ) {
+            )) {
                 Ok(window) => window,
                 Err(e) => {
                     self.fail(el, e);
@@ -3540,6 +3556,7 @@ impl ApplicationHandler for Shell {
         {
             window.request_redraw();
         }
+        self.pointer_chrome_event(&event);
         if self.session.closing()
             && matches!(
                 event,
@@ -4351,11 +4368,18 @@ impl Shell {
         event: winit::event::KeyEvent,
         editor_bounds: bareline_renderer::Rect,
     ) {
-        if !self
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.find.has_focus())
-        {
+        // The Find bar keeps only its own keys; Ctrl+S, Ctrl+H, Ctrl+G, Ctrl+W,
+        // Ctrl+Tab and every other shortcut resolve as they do from the editor
+        // (LNX-EDIT-005).
+        if !self.workspace.as_ref().is_some_and(|workspace| {
+            workspace.find.has_focus()
+                && find_field_owns_key(
+                    workspace.find.focused,
+                    &event.logical_key,
+                    event.text.as_deref(),
+                    self.modifiers,
+                )
+        }) {
             let composing = self.workspace.as_ref().is_some_and(|workspace| {
                 (workspace.find.has_focus()
                     && (workspace.find.field.composing() || workspace.find.replacement.composing()))
@@ -4578,6 +4602,12 @@ impl Shell {
                     } else {
                         bareline_diagnostics::RendererState::Hardware
                     });
+                    // A fresh profile's editor font is one this system draws
+                    // (LNX-UI-003); settings resolved before now resolve again.
+                    if bareline_settings::set_default_font_family(native::default_font_family(&r)) {
+                        self.settings.invalidate_cache();
+                        self.applied_settings = None;
+                    }
                     self.renderer = Some(r);
                 }
                 Err(e) => {
@@ -4617,6 +4647,7 @@ impl Shell {
         // Producers enqueue typed notices once. Redraw only retires elapsed
         // transient notices; it never reinterprets status text as a new event.
         let toast_now = Instant::now();
+        self.retire_known_gap_notices();
         self.toasts.tick(toast_now);
         // Hand the renderer to the frame pipeline as a local so the draw
         // helpers can borrow it alongside disjoint `self` fields; it is
@@ -4632,6 +4663,15 @@ impl Shell {
             visible_rows,
         );
         self.renderer = Some(renderer);
+        // The details modal holds input only while its panel is on screen: a
+        // frame that skipped the panel closes it (LNX-UI-001).
+        if self
+            .modal
+            .is_some_and(|modal| modal.surface == modal::ModalSurface::NotificationDetails)
+            && !self.toasts.details_painted()
+        {
+            self.dismiss_modal(modal::ModalSurface::NotificationDetails);
+        }
         // Text range geometry needs the renderer's live layouts. Publish only
         // after restoring it; render_frame temporarily borrows it out of Shell.
         self.update_accessibility(size, scale);
@@ -5405,6 +5445,19 @@ impl Shell {
                 failures.push(("utilities layout", error.to_string()));
             }
         }
+        // Notifications stack above the message bar and a modal's action row,
+        // never over them (LNX-EDIT-011).
+        let editor = self.editor_bounds();
+        let floor = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.message_bar)
+            .map(|bar| editor.y + bar.y)
+            .into_iter()
+            .chain(self.recovery.actions_top().map(|top| editor.y + top))
+            .chain(self.settings.controller.footer_top())
+            .reduce(f32::min);
+        self.toasts.set_floor(floor);
         self.toasts.draw(
             renderer,
             size.width as f32 / scale,
@@ -5598,6 +5651,31 @@ impl Shell {
         {
             self.layer_failed(el, "menu", error);
         }
+    }
+}
+/// Whether a key pressed while the Find bar has focus is the bar's own: Escape,
+/// Enter, F3, Tab traversal, Space on a focused toggle and, in its text
+/// fields, typing and the caret and deletion keys. Other chords (Ctrl+S,
+/// Ctrl+H, Ctrl+G, Ctrl+W, Ctrl+Tab, Alt and function-key shortcuts) are not:
+/// they resolve through the keymap as from the editor, as Notepad++'s
+/// shortcuts work over its Find dialog. Clipboard, undo and select-all
+/// commands then act on the focused field (`route_text_and_clipboard`).
+fn find_field_owns_key(text_focused: bool, key: &Key, text: Option<&str>, modifiers: ModifiersState) -> bool {
+    let (ctrl, alt) = (modifiers.control_key(), modifiers.alt_key());
+    match key {
+        Key::Named(NamedKey::Escape | NamedKey::Enter | NamedKey::F3) => true,
+        Key::Named(NamedKey::Tab) => !ctrl,
+        Key::Named(NamedKey::Space) => !ctrl || alt,
+        Key::Named(
+            NamedKey::ArrowLeft
+            | NamedKey::ArrowRight
+            | NamedKey::Home
+            | NamedKey::End
+            | NamedKey::Backspace
+            | NamedKey::Delete,
+        ) => text_focused && !alt,
+        // Typed text, AltGr (Ctrl+Alt) included; a bare Alt chord is a shortcut.
+        _ => text_focused && ctrl == alt && text.is_some_and(|text| !text.chars().any(char::is_control)),
     }
 }
 fn find_action(action: bareline_app::find::FindAction) -> Action {

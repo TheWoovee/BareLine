@@ -1407,6 +1407,33 @@ pub struct EffectiveSettings {
     /// bareline-ui); empty means "use defaults". Never shown as a settings row.
     pub dock_widths: String,
 }
+/// The editor font a profile uses until the user picks one, as the running
+/// system draws it: the shell sets it from its platform seam once the renderer
+/// knows the installed faces (Cascadia Mono on Windows, the software
+/// renderer's resolved monospace face on Linux and macOS). Until then, and in
+/// tests, it is Cascadia Mono (LNX-UI-003).
+static DEFAULT_FONT_FAMILY: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+/// The default before the shell names one.
+const FALLBACK_FONT_FAMILY: &str = "Cascadia Mono";
+/// Name the system's default editor font (`None` restores the fallback).
+/// True when it changed, so cached settings resolve again.
+pub fn set_default_font_family(family: Option<String>) -> bool {
+    let family = family.filter(|family| !family.trim().is_empty());
+    let mut current = DEFAULT_FONT_FAMILY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = *current != family;
+    *current = family;
+    changed
+}
+/// The editor font a profile uses until the user picks one.
+pub fn default_font_family() -> String {
+    DEFAULT_FONT_FAMILY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .unwrap_or_else(|| FALLBACK_FONT_FAMILY.into())
+}
 impl Default for EffectiveSettings {
     fn default() -> Self {
         Self {
@@ -1427,7 +1454,7 @@ impl Default for EffectiveSettings {
             workspace_preferences_enabled: false,
             renderer: RendererMode::Software,
             editor_font_size_pt: 12.0,
-            editor_font_family: "Cascadia Mono".into(),
+            editor_font_family: default_font_family(),
             theme: ThemeMode::System,
             theme_overrides: BTreeMap::new(),
             tab_width: 4,

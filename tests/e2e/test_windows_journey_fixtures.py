@@ -121,7 +121,7 @@ class WindowsFixtures(unittest.TestCase):
                  dict(event='qa_close_command', ticket=1, stage='deferred', detail='document-busy')]
         menus = dict(window_enabled=True, disabled_top_level=[], exit_enabled=True)
         values = {'find focus announced': dict(name='Find', focus=True, focused_is_field=True, text=regressions.QUERY),
-                  'find count announced': dict(name='Find results: 1 matches'), 'find escape editor focus': dict(focus=True),
+                  'find count announced': dict(name='Find results: 1 match'), 'find escape editor focus': dict(focus=True),
                   'close prompt cancel': dict(owned=True), 'close prompt discard': dict(owned=True),
                   'menus after cancel': menus, 'menus after discard': dict(menus),
                   'untitled kept after cancel': dict(text=regressions.UNTITLED), 'untitled discarded': dict(modified_tabs=[]),

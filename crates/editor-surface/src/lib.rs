@@ -2767,6 +2767,35 @@ impl EditorSurface {
         }
         Ok(())
     }
+    /// The logical line whose number is under `p` in the line-number column,
+    /// left of the fold targets, or `None` elsewhere. A press there selects
+    /// the line and a drag extends by lines, as in Notepad++ (LNX-UI-012).
+    pub fn number_column_line(&self, p: Point) -> Option<usize> {
+        if self.busy() || self.composition.is_some() || p.x < 0.0 || p.x >= self.text_left() - 26.0 || p.y < self.top()
+        {
+            return None;
+        }
+        let row = (((p.y - self.top()) as f64 + self.scroll_y) / self.line_height() as f64).floor() as usize;
+        let line = self.logical_line(row);
+        (line < self.snapshot.line_count()).then_some(line)
+    }
+    /// Whole lines from `anchor` to `line`, each with its line ending; the
+    /// caret is at the `line` end. `None` past the document.
+    pub fn whole_lines(&self, anchor: usize, line: usize) -> Option<Selection> {
+        let first = self.snapshot.line_range(anchor.min(line)).ok()?;
+        let last = self.snapshot.line_range(anchor.max(line)).ok()?;
+        Some(if line >= anchor {
+            Selection {
+                anchor: first.start.0,
+                caret: last.end.0,
+            }
+        } else {
+            Selection {
+                anchor: last.end.0,
+                caret: first.start.0,
+            }
+        })
+    }
     /// The document byte offset under `p`, without moving the caret, or `None`
     /// off the laid-out text. Finds the misspelled word under a right-click.
     pub fn offset_at(&self, backend: &impl TextBackend, p: Point) -> Result<Option<usize>, LayoutError> {
@@ -3438,7 +3467,7 @@ impl EditorSurface {
         self.capture_scroll_anchor();
         self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
-            rect(48.0, self.top(), 1.0, body_height),
+            rect(self.gutter_divider_x(), self.top(), 1.0, body_height),
             self.theme.ui.border,
         ));
         if !self.external_scrollbar && self.needs_vertical_scrollbar(body_height) {
@@ -5467,5 +5496,80 @@ mod session_language_tests {
         assert_eq!(second.language_override, Some(bareline_syntax::Language::PlainText));
         assert!(second.error.is_some());
         assert_eq!(first.snapshot().len(), 4);
+    }
+}
+#[cfg(test)]
+mod gutter_tests {
+    use super::*;
+    use bareline_document::{Budget, Document};
+
+    fn view(text: &str) -> EditorSurface {
+        let document = Document::from_utf8(text, Budget::new(1 << 24), Budget::new(1 << 24)).unwrap();
+        EditorSurface::loading(document.snapshot(), Arc::new(|| {}))
+    }
+
+    /// LNX-UI-016 and LNX-EDIT-012: the divider was drawn at x = 48 whatever
+    /// the number column's width, and the text began a whole em per digit to
+    /// its right.
+    #[test]
+    fn the_gutter_divider_follows_the_number_column_and_the_text_follows_it() {
+        for (lines, digits) in [(9usize, 1u32), (5_001, 4), (600_010, 6), (3_730_000, 7)] {
+            let view = view(&"\n".repeat(lines - 1));
+            assert_eq!(view.snapshot.line_count(), lines);
+            // DejaVu Sans has the widest numerals of the faces the renderers
+            // draw line numbers with (0.64 em).
+            let numbers_end = 14.0 + digits as f32 * view.font_pixels * 0.64;
+            let divider = view.gutter_divider_x();
+            assert!(
+                divider > numbers_end,
+                "{digits} digits: divider {divider} crosses {numbers_end}"
+            );
+            // The fold target (26 px) lies between the divider and the text.
+            assert!(divider + 26.0 < view.text_left(), "{digits} digits");
+            // No wide blank band: the text starts within a fold target and a
+            // small gap of the widest numerals.
+            assert!(
+                view.text_left() <= LEFT.max(numbers_end + 26.0 + 4.0 + digits as f32 * view.font_pixels * 0.1),
+                "{digits} digits: text at {}",
+                view.text_left()
+            );
+        }
+        // 600 010 lines: numbers are no longer pushed to x = 136.
+        assert!(view(&"\n".repeat(600_009)).text_left() < 120.0);
+    }
+
+    /// LNX-UI-012: a press in the line-number column names the line under it,
+    /// and whole-line selections include the line ending in either direction.
+    #[test]
+    fn number_column_presses_select_whole_lines() {
+        let view = view("alpha\nbeta\ngamma\n");
+        assert!(!view.busy());
+        let row = |line: f32| view.top() + view.line_height() * (line + 0.5);
+        assert_eq!(view.number_column_line(Point { x: 20.0, y: row(1.0) }), Some(1));
+        assert_eq!(view.number_column_line(Point { x: 2.0, y: row(2.0) }), Some(2));
+        // The fold targets, the text, the tab strip and past the end are not it.
+        let fold = view.text_left() - 10.0;
+        assert_eq!(view.number_column_line(Point { x: fold, y: row(1.0) }), None);
+        assert_eq!(
+            view.number_column_line(Point {
+                x: view.text_left() + 5.0,
+                y: row(1.0)
+            }),
+            None
+        );
+        assert_eq!(
+            view.number_column_line(Point {
+                x: 20.0,
+                y: view.top() - 1.0
+            }),
+            None
+        );
+        assert_eq!(view.number_column_line(Point { x: 20.0, y: row(9.0) }), None);
+        assert_eq!(view.whole_lines(1, 1), Some(Selection { anchor: 6, caret: 11 }));
+        assert_eq!(view.whole_lines(0, 2), Some(Selection { anchor: 0, caret: 17 }));
+        assert_eq!(view.whole_lines(2, 0), Some(Selection { anchor: 17, caret: 0 }));
+        // The last line, after the final line ending, is empty.
+        assert_eq!(view.whole_lines(3, 3), Some(Selection { anchor: 17, caret: 17 }));
+        assert_eq!(view.whole_lines(4, 4), None);
     }
 }

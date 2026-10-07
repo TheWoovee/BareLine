@@ -204,6 +204,98 @@ pub(super) struct ViewChromeRuntime {
     always_on_top: bool,
     /// Plain drags and Shift+arrow keys select rectangles, as Alt does.
     pub(super) column_mode: bool,
+    /// The pointer shape last set on the window, so moves that keep it make
+    /// no call (LNX-UI-015).
+    cursor: Option<winit::window::CursorIcon>,
+}
+
+impl Shell {
+    /// The pointer's shape at window point `point`, for an editor area of
+    /// `editor`: a resize arrow over the side panel's splitter, the bottom
+    /// panel's sash and the split divider (and while one is dragged), an
+    /// I-beam over a pane's text, and the arrow elsewhere, as in Notepad++
+    /// (LNX-UI-015).
+    pub(super) fn pointer_cursor_in(&self, point: Point, editor: bareline_renderer::Rect) -> winit::window::CursorIcon {
+        use winit::window::CursorIcon;
+        if self.modal.is_some()
+            || self.palette.open
+            || self.settings.controller.open
+            || self.extensions.open
+            || self.power.open
+            || self.toasts.contains(point)
+        {
+            return CursorIcon::Default;
+        }
+        if self.panels.left_splitter_at(point) {
+            return CursorIcon::ColResize;
+        }
+        let local = Point {
+            x: point.x - editor.x,
+            y: point.y - editor.y,
+        };
+        let dock = self.dock.current_layout();
+        if self.dock.is_dragging() || dock.is_some_and(|layout| layout.splitter.contains(local)) {
+            return CursorIcon::RowResize;
+        }
+        if let Some(icon) = self.views.splitter_cursor(local) {
+            return icon;
+        }
+        if !editor.contains(point) || dock.is_some_and(|layout| layout.outer.contains(local)) {
+            return CursorIcon::Default;
+        }
+        let size = (editor.width, editor.height);
+        if self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| self.views.over_text(workspace, self.app.active, local, size))
+        {
+            CursorIcon::Text
+        } else {
+            CursorIcon::Default
+        }
+    }
+    /// The pointer's share of every window event: its shape (LNX-UI-015) and
+    /// the hovered tab's tooltip, which waits the Find bar's hover delay and
+    /// hides on a press or when the pointer leaves (LNX-UI-014).
+    pub(super) fn pointer_chrome_event(&mut self, event: &WindowEvent) {
+        let mut redraw = false;
+        if let WindowEvent::CursorMoved { position, .. } = event
+            && let Some(window) = &self.window
+        {
+            let logical = position.to_logical::<f32>(window.scale_factor());
+            let point = Point {
+                x: logical.x,
+                y: logical.y,
+            };
+            self.update_cursor(point);
+            let editor = self.editor_bounds();
+            let local = Point {
+                x: point.x - editor.x,
+                y: point.y - editor.y,
+            };
+            redraw |= self.views.hover_tabs(local, super::tooltip_clock_ms());
+        }
+        if matches!(
+            event,
+            WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) | WindowEvent::MouseInput { .. }
+        ) {
+            redraw |= self.views.dismiss_tab_tooltip();
+        }
+        if redraw && let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+    /// Give the window the pointer shape for window point `point`; only a
+    /// change reaches the window.
+    pub(super) fn update_cursor(&mut self, point: Point) {
+        let icon = self.pointer_cursor_in(point, self.editor_bounds());
+        if self.view_chrome.cursor != Some(icon)
+            && let Some(window) = &self.window
+        {
+            window.set_cursor(icon);
+            self.view_chrome.cursor = Some(icon);
+        }
+    }
 }
 
 impl Shell {
@@ -509,5 +601,62 @@ mod tests {
                 edge_column: Some(100),
             }
         );
+    }
+
+    /// LNX-UI-015: the pointer was the arrow everywhere.
+    #[test]
+    fn pointer_shapes_follow_text_dividers_and_chrome() {
+        use winit::window::CursorIcon;
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        shell.workspace = Some(workspace);
+        let editor = bareline_ui::rect(0.0, 0.0, 1000.0, 700.0);
+        let at = |shell: &Shell, x: f32, y: f32| shell.pointer_cursor_in(Point { x, y }, editor);
+        assert_eq!(at(&shell, 300.0, 200.0), CursorIcon::Text, "text");
+        assert_eq!(at(&shell, 10.0, 200.0), CursorIcon::Default, "line numbers");
+        assert_eq!(at(&shell, 300.0, 10.0), CursorIcon::Default, "tab strip");
+        assert_eq!(at(&shell, 995.0, 200.0), CursorIcon::Default, "scroll bar");
+        assert_eq!(at(&shell, 300.0, 690.0), CursorIcon::Default, "status strip");
+        // A notification over the text keeps the arrow.
+        shell.toasts.enqueue(
+            super::toast::Notification::new(
+                "cursor",
+                1,
+                bareline_ui::theme::ToastLevel::Error,
+                super::toast::NotificationKind::Outcome,
+                "Over the text",
+                None,
+                None,
+                super::toast::NotificationLifetime::Persistent,
+            ),
+            std::time::Instant::now(),
+        );
+        shell.toasts.draw(
+            &mut bareline_renderer_recording::RecordingBackend::default(),
+            1000.0,
+            700.0,
+            Default::default(),
+            &mut Vec::new(),
+        );
+        let toast = shell.toasts.accessibility()[0].bounds;
+        assert_eq!(
+            at(&shell, toast.x + toast.width / 2.0, toast.y + toast.height / 2.0),
+            CursorIcon::Default
+        );
+        // A split's divider resizes its panes.
+        shell.views.test_set_splitter(bareline_ui::rect(497.0, 0.0, 6.0, 676.0));
+        assert_eq!(at(&shell, 499.0, 300.0), CursorIcon::ColResize);
+        shell
+            .views
+            .test_set_splitter(bareline_ui::rect(0.0, 330.0, 1000.0, 6.0));
+        assert_eq!(at(&shell, 300.0, 332.0), CursorIcon::RowResize);
+        // A modal surface owns the pointer.
+        shell.activate_modal(super::modal::ModalSurface::Goto);
+        assert_eq!(at(&shell, 300.0, 200.0), CursorIcon::Default);
     }
 }

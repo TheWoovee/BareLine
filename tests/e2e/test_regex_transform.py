@@ -59,7 +59,7 @@ class RegexTransformTests(unittest.TestCase):
             with self.assertRaises(ValueError): regex.validate_observations(PASS, data, self.path)
 
     def test_incomplete_wrong_count_and_failed_apply_rejected(self):
-        for name in ['Find results: 2+ matches', 'Find results: 1 matches', 'Find results: Invalid query']:
+        for name in ['Find results: 2+ matches', 'Find results: 1 match', 'Find results: Invalid query']:
             data=records(self.path);next(r for r in data if r['stage']=='regex match count')['details']['name']=name
             with self.assertRaises(ValueError): regex.validate_observations(PASS, data, self.path)
         data=records(self.path)

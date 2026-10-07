@@ -30,7 +30,7 @@ function Run-Macro {
   Focus-Editor;Key 79 $true;File-Dialog $script:saved;Key 36 $true
   Regex-Menu 'Start Macro Recording';Focus-Editor;Text $script:macroFixture.prefix
   Regex-Menu 'Literal Search Mode';Regex-Field 'Find' $script:macroFixture.query 'macro query'
-  $null=Regex-Status 'Find results: 1 matches' 'macro search complete';Key 13;Key 27
+  $null=Regex-Status 'Find results: 1 match' 'macro search complete';Key 13;Key 27
   Focus-Editor;Text $script:macroFixture.replacement
   Expect-Text $script:macroFixture.final 'macro recorded result'
   Regex-Menu 'Stop Macro Recording';Regex-Menu 'Save Macros'
