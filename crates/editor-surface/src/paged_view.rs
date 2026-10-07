@@ -1443,6 +1443,14 @@ impl PagedEditorSurface {
         Ok(())
     }
     fn project_global_folds(&mut self) {
+        // Projecting the folds again refreshes the window's hidden lines, which
+        // drops a pending reveal; the edit or navigation that asked for it still
+        // owes it, or Ctrl+End and typing left the caret off screen (LNX-EDIT-006).
+        let reveal = self.surface.reveal_caret;
+        self.project_window_folds();
+        self.surface.reveal_caret = reveal;
+    }
+    fn project_window_folds(&mut self) {
         self.queue_fold_projection();
         if self.mapped.is_some() || self.mapping_job.is_some() {
             self.project_mapped_fold_gutter();
@@ -2048,7 +2056,12 @@ impl PagedEditorSurface {
             .iter()
             .filter_map(|(line, count)| self.local_line_for_global(*line).map(|line| (line, *count)))
             .collect();
-        self.surface.set_view_spacers(&rows)
+        // Restating the spacers drops a pending reveal, which the edit or
+        // navigation that asked for it still owes (LNX-EDIT-006).
+        let reveal = self.surface.reveal_caret;
+        let result = self.surface.set_view_spacers(&rows);
+        self.surface.reveal_caret = reveal;
+        result
     }
     fn ensure_viewport_mapping(&mut self) {
         if self.viewport_valid
@@ -3484,6 +3497,9 @@ impl PagedEditorSurface {
         // A folded view shows its text through a projection that reaches past
         // hidden bodies; its window is read as before (LNX-EDIT-006).
         let unfolded = self.mapped.is_none();
+        // The end of the window shown now, which typing may have grown past a
+        // full window to cover the caret (LNX-EDIT-006).
+        let shown_end = current_start + self.surface.snapshot.len();
         let current_caret = self.global_selections.primary().caret;
         let current_selections = self.global_selections.clone();
         let view_identity = self.snapshot.identity_token();
@@ -4055,6 +4071,14 @@ impl PagedEditorSurface {
                             } else {
                                 count = count.max(reach);
                             }
+                        } else if unfolded
+                            && start == current_start
+                            && current_caret > start + WINDOW
+                            && current_caret <= shown_end
+                        {
+                            // Reading the window already shown again (a save, a
+                            // peer refresh) keeps covering the caret it grew over.
+                            count = current_caret - start + EDIT_ECHO_TAIL;
                         }
                         let window = read_window(
                             &mut opened,
@@ -4268,11 +4292,11 @@ impl PagedEditorSurface {
                         // The commit's window shows its text without folds until
                         // the projection queued below lands; carried folds keep
                         // their state meanwhile (PED-07).
-                        // A commit that keeps an unmapped window's start keeps its
-                        // scroll too: the text stays where it was and only scrolls
-                        // when the caret leaves the screen (LNX-EDIT-006).
-                        let keep_scroll =
-                            moves_selection && self.mapped.is_none() && window.range().start.0 == self.viewport_start;
+                        // A commit or read that keeps an unmapped window's start
+                        // keeps its scroll too: the text stays where it was and an
+                        // edit only scrolls when the caret leaves the screen
+                        // (LNX-EDIT-006).
+                        let keep_scroll = self.mapped.is_none() && window.range().start.0 == self.viewport_start;
                         self.mapped = None;
                         self.mapping_job = None;
                         self.reveal_mapping = false;
@@ -4288,12 +4312,11 @@ impl PagedEditorSurface {
                             self.snap_selection_to_window();
                         }
                         self.project_global_selection();
-                        if keep_scroll && self.caret_in_viewport() {
-                            self.surface.reveal_caret = true;
-                        }
-                        if std::mem::take(&mut self.reveal_after_read) && self.caret_in_viewport() {
-                            self.surface.reveal_caret = true;
-                        }
+                        // An edit, and a read that navigation asked for, reveal the
+                        // caret once the window and its folds are in place below
+                        // (LNX-EDIT-006).
+                        let after_read = std::mem::take(&mut self.reveal_after_read);
+                        let reveal = (moves_selection || after_read) && self.caret_in_viewport();
                         if let Some((mapping, fraction, x)) = self.pending_scroll_mapping.take()
                             && mapping.offset == self.viewport_start
                         {
@@ -4305,6 +4328,9 @@ impl PagedEditorSurface {
                         let _ = self.project_global_spacers();
                         self.project_global_folds();
                         self.project_search_marks();
+                        if reveal {
+                            self.surface.reveal_caret = true;
+                        }
                         // Line-count progress belongs to the status bar's size group
                         // (refresh_gutter_accuracy), never to text painted over the
                         // document (UI-06); a fresh window clears stale notices.
@@ -7797,21 +7823,45 @@ mod peer_tests {
             view.global_selection(),
             (TextOffset(length + 3), TextOffset(length + 3))
         );
+        // Reading the same window again (a save, a peer refresh) keeps the
+        // typed text, the caret and the scroll.
+        view.request_viewport(start).unwrap();
+        drain(&mut view);
+        assert_eq!(view.viewport_start(), start);
+        assert!(view.caret_in_viewport());
+        assert_eq!(last_displayed_line(&view), ("ABC".to_owned(), 3));
+        assert_eq!(view.surface.scroll_y, 120.0);
         assert!(document_text(&view, &budget).ends_with("abc\nABC"));
         drop(view);
         remove_fixture_root(&root);
+    }
+    /// Draws the view at 800x400 and reports whether the caret is on screen.
+    fn caret_on_screen(
+        view: &mut PagedEditorSurface,
+        backend: &mut bareline_renderer_recording::RecordingBackend,
+    ) -> bool {
+        view.surface.draw(backend, 800.0, 400.0, &mut Vec::new()).unwrap();
+        let caret = TextOffset(view.surface.selection.caret);
+        view.surface.visible_text.start <= caret && caret <= view.surface.visible_text.end
     }
     /// LNX-EDIT-006: the same through staged power input, as the composition
     /// root (power_stream.rs) drives every paged keystroke: prepare, apply,
     /// install the prepared selections, acknowledge. The window stays put; it is
     /// never re-requested at the caret, which hid the first typed character.
+    /// Its thousands of lines do not fit the screen: Ctrl+End scrolls to the
+    /// caret, and each keystroke keeps it there without moving the text.
     #[test]
     fn staged_typing_past_a_full_window_echoes_every_character_in_place() {
         let (root, mut view, budget) = paged_fixture("echo-staged", &"abc\n".repeat(40_000));
         let options = staging(&root, &budget);
         let length = view.snapshot().len();
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        assert!(caret_on_screen(&mut view, &mut backend));
         view.enqueue(Input::DocumentEnd(false));
         drain(&mut view);
+        assert!(caret_on_screen(&mut view, &mut backend), "Ctrl+End shows the caret");
+        let scroll = view.surface.scroll_y;
+        assert!(scroll > 0.0);
         let start = view.viewport_start();
         view.enable_power_input();
         for (typed, shown) in [("A", "A"), ("B", "AB"), ("C", "ABC")] {
@@ -7841,6 +7891,8 @@ mod peer_tests {
             assert_eq!(view.viewport_start(), start);
             assert!(view.caret_in_viewport());
             assert_eq!(last_displayed_line(&view), (shown.to_owned(), shown.len()));
+            assert!(caret_on_screen(&mut view, &mut backend), "typed {shown}");
+            assert_eq!(view.surface.scroll_y, scroll);
         }
         assert_eq!(view.global_selection().1, TextOffset(length + 3));
         assert!(document_text(&view, &budget).ends_with("abc\nABC"));
