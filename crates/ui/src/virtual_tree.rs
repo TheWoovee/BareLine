@@ -369,7 +369,9 @@ impl Tree {
             if selected {
                 crate::widgets::paint_selected_row(bounds, theme, ops);
             }
-            let x = bounds.x + (path.len() - 1) as f32 * 16.0;
+            // Rows start 8 px in, so a root's expand chevron is not cut by the
+            // tree's left edge and its focus ring.
+            let x = bounds.x + 8.0 + (path.len() - 1) as f32 * 16.0;
             if item.expandable {
                 text(
                     ops,
