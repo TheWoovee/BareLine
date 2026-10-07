@@ -224,9 +224,23 @@ impl EditorSurface {
             .saturating_add(lines)
             .max(1);
         let digits = largest.ilog10() + 1;
-        // One em per numeral conservatively allows supported fonts, with a
-        // separate 26-pixel fold target after the number column.
-        crate::LEFT.max(14.0 + digits as f32 * self.font_pixels + 26.0)
+        // Numbers start at x = 14; a 4-pixel gap and the 26-pixel fold target
+        // follow the number column.
+        crate::LEFT.max(14.0 + self.number_column_width(digits) + 4.0 + 26.0)
+    }
+    /// Width of `digits` numerals in the line-number column. Numbers are
+    /// immediate text at the editor's pixel size, whose digits are narrower
+    /// than 0.7 em in every face the renderers pick for it (DejaVu Sans Mono
+    /// 0.60, Segoe UI 0.55, DejaVu Sans 0.64), so a 6- or 7-digit number fits
+    /// without the wide blank band a whole em per digit left (LNX-EDIT-012).
+    fn number_column_width(&self, digits: u32) -> f32 {
+        digits as f32 * self.font_pixels * 0.7
+    }
+    /// Where the gutter's divider is drawn: in the gap between the number
+    /// column and the fold targets, so it moves with the number column as it
+    /// grows and never crosses a numeral or a fold glyph (LNX-UI-016).
+    pub fn gutter_divider_x(&self) -> f32 {
+        self.text_left() - 26.0 - 2.0
     }
 
     /// Zero-based source line at a local shaped position. At a fold seam the

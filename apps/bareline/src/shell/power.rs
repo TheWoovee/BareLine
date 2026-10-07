@@ -116,7 +116,12 @@ pub(super) struct PowerRuntime {
     global_target: Option<bareline_document::paged::PagedSnapshot>,
     rectangle_drag: Option<(usize, usize)>,
     selection_drag: Option<usize>,
-    last_click: Option<(usize, Instant, Point)>,
+    /// The last press on a pane's text: pane, time, point and how many
+    /// presses in a row landed there (1 to 3; LNX-UI-012).
+    last_click: Option<(usize, Instant, Point, u8)>,
+    /// A press in a pane's line-number column: the pane and the line it
+    /// selected, which a drag extends from by whole lines.
+    line_drag: Option<(usize, usize)>,
     paged_rectangle_drag: Option<(usize, usize, bareline_document::paged::PagedSnapshot, usize)>,
     drag: Option<(
         usize,
@@ -146,6 +151,7 @@ impl Default for PowerRuntime {
         Self {
             selection_drag: None,
             last_click: None,
+            line_drag: None,
             drag_runtime: drag::Runtime::default(),
             paged_rectangle_drag: None,
             global_target: None,
@@ -581,6 +587,7 @@ impl Shell {
         if matches!(event, WindowEvent::Focused(false)) {
             self.power.selection_drag = None;
             self.power.last_click = None;
+            self.power.line_drag = None;
             self.power_drag_cancel();
         }
         if matches!(event,WindowEvent::KeyboardInput{event,..} if event.state==ElementState::Pressed&&event.logical_key==Key::Named(NamedKey::Escape))
@@ -888,7 +895,7 @@ impl Shell {
                 button: MouseButton::Left,
                 ..
             }
-        ) && self.power.selection_drag.take().is_some()
+        ) && (self.power.selection_drag.take().is_some() | self.power.line_drag.take().is_some())
         {
             return true;
         }
@@ -907,16 +914,20 @@ impl Shell {
             y: self.pointer.y - frame.y,
         };
         let split = self.views.secondary.is_some();
-        let pane = self.power.selection_drag.or_else(|| {
-            if split {
-                self.views
-                    .bounds
-                    .iter()
-                    .position(|bounds| bounds.is_some_and(|b| b.contains(point)))
-            } else {
-                Some(0)
-            }
-        });
+        let pane = self
+            .power
+            .selection_drag
+            .or(self.power.line_drag.map(|(pane, _)| pane))
+            .or_else(|| {
+                if split {
+                    self.views
+                        .bounds
+                        .iter()
+                        .position(|bounds| bounds.is_some_and(|b| b.contains(point)))
+                } else {
+                    Some(0)
+                }
+            });
         let Some(pane) = pane else {
             return self.power_drag_outside(event);
         };
@@ -961,8 +972,7 @@ impl Shell {
                     .as_ref()
                     .and_then(|workspace| workspace.editors.get(self.app.active))
             };
-            let top_inset = target.map(|editor| editor.viewport().top_inset);
-            if !top_inset.is_some_and(|top_inset| in_text_area(local, bounds, top_inset)) {
+            if !target.is_some_and(|editor| in_text_area(local, bounds, editor.viewport())) {
                 return false;
             }
             self.column_press_handoff(pane);
@@ -971,6 +981,36 @@ impl Shell {
             && !self.modifiers.control_key()
             && let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer)
         {
+            if let Some((drag_pane, anchor)) = self.power.line_drag
+                && drag_pane == pane
+                && matches!(event, WindowEvent::CursorMoved { .. })
+            {
+                // A drag from the line-number column extends by whole lines,
+                // over the text as well (LNX-UI-012).
+                let editor = if pane == 1 {
+                    self.views.secondary.as_mut()
+                } else {
+                    workspace.editors.get_mut(self.app.active)
+                };
+                if let Some(editor) = editor {
+                    let surface = editor.viewport();
+                    let column = Point {
+                        x: 0.0,
+                        y: local.y.max(surface.top_inset + bareline_ui::TAB_HEIGHT),
+                    };
+                    if let Some(lines) = surface
+                        .number_column_line(column)
+                        .and_then(|line| surface.whole_lines(anchor, line))
+                    {
+                        editor.enqueue(Input::SetCaret(lines.anchor, false));
+                        editor.enqueue(Input::SetCaret(lines.caret, true));
+                    }
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return true;
+            }
             if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
                 let editor = if pane == 1 {
                     self.views.secondary.as_mut()
@@ -990,26 +1030,91 @@ impl Shell {
             } else {
                 workspace.editors.get(self.app.active)
             };
-            if matches!(
+            let pressed = matches!(
                 event,
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
                     button: MouseButton::Left,
                     ..
                 }
-            ) && let Some(target) = target
-                && in_text_area(local, bounds, target.viewport().top_inset)
+            );
+            // A press on a line number selects that line, Shift+press extends
+            // the selection by lines, and a drag extends it (Notepad++).
+            if pressed
+                && let Some(target) = target.filter(|target| !target.paged())
+                && local.y < bounds.height - 24.0
+                && let Some(line) = target.viewport().number_column_line(local)
+            {
+                let surface = target.viewport();
+                let anchor = if self.modifiers.shift_key() {
+                    surface
+                        .snapshot()
+                        .line_at(bareline_document::TextOffset(surface.selection.anchor))
+                        .unwrap_or(line)
+                } else {
+                    line
+                };
+                let lines = surface.whole_lines(anchor, line);
+                self.views.activate(workspace, &mut self.app, pane as u32);
+                let editor = if pane == 1 {
+                    self.views.secondary.as_mut()
+                } else {
+                    workspace.editors.get_mut(self.app.active)
+                };
+                if let (Some(editor), Some(lines)) = (editor, lines) {
+                    editor.enqueue(Input::SetCaret(lines.anchor, false));
+                    editor.enqueue(Input::SetCaret(lines.caret, true));
+                }
+                self.power.line_drag = Some((pane, anchor));
+                self.power.last_click = None;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return true;
+            }
+            if pressed
+                && let Some(target) = target
+                && in_text_area(local, bounds, target.viewport())
                 && let Some((offset, _, _)) = target.power_hit_position(renderer, local)
             {
                 let now = Instant::now();
-                let double = self.power.last_click.is_some_and(|(previous, time, point)| {
-                    previous == pane
-                        && now.duration_since(time) <= Duration::from_millis(500)
-                        && (point.x - local.x).abs() <= 4.0
-                        && (point.y - local.y).abs() <= 4.0
-                });
-                self.power.last_click = Some((pane, now, local));
-                if double {
+                let count = match self.power.last_click {
+                    Some((previous, time, point, count))
+                        if previous == pane
+                            && now.duration_since(time) <= Duration::from_millis(500)
+                            && (point.x - local.x).abs() <= 4.0
+                            && (point.y - local.y).abs() <= 4.0 =>
+                    {
+                        count % 3 + 1
+                    }
+                    _ => 1,
+                };
+                self.power.last_click = Some((pane, now, local, count));
+                // The third press in a row selects the whole line with its
+                // line ending, as in Notepad++ (LNX-UI-012).
+                if count == 3 && !target.paged() {
+                    let lines = target
+                        .snapshot()
+                        .line_at(bareline_document::TextOffset(offset))
+                        .ok()
+                        .and_then(|line| target.viewport().whole_lines(line, line));
+                    self.views.activate(workspace, &mut self.app, pane as u32);
+                    let editor = if pane == 1 {
+                        self.views.secondary.as_mut()
+                    } else {
+                        workspace.editors.get_mut(self.app.active)
+                    };
+                    if let (Some(editor), Some(lines)) = (editor, lines) {
+                        editor.enqueue(Input::SetCaret(lines.anchor, false));
+                        editor.enqueue(Input::SetCaret(lines.caret, true));
+                    }
+                    self.power.selection_drag = None;
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return true;
+                }
+                if count == 2 {
                     let seed = bareline_editor_surface::Selection {
                         anchor: offset,
                         caret: offset,
@@ -1209,10 +1314,10 @@ impl Shell {
 /// Whether `local`, relative to a pane of `bounds`, lies on the pane's text
 /// rather than its tab strip, gutter, scroll bar or status strip: where a plain
 /// click places the caret and a column selection mode press starts a rectangle.
-fn in_text_area(local: Point, bounds: Rect, top_inset: f32) -> bool {
-    local.y >= bareline_ui::TAB_HEIGHT + top_inset
+fn in_text_area(local: Point, bounds: Rect, editor: &bareline_editor_surface::EditorSurface) -> bool {
+    local.y >= bareline_ui::TAB_HEIGHT + editor.top_inset
         && local.y < bounds.height - 24.0
-        && local.x >= 48.0
+        && local.x >= editor.text_left()
         && local.x < bounds.width - 12.0
 }
 /// Paste `rows` rows of `text` as a column block. An active rectangle is
