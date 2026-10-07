@@ -1782,6 +1782,46 @@ mod tests {
         (views, workspace, operations)
     }
 
+    #[test]
+    fn a_split_frame_drops_the_single_view_message_bar() {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        workspace.message = Some("Saved".into());
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        views.install_views(&mut workspace);
+        let mut app = App::default();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let mut draw = |views: &mut ViewsRuntime, workspace: &mut Workspace, app: &mut App| {
+            views
+                .draw(
+                    workspace,
+                    app,
+                    &mut renderer,
+                    1100.0,
+                    700.0,
+                    &mut Vec::new(),
+                    std::sync::Arc::new(|| {}),
+                )
+                .unwrap();
+        };
+        draw(&mut views, &mut workspace, &mut app);
+        assert!(!views.open());
+        assert!(workspace.message_bar.is_some(), "the single view draws the message bar");
+
+        views.split(&mut workspace, 1, Orientation::Vertical);
+        views.activate(&mut workspace, &mut app, 1);
+        draw(&mut views, &mut workspace, &mut app);
+
+        assert!(views.open(), "the frame must be a split frame");
+        assert_eq!(workspace.message_bar, None, "no stale bar floors the toasts");
+    }
+
     /// Every tab hit sits in its own pane's strip, once; nothing is hit-tested
     /// or exposed in a strip that was not drawn for a pane.
     fn assert_hits_only_in_pane_strips(views: &ViewsRuntime) {
@@ -5059,6 +5099,9 @@ impl ViewsRuntime {
             self.status_labels = Self::drawn_status_labels(workspace, app.active, &ops[start..], height);
             return Ok(caret);
         };
+        // The split frame draws no message bar, so a rectangle left by an
+        // earlier single-view frame must not keep lifting toasts (LNX-EDIT-011).
+        workspace.message_bar = None;
         self.refresh_find_to_active(workspace, notify.clone());
         let find_height = if workspace.find.open {
             workspace.find.height()
