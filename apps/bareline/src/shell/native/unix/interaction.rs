@@ -68,9 +68,12 @@ impl Question {
     /// A short description for the diagnostic log.
     fn describe(&self) -> String {
         match self {
-            Self::Prompt(prompt) => format!("prompt:{:?}", prompt.instruction),
-            Self::Dialog(DialogRequest::Save(options)) => format!("save-dialog:{:?}", options.default_name),
-            Self::Dialog(request) => format!("dialog:{request:?}"),
+            // Kinds only: prompt text, document names and paths stay out of
+            // diagnostics.
+            Self::Prompt(_) => "prompt".to_string(),
+            Self::Dialog(DialogRequest::Save(_)) => "save-dialog".to_string(),
+            Self::Dialog(DialogRequest::Open { .. }) => "open-dialog".to_string(),
+            Self::Dialog(DialogRequest::PickFolder) => "folder-dialog".to_string(),
         }
     }
 }
