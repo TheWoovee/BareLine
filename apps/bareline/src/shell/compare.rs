@@ -1085,6 +1085,13 @@ impl Shell {
                         return true;
                     }
                 }
+                let staging = match crate::shell::native::owned_cache_root("Bareline-compare-staging") {
+                    Ok(staging) => staging,
+                    Err(error) => {
+                        workspace.message = Some(error);
+                        return true;
+                    }
+                };
                 let cancel = bareline_diff::CancelToken::default();
                 let worker_cancel = cancel.clone();
                 let notify = self.notify.clone();
@@ -1111,7 +1118,7 @@ impl Shell {
                                 ranges[side].clone(),
                                 metadata,
                                 budget,
-                                &std::env::temp_dir().join("Bareline-compare-staging"),
+                                &staging,
                                 quota,
                                 std::sync::Arc::new(crate::shell::native::FileSystem),
                                 &worker_cancel,
@@ -1212,6 +1219,13 @@ impl Shell {
                         workspace.message = Some("Destination is read-only or busy".into());
                         return true;
                     }
+                    let staging = match crate::shell::native::owned_cache_root("Bareline-compare-staging") {
+                        Ok(staging) => staging,
+                        Err(error) => {
+                            workspace.message = Some(error);
+                            return true;
+                        }
+                    };
                     let options = controller.options().clone();
                     let cancel = bareline_diff::CancelToken::default();
                     let worker_cancel = cancel.clone();
@@ -1243,7 +1257,7 @@ impl Shell {
                                 MergePolicy::PreserveIgnoredDestination,
                                 metadata,
                                 budget,
-                                &std::env::temp_dir().join("Bareline-compare-staging"),
+                                &staging,
                                 quota,
                                 std::sync::Arc::new(crate::shell::native::FileSystem),
                                 &worker_cancel,
@@ -1387,6 +1401,17 @@ impl Shell {
             {
                 return;
             }
+            let staging = match crate::shell::native::owned_cache_root("Bareline-compare-staging") {
+                Ok(staging) => staging,
+                Err(error) => {
+                    self.compare.merge_promotion = None;
+                    workspace.message = Some(error);
+                    if let Some(controller) = &mut self.compare.controller {
+                        controller.invalidate();
+                    }
+                    return;
+                }
+            };
             let mut promotion = self.compare.merge_promotion.take().unwrap();
             promotion.inputs = promotion.indices.map(|i| compare_input(&workspace.editors[i]));
             self.compare.documents = Some(promotion.inputs.clone());
@@ -1401,7 +1426,7 @@ impl Shell {
             let spawned = std::thread::Builder::new()
                 .name("compare-promoted-merge".into())
                 .spawn(move || {
-                    let cache = std::env::temp_dir().join("Bareline-compare-staging");
+                    let cache = staging;
                     let platform = std::sync::Arc::new(crate::shell::native::FileSystem);
                     let result = if let Some(hunk) = promotion.hunk {
                         bareline_app::compare::prepare_streamed_hunk_merge(

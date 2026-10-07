@@ -412,6 +412,37 @@ pub trait LocalFileSystem: Send + Sync {
         ))
     }
 
+    /// The per-user folder that holds this user's temporary copies of documents:
+    /// the registered owned-cache roots (`Bareline-transcode`, spill and staging)
+    /// are created inside it, and startup sweeps it for copies whose process ended.
+    /// It must be private to the user; an implementation refuses a folder it cannot
+    /// prove private rather than fall back to a shared one. The default is the
+    /// system temporary folder, which on Windows is `%LOCALAPPDATA%\Temp` with a
+    /// user-only ACL.
+    fn private_cache_root(&self) -> std::io::Result<PathBuf> {
+        Ok(std::env::temp_dir())
+    }
+
+    /// Give the new file `target` the exact bytes of the sealed file `source`
+    /// without writing them again: a copy-on-write clone where the file system has
+    /// one, or another link to the same file. Both names stay sealed: nobody may
+    /// write either of them afterwards. Once this returns, `target` is as durable
+    /// as the synced `source` (a clone is synced), so a manifest naming it may be
+    /// published at once. `Unsupported` (the default) or any other
+    /// error leaves no `target` behind, and the caller copies the bytes instead.
+    fn share_sealed_file(&self, _source: &Path, _target: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "sealed file sharing unavailable",
+        ))
+    }
+    /// `share_sealed_file` is expected to succeed between files in one folder, so
+    /// a producer may skip writing a copy as it goes and share it once sealed. A
+    /// failed share still falls back to copying.
+    fn shares_sealed_files(&self) -> bool {
+        false
+    }
+
     /// Keep bytes and directory identity immutable against write/delete until handle drop.
     /// Platforms without this capability must refuse sealed-store export.
     fn open_sealed_read(&self, _: &Path) -> std::io::Result<std::fs::File> {
@@ -901,3 +932,5 @@ pub use watch::{WatchEvent, WatchKind};
 pub mod accessibility;
 
 pub mod printing;
+
+pub mod private;

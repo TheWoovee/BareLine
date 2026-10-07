@@ -33,8 +33,16 @@ pub(super) fn prepare(
         config.no_session = true;
         return Ok(Some(InstanceRuntime::default()));
     }
-    let scope = config.settings_path.clone().unwrap_or(std::env::current_exe()?);
-    let profile = config.settings_path.as_deref().and_then(std::path::Path::parent);
+    // The scope names `settings.toml` in the profile folder, where every build
+    // kept it before XDG settings moved to the configuration folder, so an
+    // earlier instance and this one still find each other (LNX-XDG-006).
+    let scope = config
+        .profile_root
+        .as_ref()
+        .map(|root| root.join("settings.toml"))
+        .or_else(|| config.settings_path.clone())
+        .unwrap_or(std::env::current_exe()?);
+    let profile = config.profile_root.as_deref();
     let request = OpenRequest {
         paths: config.paths.clone(),
         line: config.line,

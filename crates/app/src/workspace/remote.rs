@@ -3,18 +3,20 @@
 use super::*;
 use bareline_platform::{RemoteReadAction, RemoteReadGrant};
 impl Workspace {
-    pub(super) fn remote_open_request(&self, path: PathBuf) -> IoRequest {
-        IoRequest::OpenPagedEncoded(bareline_file_io::lifecycle::PagedOpenRequest {
-            path,
-            bytes: self.bytes.clone(),
-            history: self.history.clone(),
-            cache: std::env::temp_dir().join("Bareline-transcode"),
-            options: bareline_file_io::codecs::disk::DiskOptions {
-                temp_quota_bytes: self.transcode_quota_bytes,
-                interpret: None,
+    pub(super) fn remote_open_request(&self, path: PathBuf) -> Result<IoRequest, String> {
+        Ok(IoRequest::OpenPagedEncoded(
+            bareline_file_io::lifecycle::PagedOpenRequest {
+                path,
+                bytes: self.bytes.clone(),
+                history: self.history.clone(),
+                cache: self.owned_cache_root("Bareline-transcode")?,
+                options: bareline_file_io::codecs::disk::DiskOptions {
+                    temp_quota_bytes: self.transcode_quota_bytes,
+                    interpret: None,
+                },
+                source_options: self.source_options(),
             },
-            source_options: self.source_options(),
-        })
+        ))
     }
     pub fn open_authorized(&mut self, path: PathBuf, grant: RemoteReadGrant) -> Result<(), String> {
         if self.path_loading(&path) {
@@ -28,12 +30,15 @@ impl Workspace {
             let error = self.message.take().unwrap_or_else(|| "File service unavailable".into());
             return Err(self.fail_open_submission(path, true, error));
         }
-        let submitted = self.io.as_ref().unwrap().submit_authorized(
-            self.remote_open_request(path.clone()),
-            grant,
-            RemoteReadAction::Open,
-            self.notify.clone(),
-        );
+        let request = match self.remote_open_request(path.clone()) {
+            Ok(request) => request,
+            Err(error) => return Err(self.fail_open_submission(path, true, error)),
+        };
+        let submitted =
+            self.io
+                .as_ref()
+                .unwrap()
+                .submit_authorized(request, grant, RemoteReadAction::Open, self.notify.clone());
         let Ok(receiver) = submitted else {
             let error = "File queue is full. Try again after the pending operation.".to_string();
             return Err(self.fail_open_submission(path, true, error));
@@ -86,7 +91,7 @@ impl Workspace {
             .as_ref()
             .unwrap()
             .submit_authorized(
-                self.remote_open_request(path.clone()),
+                self.remote_open_request(path.clone())?,
                 grant,
                 RemoteReadAction::Reload,
                 self.notify.clone(),
@@ -144,7 +149,7 @@ impl Workspace {
             .io
             .as_ref()
             .unwrap()
-            .submit_follow_read(self.remote_open_request(path.clone()), access, self.notify.clone())
+            .submit_follow_read(self.remote_open_request(path.clone())?, access, self.notify.clone())
             .map_err(|_| "File queue is full")?;
         self.pending_io.push(PendingIo {
             completion: None,

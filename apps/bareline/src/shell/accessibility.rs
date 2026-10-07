@@ -2008,6 +2008,7 @@ pub(super) mod tests {
             profile_initialization: Default::default(),
             portable: false,
             settings_path: None,
+            profile_root: None,
             legacy_settings_path: None,
             session_path: None,
             legacy_session_path: None,

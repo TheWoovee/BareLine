@@ -29,3 +29,18 @@ pub use backend::*;
 )]
 pub use prompt::PromptButtonView;
 pub use prompt::{PromptLevel, PromptView};
+
+/// The native file system's private per-user folder for temporary copies of
+/// documents: `%TEMP%` on Windows, the user's cache folder on Linux and macOS
+/// (LNX-SEC-002).
+pub fn private_cache_root() -> std::io::Result<std::path::PathBuf> {
+    bareline_platform::LocalFileSystem::private_cache_root(&FileSystem)
+}
+
+/// `name`, a registered owned-cache root (`Bareline-compare-staging` and the
+/// like), inside [`private_cache_root`]. A folder that is not private is refused.
+pub fn owned_cache_root(name: &str) -> std::result::Result<std::path::PathBuf, String> {
+    private_cache_root()
+        .map(|root| root.join(name))
+        .map_err(|error| format!("Bareline's private cache folder is unavailable: {error}"))
+}

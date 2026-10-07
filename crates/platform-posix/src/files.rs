@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! `LocalFileSystem` for Linux and macOS.
 use crate::{
-    cache, capability, entries, process, resolve,
+    cache, capability, entries, private, process, resolve,
     sys::{self, READ, denied},
     transaction,
     trust::{self, DirectoryGuard, PosixPathTrustProvider},
@@ -155,6 +155,21 @@ impl LocalFileSystem for PosixFileSystem {
     fn available_space(&self, path: &Path) -> io::Result<u64> {
         let stat = rustix::fs::statvfs(path)?;
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+    }
+
+    /// The user's private cache folder, never the shared `/tmp` (LNX-SEC-002).
+    fn private_cache_root(&self) -> io::Result<PathBuf> {
+        private::cache_root()
+    }
+
+    fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+        private::share_sealed_file(source, target)
+    }
+
+    /// Hard links work between the files of one folder on every local Unix file
+    /// system Bareline keeps caches on; a failed share copies instead.
+    fn shares_sealed_files(&self) -> bool {
+        true
     }
 
     /// The final name is never followed and only a regular file is returned.

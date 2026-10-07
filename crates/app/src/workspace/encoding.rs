@@ -132,7 +132,7 @@ impl Workspace {
                 target,
                 path: path.clone(),
                 fingerprint: source.fingerprint.clone(),
-                cache: std::env::temp_dir().join("Bareline-transcode"),
+                cache: self.owned_cache_root("Bareline-transcode")?,
                 quota: self.transcode_quota_bytes,
                 options: self.source_options(),
                 bytes: self.bytes.clone(),
@@ -282,7 +282,7 @@ impl Workspace {
         let budget = self.bytes.clone();
         let notify = self.notify.clone();
         let spill = EolSpill {
-            cache: std::env::temp_dir().join("Bareline-owned-spill"),
+            cache: self.owned_cache_root("Bareline-owned-spill")?,
             platform: self.file_system.clone(),
         };
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);

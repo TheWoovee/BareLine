@@ -1076,7 +1076,7 @@ impl Workspace {
         });
         let mut editor = PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone())?;
         editor.configure_owned_spill(
-            std::env::temp_dir().join("Bareline-owned-spill"),
+            self.owned_cache_root("Bareline-owned-spill")?,
             self.file_system.clone(),
             self.source_options(),
         );
@@ -1104,13 +1104,12 @@ impl Workspace {
         self.page_cache_bytes = settings.page_cache_bytes.min(settings.aggregate_cache_bytes);
         self.page_size_bytes = settings.page_size_bytes.min(self.page_cache_bytes);
         let options = self.source_options();
+        let spill = self.owned_cache_root("Bareline-owned-spill");
         for editor in &mut self.editors {
-            if let WorkspaceEditor::Paged(paged) = editor {
-                paged.configure_owned_spill(
-                    std::env::temp_dir().join("Bareline-owned-spill"),
-                    self.file_system.clone(),
-                    options,
-                );
+            if let WorkspaceEditor::Paged(paged) = editor
+                && let Ok(cache) = &spill
+            {
+                paged.configure_owned_spill(cache.clone(), self.file_system.clone(), options);
             }
         }
     }
@@ -1462,7 +1461,7 @@ impl Workspace {
             captured,
             encoding,
             original,
-            cache: std::env::temp_dir().join("Bareline-owned-spill"),
+            cache: self.owned_cache_root("Bareline-owned-spill")?,
             quota: self.transcode_quota_bytes,
             options: self.source_options(),
             bytes: self.bytes.clone(),
@@ -1528,6 +1527,9 @@ impl Workspace {
         if !self.ensure_io() {
             return false;
         }
+        let Ok(cache) = self.owned_cache_root("Bareline-owned-spill") else {
+            return false;
+        };
         let file = self.tabs[index].file.as_ref().unwrap();
         let Some(service) = self.editors[index].document_service() else {
             return false;
@@ -1542,7 +1544,7 @@ impl Workspace {
             captured: self.editors[index].snapshot().clone(),
             encoding: file.encoding.clone(),
             original: Some((file.path.clone(), file.fingerprint.clone())),
-            cache: std::env::temp_dir().join("Bareline-owned-spill"),
+            cache,
             quota: self.transcode_quota_bytes,
             options: self.source_options(),
             bytes: self.bytes.clone(),
@@ -2073,18 +2075,33 @@ impl Workspace {
     pub fn failed_save_recovery(&self) -> Option<&std::path::Path> {
         self.failed_save_recovery.iter().next().map(PathBuf::as_path)
     }
-    fn paged_open_request(&self, path: PathBuf, interpret: Option<bareline_file_io::codecs::Encoding>) -> IoRequest {
-        IoRequest::OpenPagedEncoded(bareline_file_io::lifecycle::PagedOpenRequest {
-            path,
-            bytes: self.bytes.clone(),
-            history: self.history.clone(),
-            cache: std::env::temp_dir().join("Bareline-transcode"),
-            options: bareline_file_io::codecs::disk::DiskOptions {
-                temp_quota_bytes: self.transcode_quota_bytes,
-                interpret,
+    /// `name`, a registered owned-cache root, inside the platform's private
+    /// per-user cache folder (LNX-SEC-002). A folder the platform cannot prove
+    /// private is refused, so no copy of a document is written to a shared one.
+    pub(crate) fn owned_cache_root(&self, name: &str) -> Result<PathBuf, String> {
+        self.file_system
+            .private_cache_root()
+            .map(|root| root.join(name))
+            .map_err(|error| format!("Bareline's private cache folder is unavailable: {error}"))
+    }
+    fn paged_open_request(
+        &self,
+        path: PathBuf,
+        interpret: Option<bareline_file_io::codecs::Encoding>,
+    ) -> Result<IoRequest, String> {
+        Ok(IoRequest::OpenPagedEncoded(
+            bareline_file_io::lifecycle::PagedOpenRequest {
+                path,
+                bytes: self.bytes.clone(),
+                history: self.history.clone(),
+                cache: self.owned_cache_root("Bareline-transcode")?,
+                options: bareline_file_io::codecs::disk::DiskOptions {
+                    temp_quota_bytes: self.transcode_quota_bytes,
+                    interpret,
+                },
+                source_options: self.source_options(),
             },
-            source_options: self.source_options(),
-        })
+        ))
     }
     fn submit_paged(&mut self, request: IoRequest, path: PathBuf, launch_request: Option<u64>, allow_duplicate: bool) {
         self.submit_paged_open(request, path, launch_request, allow_duplicate, None, false);
@@ -2285,7 +2302,13 @@ impl Workspace {
             return Err(error);
         }
         let request = if paged {
-            self.paged_open_request(path.clone(), None)
+            match self.paged_open_request(path.clone(), None) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.failed_opens[position].error.clone_from(&error);
+                    return Err(error);
+                }
+            }
         } else {
             IoRequest::OpenStreaming {
                 path: path.clone(),
@@ -2685,7 +2708,7 @@ impl Workspace {
             return Err("File service unavailable".into());
         }
         let request = if matches!(self.editors[index], WorkspaceEditor::Paged(_)) {
-            self.remote_open_request(path.clone())
+            self.remote_open_request(path.clone())?
         } else {
             IoRequest::OpenStreaming {
                 path: path.clone(),
@@ -3987,6 +4010,49 @@ mod tests {
         }
     }
     use super::*;
+    /// Temporary copies of documents go to the platform's private cache folder,
+    /// never to a shared temporary folder, and a folder the platform refuses
+    /// stops the copy (LNX-SEC-002).
+    #[test]
+    fn document_copies_use_the_platform_private_cache_root() {
+        struct PrivateRoot(Option<PathBuf>);
+        impl LocalFileSystem for PrivateRoot {
+            fn identity(&self, _: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+                Err(std::io::ErrorKind::Unsupported.into())
+            }
+            fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &std::path::Path, _: &std::path::Path, _: bool) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::Unsupported.into())
+            }
+            fn private_cache_root(&self) -> std::io::Result<PathBuf> {
+                self.0.clone().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "other users can change the private folder",
+                    )
+                })
+            }
+        }
+        let root = PathBuf::from("private-cache");
+        let workspace = Workspace::new(Arc::new(|| {}), Arc::new(PrivateRoot(Some(root.clone())))).unwrap();
+        assert_eq!(
+            workspace.owned_cache_root("Bareline-owned-spill").unwrap(),
+            root.join("Bareline-owned-spill")
+        );
+        let Ok(IoRequest::OpenPagedEncoded(request)) = workspace.paged_open_request(PathBuf::from("big.log"), None)
+        else {
+            panic!("a paged open request");
+        };
+        assert_eq!(request.cache, root.join("Bareline-transcode"));
+        let refused = Workspace::new(Arc::new(|| {}), Arc::new(PrivateRoot(None))).unwrap();
+        let error = refused
+            .paged_open_request(PathBuf::from("big.log"), None)
+            .err()
+            .unwrap();
+        assert!(error.contains("private cache folder"), "{error}");
+    }
     pub(super) struct PagedFileSystem;
     impl LocalFileSystem for PagedFileSystem {
         fn cache_directory_guard(

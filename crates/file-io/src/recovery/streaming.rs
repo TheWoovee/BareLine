@@ -99,7 +99,7 @@ impl RecoveryWriter {
         self.usage.admit(&self.directory, quota, required, platform, cancel)?;
         let result = (|| {
             let name = format!("segment-{revision}.bin");
-            let mut segment = OpenOptions::new()
+            let mut segment = bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(self.directory.join(&name))?;
@@ -394,7 +394,7 @@ impl RecoveryWriter {
         self.usage.admit(&self.directory, quota, required, platform, cancel)?;
         let result = (|| {
             let name = format!("segment-{revision}.bin");
-            let mut segment = OpenOptions::new()
+            let mut segment = bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(self.directory.join(&name))?;

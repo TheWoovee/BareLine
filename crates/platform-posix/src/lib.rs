@@ -20,6 +20,7 @@ mod files;
 pub mod instance;
 mod ipc;
 pub mod paths;
+pub mod private;
 pub mod process;
 mod resolve;
 mod sys;

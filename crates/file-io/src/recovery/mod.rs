@@ -6,7 +6,7 @@ use bareline_platform::LocalFileSystem;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -28,11 +28,47 @@ const CHUNK: usize = 64 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryMetadata {
-    #[serde(default)]
+    #[serde(default, with = "native_path")]
     pub original_path: Option<PathBuf>,
     pub source_generation: String,
     pub codec_catalog_version: String,
     pub original_len: u64,
+}
+/// The document path of a recovery record. A path that is valid Unicode is kept
+/// as text, the form every earlier release wrote and reads; any other path keeps
+/// its exact native identity (`SerializedPath`: the bytes of a Unix name, the
+/// UTF-16 units of a Windows one), so a file whose name is not Unicode still
+/// journals and recovers (LNX-EDIT-008).
+mod native_path {
+    use bareline_platform::SerializedPath;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::path::PathBuf;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Text(String),
+        Native(SerializedPath),
+    }
+
+    pub fn serialize<S: Serializer>(path: &Option<PathBuf>, serializer: S) -> Result<S::Ok, S::Error> {
+        match path {
+            None => serializer.serialize_none(),
+            Some(path) => match path.to_str() {
+                Some(text) => serializer.serialize_some(text),
+                None => serializer.serialize_some(&SerializedPath::from_native(path)),
+            },
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PathBuf>, D::Error> {
+        Option::<Stored>::deserialize(deserializer)?
+            .map(|stored| match stored {
+                Stored::Text(text) => Ok(PathBuf::from(text)),
+                Stored::Native(path) => path.to_native().map_err(serde::de::Error::custom),
+            })
+            .transpose()
+    }
 }
 /// Edits are sorted, nonoverlapping offsets in the pre-transaction byte domain.
 /// The caller owns both inserted and inverse bytes before committing its transaction.
@@ -155,6 +191,34 @@ impl Drop for PreparedBaseline {
     }
 }
 impl BaselinePreparation {
+    /// `copy` for a baseline that is exactly the proven sealed file `source`, of
+    /// `len` bytes with SHA-256 `sha256`: the file system shares that file instead
+    /// of writing a second copy (LNX-DISK-004). Where it cannot, nothing is left
+    /// behind and the preparation comes back for `copy`.
+    pub fn try_share(
+        self,
+        source: &Path,
+        len: u64,
+        sha256: [u8; 32],
+        platform: &dyn LocalFileSystem,
+    ) -> Result<PreparedBaseline, Self> {
+        if len != self.original_len
+            || platform
+                .share_sealed_file(source, &self.directory.join("baseline.bin"))
+                .is_err()
+        {
+            return Err(self);
+        }
+        Ok(PreparedBaseline {
+            job: self,
+            blob: Blob {
+                name: "baseline.bin".into(),
+                len,
+                sha256,
+            },
+            preserve: false,
+        })
+    }
     /// Revalidate the complete source fingerprint after copying; changed sources cannot seal.
     pub fn copy<R: Read>(
         self,
@@ -163,7 +227,10 @@ impl BaselinePreparation {
         cancel: &Cancellation,
     ) -> io::Result<PreparedBaseline> {
         let path = self.directory.join("baseline.bin");
-        let mut file = OpenOptions::new().create_new(true).write(true).open(&path)?;
+        let mut file = bareline_platform::private::file_options()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
         let result = (|| {
             let mut hash = Sha256::new();
             let mut len = 0u64;
@@ -226,7 +293,7 @@ impl RecoveryWriter {
             return Err(invalid("recovery metadata limit"));
         }
         // create_dir, not create_dir_all: existing recovery directories cannot acquire a second writer.
-        fs::create_dir(directory)?;
+        bareline_platform::private::create_dir(directory)?;
         let manifest = Manifest {
             version: VERSION,
             metadata,
@@ -234,7 +301,7 @@ impl RecoveryWriter {
             durable: None,
             retired: false,
         };
-        let journal = OpenOptions::new()
+        let journal = bareline_platform::private::file_options()
             .create_new(true)
             .read(true)
             .append(true)
@@ -364,7 +431,7 @@ impl RecoveryWriter {
         let next_len = edited_len(self.current_len, &refs)?;
         let result = (|| {
             let name = format!("segment-{revision}.bin");
-            let mut segment = OpenOptions::new()
+            let mut segment = bareline_platform::private::file_options()
                 .create_new(true)
                 .write(true)
                 .open(self.directory.join(&name))?;
@@ -471,7 +538,10 @@ fn publish_file(
     let staged = PathBuf::from(staged_name);
     platform.validate_target(path)?;
     let bytes = serde_json::to_vec(manifest).map_err(io::Error::other)?;
-    let mut file = OpenOptions::new().create_new(true).write(true).open(&staged)?;
+    let mut file = bareline_platform::private::file_options()
+        .create_new(true)
+        .write(true)
+        .open(&staged)?;
     let result = (|| {
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -909,7 +979,10 @@ pub fn recover_to(directory: &Path, destination: &Path, cancel: &Cancellation) -
         return Err(invalid("complete recovery baseline unavailable"));
     }
     let inspection = scanned.inspection();
-    let mut output = OpenOptions::new().create_new(true).write(true).open(destination)?;
+    let mut output = bareline_platform::private::file_options()
+        .create_new(true)
+        .write(true)
+        .open(destination)?;
     // The scan's interval map already holds the validated prefix: one streaming pass
     // writes the result, with no per-record scratch copies (REC-08).
     let result = match scanned.replay.as_mut() {
@@ -951,11 +1024,11 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
     if scanned.manifest.retired {
         return Err(invalid("recovery discarded"));
     }
-    fs::create_dir(destination)?;
+    bareline_platform::private::create_dir(destination)?;
     for record in &scanned.records {
         cancelled(cancel)?;
         let mut source = File::open(directory.join(&record.segment.name))?;
-        let mut target = OpenOptions::new()
+        let mut target = bareline_platform::private::file_options()
             .create_new(true)
             .write(true)
             .open(destination.join(&record.segment.name))?;
@@ -969,7 +1042,7 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
         unavailable_original: Some((0, scanned.manifest.metadata.original_len)),
         records: &scanned.records,
     };
-    let mut file = OpenOptions::new()
+    let mut file = bareline_platform::private::file_options()
         .create_new(true)
         .write(true)
         .open(destination.join("gaps.json"))?;
@@ -1222,6 +1295,117 @@ mod tests {
     fn crc32c_known_vector() {
         assert_eq!(crc32c(b"123456789"), 0xe3069283);
     }
+    /// An unedited baseline shares the proven sealed text instead of writing a
+    /// second copy where the file system can (LNX-DISK-004).
+    #[test]
+    fn baselines_share_the_sealed_text_where_the_file_system_can() {
+        struct Sharing;
+        impl LocalFileSystem for Sharing {
+            fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+                FakeFs.identity(file)
+            }
+            fn validate_target(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, staged: &Path, target: &Path, existed: bool) -> io::Result<()> {
+                FakeFs.commit(staged, target, existed)
+            }
+            fn share_sealed_file(&self, source: &Path, target: &Path) -> io::Result<()> {
+                fs::hard_link(source, target)
+            }
+        }
+        let temp = Temp::new();
+        let sealed = temp.0.join("text.utf8");
+        fs::write(&sealed, b"hello").unwrap();
+        let hash: [u8; 32] = Sha256::digest(b"hello").into();
+        let mut owner = writer(&temp, false);
+        // Without sharing, or for another length, the preparation comes back for a copy.
+        let Err(job) = owner.prepare_baseline().unwrap().try_share(&sealed, 5, hash, &FakeFs) else {
+            panic!("shared without a file system that shares");
+        };
+        let Err(job) = job.try_share(&sealed, 4, hash, &Sharing) else {
+            panic!("shared a baseline of another length");
+        };
+        assert!(!temp.0.join("item/baseline.bin").exists());
+        let Ok(prepared) = job.try_share(&sealed, 5, hash, &Sharing) else {
+            panic!("the sealed text was not shared");
+        };
+        owner.attach_baseline(prepared, &Sharing).unwrap();
+        owner.append(1, &[edit()]).unwrap();
+        owner.checkpoint(&FakeFs).unwrap();
+        let inspection = inspect(&temp.0.join("item"), &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::Complete);
+        assert!(inspection.complete_baseline);
+        assert_eq!(fs::read(temp.0.join("item/baseline.bin")).unwrap(), b"hello");
+    }
+    /// Journals hold unsaved text: other local users can neither enter their
+    /// folder nor read their files, whatever the umask (LNX-UI-006).
+    #[cfg(unix)]
+    #[test]
+    fn journals_holding_unsaved_text_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = Temp::new();
+        let mut writer = writer(&temp, true);
+        writer.append(1, &[edit()]).unwrap();
+        writer.checkpoint(&FakeFs).unwrap();
+        let item = temp.0.join("item");
+        assert_eq!(fs::metadata(&item).unwrap().permissions().mode() & 0o777, 0o700);
+        let mut files = 0;
+        for entry in fs::read_dir(&item).unwrap() {
+            let entry = entry.unwrap();
+            let mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode & 0o077, 0, "{} is {mode:o}", entry.path().display());
+            files += 1;
+        }
+        assert!(files >= 3, "journal, baseline and manifest");
+    }
+    /// POSIX file names are bytes: a name that is not UTF-8 journals and
+    /// recovers like any other (LNX-EDIT-008).
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_document_names_are_journaled_and_recovered() {
+        use std::os::unix::ffi::OsStringExt;
+        let original = PathBuf::from(std::ffi::OsString::from_vec(b"/w/bad-\xff-name.txt".to_vec()));
+        let temp = Temp::new();
+        let mut writer = RecoveryWriter::create(
+            &temp.0.join("item"),
+            RecoveryMetadata {
+                original_path: Some(original.clone()),
+                source_generation: "full-sha256-test".into(),
+                codec_catalog_version: "utf8-v1".into(),
+                original_len: 5,
+            },
+            &FakeFs,
+        )
+        .unwrap();
+        writer
+            .seal_baseline(&mut &b"hello"[..], || Ok(true), &Cancellation::default(), &FakeFs)
+            .unwrap();
+        writer.append(1, &[edit()]).unwrap();
+        writer.checkpoint(&FakeFs).unwrap();
+        let inspection = inspect(&temp.0.join("item"), &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::Complete);
+        assert_eq!(inspection.metadata.original_path, Some(original));
+    }
+    #[test]
+    fn unicode_document_paths_keep_the_text_form_earlier_releases_read() {
+        let metadata = |original_path| RecoveryMetadata {
+            original_path,
+            source_generation: "g".into(),
+            codec_catalog_version: "c".into(),
+            original_len: 1,
+        };
+        let path = PathBuf::from("notes/caf\u{e9}.txt");
+        let stored = serde_json::to_value(metadata(Some(path.clone()))).unwrap();
+        assert_eq!(stored["original_path"], "notes/caf\u{e9}.txt");
+        let read: RecoveryMetadata = serde_json::from_value(stored).unwrap();
+        assert_eq!(read.original_path, Some(path));
+        assert!(serde_json::to_value(metadata(None)).unwrap()["original_path"].is_null());
+        // Records without the field read as having no path.
+        let legacy: RecoveryMetadata =
+            serde_json::from_str(r#"{"source_generation":"g","codec_catalog_version":"c","original_len":1}"#).unwrap();
+        assert_eq!(legacy.original_path, None);
+    }
     #[test]
     fn sealed_recovery_is_independent_and_never_overwrites_destination() {
         let temp = Temp::new();
@@ -1283,7 +1467,7 @@ mod tests {
         let mut writer = writer(&temp, true);
         writer.append(1, &[edit()]).unwrap();
         drop(writer);
-        let mut journal = OpenOptions::new()
+        let mut journal = fs::OpenOptions::new()
             .append(true)
             .open(temp.0.join("item/journal.bin"))
             .unwrap();
@@ -1378,7 +1562,7 @@ mod tests {
                 .unwrap();
             writer.checkpoint(&FakeFs).unwrap();
             drop(writer);
-            OpenOptions::new()
+            fs::OpenOptions::new()
                 .write(true)
                 .open(temp.0.join("item/journal.bin"))
                 .unwrap()
@@ -1639,7 +1823,7 @@ mod tests {
             }],
         };
         let bytes = serde_json::to_vec(&record).unwrap();
-        let mut journal = OpenOptions::new()
+        let mut journal = fs::OpenOptions::new()
             .append(true)
             .open(directory.join("journal.bin"))
             .unwrap();
