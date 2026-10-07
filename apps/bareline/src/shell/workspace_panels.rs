@@ -334,6 +334,7 @@ impl WorkspacePanelsRuntime {
                         LeftSection::Workspace => {
                             if let Some(explorer) = &mut self.explorer {
                                 let mut local = Vec::new();
+                                explorer.set_focused(self.focus == Focus::Explorer);
                                 explorer.draw_with_theme(renderer, body.width, body.height, theme, &mut local)?;
                                 translate_y(&mut local, body.y);
                                 ops.extend(local);
@@ -1348,8 +1349,21 @@ mod workspace_panel_regressions {
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         let panel = shell.workspace.as_ref().unwrap().theme.panel();
         frame(&mut shell, &mut renderer, 1200.0, 760.0);
-        // A click under the rows focuses the tree, which rings its bounds.
+        // Without keyboard focus on the explorer the tree draws no ring: the
+        // files are never framed while the editor or another panel is focused.
+        {
+            shell.panels.focus = Focus::Editor;
+            let (ops, _) = frame(&mut shell, &mut renderer, 1200.0, 760.0);
+            assert!(
+                !ops.iter()
+                    .any(|op| matches!(op, DrawOp::Stroke(_, color, _) if *color == panel.focus)),
+                "the tree rings its bounds without focus"
+            );
+        }
+        // A click under the rows focuses the tree, which rings its bounds while
+        // the explorer owns the shell's focus.
         assert!(shell.panels.explorer().pointer(Point { x: 20.0, y: 400.0 }).is_none());
+        shell.panels.focus = Focus::Explorer;
 
         let mut stale: Vec<Rect> = Vec::new();
         for (width, height, dock) in [

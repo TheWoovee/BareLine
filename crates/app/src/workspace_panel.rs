@@ -559,6 +559,12 @@ impl WorkspacePanel {
         let action = self.tree.event(UiEvent::Key(Key::Enter), &self.model);
         self.action(action)
     }
+    /// Keyboard focus of the tree: its focus ring is drawn only while the
+    /// explorer owns the shell's focus, never as a permanent frame around the
+    /// files.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.tree.state.focused = focused;
+    }
     pub fn draw(
         &mut self,
         backend: &mut impl TextBackend,
