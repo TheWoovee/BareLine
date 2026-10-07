@@ -14,7 +14,9 @@
 //! Ownership is an exclusive `flock` on a lock file beside the socket, held for
 //! the owner's lifetime. The kernel drops it when the owner exits or crashes, so
 //! the next launch takes the lock, removes the stale socket and binds afresh;
-//! a launch that cannot take it connects to the owner instead.
+//! a launch that cannot take it connects to the owner instead, unless the
+//! owner's socket is already gone because it is exiting, in which case the
+//! launch takes the lock as soon as it is released.
 use crate::ipc::{self, Stop};
 use rustix::{
     event::PollFlags,
@@ -518,12 +520,21 @@ pub fn coordinate_in(
     }
     let uid = ipc::own_uid();
     let (socket, lock) = names(runtime, uid, scope);
-    let ownership = match open_lock(&lock).and_then(try_lock) {
-        Ok(ownership) => ownership,
-        Err(error) => return Ok(unreachable_owners(&error)),
-    };
-    let Some(ownership) = ownership else {
-        return Ok(forwarded(forward(&socket, &payload, uid, Instant::now() + TIMEOUT)));
+    let connect_by = Instant::now() + TIMEOUT;
+    let ownership = loop {
+        match open_lock(&lock).and_then(try_lock) {
+            Ok(Some(ownership)) => break ownership,
+            Ok(None) => {}
+            Err(error) => return Ok(unreachable_owners(&error)),
+        }
+        // The owner listens once its socket exists. Until then it is starting,
+        // or exiting: it removes its socket before its lock goes, and a process
+        // it spawned holds the lock until that process execs. Taking the lock
+        // again succeeds an exiting owner instead of waiting on it in vain.
+        if std::fs::symlink_metadata(&socket).is_ok() || Instant::now() >= connect_by {
+            return Ok(forwarded(forward(&socket, &payload, uid, connect_by)));
+        }
+        std::thread::sleep(Duration::from_millis(2));
     };
     let Ok(profile) = profile.map_or(Ok(None), lock_profile) else {
         return Ok(Outcome::Independent(
@@ -658,10 +669,11 @@ mod tests {
         coordinate_in(&scratch.runtime(), scope, profile, request, false, Arc::new(|| {})).unwrap()
     }
     fn primary(scratch: &Scratch) -> UnixInstanceServer {
-        let Outcome::Primary(server) = hand_off(scratch, &scratch.scope(), None, OpenRequest::default()) else {
-            panic!("primary");
-        };
-        server
+        match hand_off(scratch, &scratch.scope(), None, OpenRequest::default()) {
+            Outcome::Primary(server) => server,
+            Outcome::Forwarded => panic!("primary: forwarded"),
+            Outcome::Independent(reason) => panic!("primary: {reason}"),
+        }
     }
     /// A hang guard only: no assertion depends on how long a handoff takes.
     fn wait_until(mut done: impl FnMut() -> bool) {
@@ -916,6 +928,30 @@ mod tests {
         drop(server);
         assert!(!socket.exists());
         drop(primary(&scratch));
+    }
+    /// An owner that is exiting has removed its socket but still holds its
+    /// lock for a moment (or a process it spawned holds it until that process
+    /// execs). A launch in that moment becomes the next owner instead of
+    /// failing to reach a listener and running separately.
+    #[test]
+    fn a_launch_during_the_owners_exit_becomes_the_owner() {
+        let scratch = Scratch::new("exiting");
+        ipc::private_directory(&scratch.runtime()).unwrap();
+        let (socket, lock) = names(&scratch.runtime(), ipc::own_uid(), &scratch.scope());
+        let held = try_lock(open_lock(&lock).unwrap()).unwrap().unwrap();
+        assert!(!socket.exists());
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(held);
+        });
+        let server = primary(&scratch);
+        release.join().unwrap();
+        assert!(socket.exists());
+        assert!(matches!(
+            hand_off(&scratch, &scratch.scope(), None, open("/exiting/a.txt")),
+            Outcome::Forwarded
+        ));
+        assert_eq!(drain(&server, 1), vec![open("/exiting/a.txt")]);
     }
     #[test]
     fn scope_spellings_of_one_profile_share_one_identity() {
