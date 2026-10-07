@@ -106,7 +106,21 @@ impl WorkspacePanelsRuntime {
     /// Whether window point `point` is on the left dock's splitter, or the
     /// splitter is being dragged (its pointer shape, LNX-UI-015).
     pub(super) fn left_splitter_at(&self, point: Point) -> bool {
-        self.dragging_left || (self.splitter_left.width > 0.0 && self.splitter_left.contains(point))
+        self.dragging_left || self.left_splitter_grab().contains(point)
+    }
+    /// The band that grabs the left splitter: the painted divider plus 4 px on
+    /// each side, so the resize arrow appears and a drag starts where the eye
+    /// puts the pointer, not only on the 6 px line itself.
+    pub(super) fn left_splitter_grab(&self) -> Rect {
+        if self.splitter_left.width <= 0.0 {
+            return Rect::default();
+        }
+        Rect {
+            x: self.splitter_left.x - 4.0,
+            y: self.splitter_left.y,
+            width: self.splitter_left.width + 8.0,
+            height: self.splitter_left.height,
+        }
     }
     fn semantics(&self) -> Vec<bareline_ui::semantics::SemanticEntry> {
         use bareline_ui::{
@@ -1021,7 +1035,7 @@ impl Shell {
                         LeftSection::Documents => self.panels.documents.open = false,
                         LeftSection::Outline => self.panels.outline.open = false,
                     }
-                } else if self.panels.splitter_left.contains(point) {
+                } else if self.panels.left_splitter_grab().contains(point) {
                     handled = true;
                     self.panels.dragging_left = true;
                 } else if self.panels.left.contains(point) {
