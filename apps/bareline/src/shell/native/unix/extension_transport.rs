@@ -10,9 +10,11 @@
 //! extension's error (SEC-05), and [`isolation`] names the state for the
 //! Extensions page.
 //!
-//! macOS: `MacIsolation` (sandbox-exec and limits) spawns through
-//! `posix_spawn`, which the shared launch's `HostSandbox` (a
-//! `std::process::Child`) cannot carry yet, so no host is started there.
+//! macOS contains it with `MacHostSandbox`: the sandbox profile applied by
+//! `sandbox_init` (through `sandbox-exec`) and resource limits, proven on each
+//! launch before the host starts. Where that cannot be established the launch
+//! fails with "isolation=Unsupported (...)" as on Linux, and the host never
+//! runs unconfined.
 #[cfg(target_os = "linux")]
 mod linux {
     pub use bareline_platform_linux::extension_transport::{HostLaunch, HostLifecycle, run_verified_host_observed};
@@ -43,49 +45,47 @@ pub use linux::*;
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use bareline_extensions_protocol::{BrokerResponse, Envelope, ExecutionBudget, Invocation};
+    use bareline_extensions_protocol::{BrokerResponse, Envelope};
+    pub use bareline_platform_posix::extension_transport::{HostLaunch, HostLifecycle};
+    use bareline_platform_posix::extension_transport::{Isolation, run_verified_host_in};
     use std::{
         io,
-        path::Path,
-        sync::{Arc, atomic::AtomicBool},
+        sync::{Arc, OnceLock, atomic::AtomicBool},
     };
 
-    #[allow(
-        dead_code,
-        reason = "no extension host runs on macOS yet, so the launch is never read"
-    )]
-    pub struct HostLaunch<'a> {
-        pub executable: &'a Path,
-        pub executable_sha256: [u8; 32],
-        pub signer: &'a bareline_distribution::update::PublisherPin,
-        pub component: &'a Path,
-        pub component_sha256: [u8; 32],
-        pub invocation: &'a Invocation,
-        pub budget: ExecutionBudget,
-    }
-    #[allow(
-        dead_code,
-        reason = "no extension host runs on macOS yet, so the launch is never observed"
-    )]
-    #[derive(Clone, Copy, Debug)]
-    pub enum HostLifecycle {
-        Started(u32),
-        Authenticated(u32),
-        Drained(u32),
-    }
+    /// The shared verified launch, contained by `MacHostSandbox`.
     pub fn run_verified_host_observed(
-        _launch: HostLaunch<'_>,
-        _cancelled: Arc<AtomicBool>,
-        _observe: impl FnMut(HostLifecycle),
-        _broker: impl FnMut(Envelope) -> BrokerResponse,
+        launch: HostLaunch<'_>,
+        cancelled: Arc<AtomicBool>,
+        observe: impl FnMut(HostLifecycle),
+        broker: impl FnMut(Envelope) -> BrokerResponse,
     ) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, unsupported()))
+        run_verified_host_in(
+            &bareline_platform_macos::MacHostSandbox::default(),
+            launch,
+            cancelled,
+            observe,
+            broker,
+        )
+        .map(|_| ())
     }
-    fn unsupported() -> String {
-        "isolation=unsupported (the macOS sandbox does not start the extension host yet)".into()
-    }
+    /// How an extension host is confined here, for the Extensions page:
+    /// `isolation=sandbox_init`, or why it cannot run. Nothing is started for
+    /// this answer; each launch proves the profile before the host runs.
     pub fn isolation() -> Option<String> {
-        Some(unsupported())
+        static PROBED: OnceLock<String> = OnceLock::new();
+        Some(
+            PROBED
+                .get_or_init(|| {
+                    let status = match bareline_platform_macos::MacHostSandbox::isolation() {
+                        isolation @ Isolation::Enforced(_) => isolation.to_string(),
+                        unsupported => format!("{unsupported}; extensions do not run without it"),
+                    };
+                    eprintln!("event=extension_isolation status={status:?}");
+                    status
+                })
+                .clone(),
+        )
     }
 }
 #[cfg(target_os = "macos")]
@@ -96,8 +96,7 @@ mod tests {
     use super::*;
 
     /// The Extensions page names the host's confinement on these systems: the
-    /// Landlock ABI, or why the host will not run (macOS, or a kernel without
-    /// Landlock).
+    /// Landlock ABI or the macOS sandbox, or why the host will not run.
     #[test]
     fn the_host_confinement_is_named_in_plain_words() {
         let status = isolation().unwrap();
@@ -105,6 +104,11 @@ mod tests {
         #[cfg(target_os = "linux")]
         assert!(
             status.starts_with("isolation=Landlock ABI ") || status.contains("extensions do not run without it"),
+            "{status}"
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            status == "isolation=sandbox_init" || status.contains("extensions do not run without it"),
             "{status}"
         );
     }

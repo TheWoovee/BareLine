@@ -14,7 +14,8 @@
 //!
 //! macOS only, re-exported at the root: [`MacMenuBar`], [`MacClipboard`],
 //! [`MacDialogs`], [`MacAppearance`], [`MacWatchService`], [`MacIsolation`]
-//! and [`peer`]. Every AppKit type is created and used on the main thread:
+//! (with [`MacHostSandbox`], the shared Unix launch's host sandbox) and
+//! [`peer`]. Every AppKit type is created and used on the main thread:
 //! constructors take a `MainThreadMarker`, which only the main thread can
 //! obtain, and the values are not `Send`, so the compiler enforces the rule.
 //! The watcher, the clipboard's limits and isolation have no thread rule.
@@ -44,7 +45,7 @@ pub use macos::{
     appearance::{Appearance, MacAppearance, high_contrast_enabled, system_ui_language},
     clipboard::MacClipboard,
     dialogs::MacDialogs,
-    isolation::{IsolationSupport, IsolationUnavailable, MacHostChild, MacIsolation},
+    isolation::{IsolationSupport, IsolationUnavailable, MacHostChild, MacHostSandbox, MacIsolation},
     menu::{MacMenuBar, MenuDispatch},
     peer,
     watch::MacWatchService,

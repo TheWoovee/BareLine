@@ -313,9 +313,31 @@ pub struct HostSpawn<'a> {
     pub component: &'a Path,
     pub arguments: Vec<OsString>,
     pub budget: ExecutionBudget,
+    /// The transport's socket file, which the host must be allowed to connect
+    /// to (macOS); `None` for Linux's abstract socket, which has no file.
+    pub socket: Option<&'a Path>,
+}
+/// The started host as the launch waits for it: a `std::process::Child`, or
+/// the child of a sandbox that spawns it another way (macOS `posix_spawn`).
+pub trait HostProcess {
+    fn id(&self) -> u32;
+    /// The exit status once the host exited, reaping it; `None` while it runs.
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>>;
+    fn wait(&mut self) -> io::Result<ExitStatus>;
+}
+impl HostProcess for Child {
+    fn id(&self) -> u32 {
+        Child::id(self)
+    }
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Child::wait(self)
+    }
 }
 pub struct SpawnedHost {
-    pub child: Child,
+    pub child: Box<dyn HostProcess>,
     /// Terminates the host and anything it started.
     pub guard: HostGuard,
     pub isolation: Isolation,
@@ -336,7 +358,7 @@ fn spawn_transport_watchdog(
 fn transfer_guard_to_watchdog(
     sender: mpsc::SyncSender<HostGuard>,
     guard: HostGuard,
-    child: &mut Child,
+    child: &mut dyn HostProcess,
 ) -> io::Result<()> {
     if let Err(error) = sender.send(guard) {
         let mut guard = error.0;
@@ -399,7 +421,7 @@ fn hash(file: &mut File, limit: u64) -> io::Result<[u8; 32]> {
 /// `wait`) only after the watchdog dropped the guard. Elsewhere the guard does
 /// not rely on the pid, and `try_wait` reaps as usual.
 #[cfg(target_os = "linux")]
-fn host_exit(child: &mut Child) -> io::Result<Option<ExitStatus>> {
+fn host_exit(child: &mut dyn HostProcess) -> io::Result<Option<ExitStatus>> {
     use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
     use std::os::unix::process::ExitStatusExt;
     let pid = i32::try_from(child.id())
@@ -419,7 +441,7 @@ fn host_exit(child: &mut Child) -> io::Result<Option<ExitStatus>> {
     Ok(Some(ExitStatus::from_raw(raw)))
 }
 #[cfg(not(target_os = "linux"))]
-fn host_exit(child: &mut Child) -> io::Result<Option<ExitStatus>> {
+fn host_exit(child: &mut dyn HostProcess) -> io::Result<Option<ExitStatus>> {
     child.try_wait()
 }
 /// Synchronous worker entry. A separate watchdog owns the host's process tree
@@ -470,6 +492,7 @@ pub fn run_verified_host_in(
             .into(),
         ],
         budget: launch.budget,
+        socket: server.path.as_deref(),
     };
     let (stop_tx, stop_rx) = mpsc::channel();
     let (guard_tx, guard_rx) = mpsc::sync_channel::<HostGuard>(1);
@@ -519,7 +542,7 @@ pub fn run_verified_host_in(
     };
     drop(executable);
     let pid = child.id();
-    if let Err(error) = transfer_guard_to_watchdog(guard_tx, guard, &mut child) {
+    if let Err(error) = transfer_guard_to_watchdog(guard_tx, guard, &mut *child) {
         let _ = stop_tx.send(());
         let _ = watchdog.join();
         return Err(error);
@@ -553,7 +576,7 @@ pub fn run_verified_host_in(
                     // exit is then observed like any other.
                     let grace = Instant::now() + Duration::from_millis(2000);
                     let status = loop {
-                        if let Some(status) = host_exit(&mut child)? {
+                        if let Some(status) = host_exit(&mut *child)? {
                             break status;
                         }
                         if Instant::now() >= grace {
