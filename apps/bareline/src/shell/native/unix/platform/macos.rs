@@ -209,7 +209,8 @@ impl Platform {
         )
     }
     pub fn operation_failed(&self, details: &str) {
-        eprintln!("event=operation_failed details={details}");
+        // The details name files and paths; the diagnostic keeps the kind only.
+        eprintln!("event=operation_failed");
         self.dialogs.operation_failed(details);
     }
     pub fn clipboard_max_bytes(&self) -> usize {
@@ -315,3 +316,9 @@ pub fn in_app_prompt(_platform: Option<&Platform>) -> Option<PromptView> {
     None
 }
 pub fn answer_prompt(_platform: Option<&Platform>, _id: i32) {}
+pub fn answer_prompt_text(_platform: Option<&Platform>, _id: i32, _text: &str) {}
+/// The save panel always exists here, so the shell never needs to ask for a
+/// path itself.
+pub fn save_destination_prompt(_platform: Option<&Platform>, _default: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}

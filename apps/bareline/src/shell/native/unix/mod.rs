@@ -51,12 +51,13 @@ pub use error::Result;
 pub use files::{FileSystem, PathTrust, RECYCLED, SessionPathTrust, recycle_entry, use_recovery_folder};
 pub use launch::{installed_folders, prepare_installed_folders, user_home, valid_launch_path};
 pub use platform::{
-    AboutAction, CommandMessage, Platform, SaveChoice, SavePromptOutcome, answer_prompt, command_window, in_app_prompt,
-    interaction_replay, interaction_scope, interaction_settle, interaction_waiting, save_destination_settled,
+    AboutAction, CommandMessage, Platform, SaveChoice, SavePromptOutcome, answer_prompt, answer_prompt_text,
+    command_window, in_app_prompt, interaction_replay, interaction_scope, interaction_settle, interaction_waiting,
+    save_destination_prompt, save_destination_settled, save_prompt_failed,
 };
 pub use process::{ProcessLauncher, alive, handle_counters, monotonic_ns, private_bytes, resolve_program};
 pub use renderer::{Renderer, create_renderer, installed_font_families};
-pub use session::{SessionEndMonitor, SessionEndSignal, register_application_restart};
+pub use session::{SessionEndMonitor, SessionEndSignal, register_application_restart, session_end_signalled};
 // Types the shell reaches only through values and methods (as on Windows), or
 // only in its tests.
 #[allow(
@@ -69,7 +70,7 @@ pub use self::{
     renderer::InstalledFontFamily,
 };
 #[cfg(test)]
-pub use session::{SessionEndHost, SessionEndMessage};
+pub use session::{SessionEndHost, SessionEndMessage, session_end_monitor_for_tests};
 pub use system::{
     appearance_activated, appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory,
     system_code_page, system_ui_language, window_theme,

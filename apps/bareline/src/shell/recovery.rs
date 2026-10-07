@@ -16,6 +16,8 @@ struct PendingRestore {
     directory: PathBuf,
     token: DiscoveryToken,
     request_id: u64,
+    /// The file the recovered text came from, if the journal recorded one.
+    original: Option<PathBuf>,
 }
 /// Discovery result. Journals whose inspection fails are kept on disk and listed
 /// separately so that only the user decides to delete them.
@@ -361,6 +363,9 @@ pub(super) struct RecoveryRuntime {
     discovery_generation: u64,
     completion_notice_generation: Option<u64>,
     claimed_directories: std::collections::BTreeMap<PathBuf, u64>,
+    /// The recorded original file of each restored (pathless) document, by
+    /// document id: where Save As starts when no save dialog exists.
+    restored_originals: std::collections::BTreeMap<u64, PathBuf>,
     selection_identity: Option<RecoveryRowId>,
     cancellation: bareline_file_io::cancellation::Cancellation,
     discovery_cancellation: bareline_file_io::cancellation::Cancellation,
@@ -551,7 +556,13 @@ impl RecoveryRuntime {
         self.discovery_generation = self.discovery_generation.wrapping_add(1).max(1);
         self.content = RecoveryContent::Discovering;
     }
+    /// The file a restored document's text was recovered from, if recorded.
+    pub(super) fn restored_original(&self, document: u64) -> Option<&std::path::Path> {
+        self.restored_originals.get(&document).map(PathBuf::as_path)
+    }
     fn release_closed_claims(&mut self, open_documents: &std::collections::BTreeSet<u64>) -> bool {
+        self.restored_originals
+            .retain(|document, _| open_documents.contains(document));
         let before = self.claimed_directories.len();
         self.claimed_directories
             .retain(|_, document| open_documents.contains(document));
@@ -708,11 +719,11 @@ impl Shell {
                 self.dismiss_modal(modal::ModalSurface::Recovery);
             }
             "recovery.restore_selected" => {
-                if let Some(directory) = self
+                if let Some((directory, original)) = self
                     .recovery
                     .rows()
                     .get(self.recovery.selected)
-                    .map(|row| row.directory.clone())
+                    .map(|row| (row.directory.clone(), row.original.clone()))
                     && self.ensure_workspace(el)
                 {
                     let token = self.recovery.token();
@@ -727,6 +738,7 @@ impl Shell {
                                 directory,
                                 token,
                                 request_id,
+                                original,
                             });
                             (self.notify)();
                             self.dismiss_modal(modal::ModalSurface::Recovery);
@@ -1018,6 +1030,9 @@ impl Shell {
                 self.recovery
                     .claimed_directories
                     .insert(pending.directory.clone(), document.0);
+                if let Some(original) = pending.original.clone() {
+                    self.recovery.restored_originals.insert(document.0, original);
+                }
                 self.recovery.refresh_after_operation(&[pending.directory]);
                 (self.notify)();
             }
@@ -1769,6 +1784,46 @@ mod tests {
         writer.checkpoint(&platform).unwrap();
     }
 
+    /// LNX-EDIT-002: without a save dialog, Save As of a restored copy asks
+    /// for a path that starts at the file the text was recovered from.
+    #[test]
+    fn save_as_without_a_dialog_starts_at_the_recovered_original() {
+        use bareline_platform::{SaveDialogOptions, SaveFileKind};
+        assert!(super::super::lifecycle::save_dialog_unsupported(
+            &bareline_platform::Unsupported {
+                capability: bareline_platform::Capability::SaveFile
+            }
+            .to_string()
+        ));
+        assert!(!super::super::lifecycle::save_dialog_unsupported(
+            "The dialog closed without a choice."
+        ));
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let restored = workspace.editors[0].document_identity().0;
+        shell.workspace = Some(workspace);
+        let original = PathBuf::from("/docs").join("r.txt");
+        shell.recovery.restored_originals.insert(restored, original.clone());
+        let options = SaveDialogOptions::new(SaveFileKind::Text)
+            .named("Untitled 2.txt")
+            .in_directory(Some(PathBuf::from("/work")));
+        assert_eq!(shell.save_destination_default(0, &options), original);
+        // Any other document starts at the dialog's folder and name.
+        assert_eq!(
+            shell.save_destination_default(1, &options),
+            PathBuf::from("/work").join("Untitled 2.txt")
+        );
+        // Closing the restored document forgets its original.
+        shell.recovery.release_closed_claims(&std::collections::BTreeSet::new());
+        assert!(shell.recovery.restored_original(restored).is_none());
+    }
+
     #[test]
     fn discovery_lists_shared_and_instance_journals_and_keeps_unreadable_ones() {
         let root = temp_recovery_root("discovery");
@@ -2260,6 +2315,7 @@ mod tests {
             directory: PathBuf::from("checkpoint-a"),
             token: token.clone(),
             request_id: 41,
+            original: Some(PathBuf::from("/docs/a.txt")),
         });
         assert_eq!(
             shell.recovery.discovery_generation, generation,
@@ -2308,6 +2364,7 @@ mod tests {
             directory: PathBuf::from("checkpoint-a"),
             token,
             request_id: 42,
+            original: None,
         };
         let current_generation = shell.recovery.discovery_generation;
         shell.finish_pending_restore(
@@ -2327,6 +2384,7 @@ mod tests {
             directory: PathBuf::from("checkpoint-current"),
             token: shell.recovery.token(),
             request_id: 43,
+            original: None,
         };
         shell.finish_pending_restore(
             current,

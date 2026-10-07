@@ -189,6 +189,8 @@ struct Shell {
     profile: profile::ProfileRuntime,
     smoke: bool,
     failed: bool,
+    /// The title last given to the window (`sync_window_title`).
+    window_title: String,
     prototype: Option<TextPrototype>,
     workspace: Option<Workspace>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
@@ -288,6 +290,8 @@ pub(super) enum Route {
     /// Editor surface commands handled by `power_dispatch` or the editor fallback.
     EditorPower,
     Spelling,
+    /// The command-line files beyond the first sixteen (LNX-CLI-009).
+    Launch,
 }
 
 /// Classify a contributed command ID to the handler that owns it. The order of
@@ -349,6 +353,9 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
     }
     if id == "profile.migration.retry" {
         return Some(Profile);
+    }
+    if id == launch::OPEN_REMAINING_ID {
+        return Some(Launch);
     }
     // The dispatch chain, in order.
     if matches!(
@@ -589,6 +596,15 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
             })
             .expect("unique conversion command");
     }
+    registry
+        .register(bareline_commands::CommandSpec {
+            id: bareline_commands::CommandId(launch::OPEN_REMAINING_ID),
+            title: launch::OPEN_REMAINING_TITLE,
+            category: "File",
+            shortcut: "",
+            action: Action::Contributed(bareline_commands::CommandId(launch::OPEN_REMAINING_ID)),
+        })
+        .expect("unique launch command");
     bareline_settings::register_commands(registry).expect("unique settings commands");
     for command in update::commands()
         .into_iter()
@@ -815,8 +831,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let Some(instance) = instance::prepare(&mut launch, notify.clone())? else {
         // The running instance received the usable paths; name the rest here.
-        if !launch.rejected_paths.is_empty() {
-            crate::shell::native::cli::report(&rejected_paths_text(&launch.rejected_paths), true);
+        let not_forwarded = launch.not_forwarded();
+        if !not_forwarded.is_empty() {
+            crate::shell::native::cli::report(&rejected_paths_text(&not_forwarded), true);
         }
         return Ok(());
     };
@@ -866,6 +883,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         profile: profile::ProfileRuntime::new(&mut launch),
         smoke,
         failed: false,
+        window_title: "Bareline".into(),
         prototype: prototype.then(TextPrototype::mixed_script),
         workspace: None,
         notify,
@@ -970,6 +988,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         && !STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
     {
         shell.offer_keymap_preset();
+    }
+    if let Some((text, details)) = launch.remaining_notice() {
+        shell.startup_notice(
+            launch::OPEN_REMAINING_NOTICE,
+            bareline_ui::theme::ToastLevel::Warning,
+            text,
+            details,
+        );
     }
     if !launch.rejected_paths.is_empty() {
         shell.startup_notice(
@@ -1191,6 +1217,12 @@ impl ApplicationHandler<Wake> for Handler {
         }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        // A session-end signal (Linux, macOS) flushes and exits before anything
+        // else may ask a question or start a save.
+        if self.shell.session_end_pump(el) {
+            poll_when_exiting(el);
+            return;
+        }
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
         // A prompt or dialog that answers later (Linux) runs its asker again.
@@ -1374,7 +1406,29 @@ fn poll_when_exiting(el: &ActiveEventLoop) {
         el.set_control_flow(flow);
     }
 }
+/// The window's title: the active document's tab title (its name, and " •"
+/// while it has unsaved changes) before the product name, as Notepad++ names
+/// its window, so window lists and Alt+Tab tell windows apart (LNX-UI-011).
+fn window_title(document: Option<&str>) -> String {
+    document.map_or_else(|| "Bareline".into(), |name| format!("{name} – Bareline"))
+}
 impl Shell {
+    /// Retitles the window when the active tab, its path or its dirty state
+    /// changed; every such change repaints, so the frame checks it.
+    fn sync_window_title(&mut self) {
+        let title = window_title(
+            self.workspace
+                .as_ref()
+                .and_then(|workspace| workspace.title(self.app.active))
+                .as_deref(),
+        );
+        if title != self.window_title {
+            if let Some(window) = &self.window {
+                window.set_title(&title);
+            }
+            self.window_title = title;
+        }
+    }
     /// A startup problem that did not stop the launch stays on screen until the
     /// user dismisses it (APP-01, APP-17).
     fn startup_notice(&mut self, id: &str, level: bareline_ui::theme::ToastLevel, text: String, details: String) {
@@ -2004,6 +2058,12 @@ impl Shell {
                 );
             }
         }
+        if self.launch_remaining() == 0 {
+            context.states.insert(
+                bareline_commands::CommandId(launch::OPEN_REMAINING_ID),
+                CommandState::disabled("Every command-line file is open"),
+            );
+        }
         for id in ["settings.external_reload", "settings.external_keep"] {
             if !self.settings.controller.open || !self.settings.controller.has_external_change() {
                 context.states.insert(
@@ -2319,7 +2379,7 @@ impl Shell {
                     code,
                 );
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.message = Some(format!("Close prompt unavailable (HRESULT {code:#010x})."));
+                    workspace.message = Some(native::save_prompt_failed(false, code));
                 }
                 self.pending_close_trace_ticket = None;
                 false
@@ -2605,7 +2665,7 @@ impl Shell {
                     .record(ticket, "dialog-failure", "application", 0, 0, code);
                 self.pending_close_trace_ticket = None;
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.message = Some(format!("Exit prompt unavailable (HRESULT {code:#010x})."));
+                    workspace.message = Some(native::save_prompt_failed(true, code));
                 }
                 false
             }
@@ -2749,6 +2809,10 @@ impl Shell {
     fn dispatch_contributed(&mut self, el: &ActiveEventLoop, id: bareline_commands::CommandId) {
         if id.0 == "profile.migration.retry" {
             self.profile_retry_migration();
+            return;
+        }
+        if id.0 == launch::OPEN_REMAINING_ID {
+            self.launch_open_remaining(el);
             return;
         }
         if id.0 == "search.folder" && !self.ensure_workspace(el) {
@@ -4496,6 +4560,7 @@ impl Shell {
         }
     }
     fn on_redraw(&mut self, el: &ActiveEventLoop, editor_bounds: bareline_renderer::Rect) {
+        self.sync_window_title();
         if self.renderer.is_none() {
             self.ledger.record(StartupAction::CreateRenderer);
             let _renderer_phase = bareline_diagnostics::startup_span(StartupAction::CreateRenderer);
@@ -5896,6 +5961,29 @@ mod deferred_close_tests {
         assert!(shell.pending_close.is_none(), "Cancel must retire the exit request");
         drop(shell);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// LNX-UI-011: the window was always titled "Bareline".
+    #[test]
+    fn the_window_title_follows_the_active_document_and_its_unsaved_changes() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(crate::shell::native::FileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let mut shell = headless_shell();
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Bareline", "no documents yet");
+        shell.workspace = Some(workspace);
+        shell.app.active = 1;
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Untitled 2 – Bareline");
+        let workspace = shell.workspace.as_mut().unwrap();
+        workspace.editors[1].enqueue(Input::Insert("edited".into()));
+        settle(workspace);
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Untitled 2 • – Bareline");
+        shell.app.active = 0;
+        shell.sync_window_title();
+        assert_eq!(shell.window_title, "Untitled 1 – Bareline");
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub fn curated_model(registry: &CommandRegistry) -> MenuModel {
 pub const WHEN_ENABLED: &[&str] = &[
     "file.transcode.resume",
     "file.transcode.cancel",
+    "file.openRemainingLaunchFiles",
     "file.cancel_operations",
     "file.cancel_save_all",
     "file.save_conflict_compare",
@@ -149,6 +150,8 @@ pub const TREE: &[MenuTemplate] = &[
                     // menu is capped at 14 first-level rows (search.rs test).
                     C("file.session.load"),
                     C("file.session.save"),
+                    // Only while a launch named more files than it opened (LNX-CLI-009).
+                    C("file.openRemainingLaunchFiles"),
                     Sep,
                     C("file.recent.pin"),
                     // Palette-only (see PALETTE_ONLY); listed so it has a home.

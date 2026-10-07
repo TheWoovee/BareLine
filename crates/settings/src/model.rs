@@ -358,7 +358,7 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
     setting!(
         "language.locale",
         "Display language",
-        "Language used for Bareline's own menus and labels. \"system\" follows the Windows display language and falls back to English when no language pack is installed for it.",
+        "Language used for Bareline's own menus and labels. \"system\" follows the system display language and falls back to English when no language pack is installed for it.",
         "Language",
         SettingKind::Text,
         false,

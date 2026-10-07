@@ -103,6 +103,31 @@ fn bypass_single_instance(
 mod tests {
     use super::*;
 
+    /// LNX-EDIT-001: the notice went into the shared message slot, which the
+    /// spelling notice overwrote at every launch.
+    #[test]
+    fn the_separate_window_notice_is_a_toast_that_later_messages_do_not_replace() {
+        let mut shell = crate::shell::accessibility::tests::headless_shell();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        shell.workspace = Some(workspace);
+        shell.instance.message = Some(
+            "This window runs separately from other Bareline windows; its tabs are not restored next time.".into(),
+        );
+        let before = shell.toasts.persistent_len();
+        shell.instance_notice();
+        assert!(shell.instance.message.is_none());
+        assert_eq!(shell.toasts.persistent_len(), before + 1);
+        assert_eq!(shell.workspace.as_ref().unwrap().message, None);
+        // A later status line leaves the notice on screen.
+        shell.workspace.as_mut().unwrap().message = Some("This system does not support spell checking yet".into());
+        assert_eq!(shell.toasts.persistent_len(), before + 1);
+    }
+
     #[test]
     fn portable_handle_diagnostics_stay_out_of_single_instance_forwarding() {
         assert!(bypass_single_instance(
@@ -142,6 +167,20 @@ impl Shell {
             None => self.instance.message = Some(message),
         }
     }
+    /// Shows the instance notice (this window runs separately and its tabs are
+    /// not restored, or files arrived while closing) as a toast that stays until
+    /// dismissed: in the shared message slot the next status, such as the
+    /// spelling notice at startup, replaced it before anyone read it.
+    fn instance_notice(&mut self) {
+        if let Some(message) = self.instance.message.take() {
+            self.startup_notice(
+                "instance:notice",
+                bareline_ui::theme::ToastLevel::Warning,
+                message.clone(),
+                message,
+            );
+        }
+    }
     pub(super) fn instance_pump(&mut self, el: &ActiveEventLoop) {
         // A closing owner turns new launches away at once so they open on their own.
         // Requests it already acknowledged stay queued: the exit waits for them.
@@ -153,13 +192,7 @@ impl Shell {
         if !self.startup.presented() || self.session.closing() {
             return;
         }
-        if let Some(message) = self.instance.message.take() {
-            if let Some(workspace) = &mut self.workspace {
-                workspace.message = Some(message);
-            } else {
-                self.instance.message = Some(message);
-            }
-        }
+        self.instance_notice();
         // A prompt or file dialog waits for its answer (Linux): the requests stay
         // queued, as they do behind a modal dialog on Windows, so the command
         // that asked runs again on the document it asked about.

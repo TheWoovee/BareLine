@@ -68,6 +68,26 @@ pub fn in_app_prompt(_platform: Option<&Platform>) -> Option<super::PromptView> 
     None
 }
 pub fn answer_prompt(_platform: Option<&Platform>, _id: i32) {}
+pub fn answer_prompt_text(_platform: Option<&Platform>, _id: i32, _text: &str) {}
+/// The common item dialog always exists on Windows, so the shell never needs
+/// to ask for a save path itself.
+pub fn save_destination_prompt(_platform: Option<&Platform>, _default: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// Logoff and shutdown reach the window as WM_QUERYENDSESSION/WM_ENDSESSION,
+/// which the monitor routes as a close request, and Windows ends the process
+/// itself; nothing is ever reported to the process for the shell to poll.
+pub fn session_end_signalled(_monitor: &SessionEndMonitor) -> bool {
+    false
+}
+
+/// What the shell says when the close (`exit` false) or exit prompt could not
+/// be shown; the HRESULT is what Windows support asks for.
+pub fn save_prompt_failed(exit: bool, code: i32) -> String {
+    let prompt = if exit { "Exit" } else { "Close" };
+    format!("{prompt} prompt unavailable (HRESULT {code:#010x}).")
+}
 
 /// The Windows services wake the loop through their own window messages.
 pub fn set_event_notify(_notify: std::sync::Arc<dyn Fn() + Send + Sync>) {}

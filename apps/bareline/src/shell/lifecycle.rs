@@ -340,7 +340,58 @@ fn reachable_folder(
     }
     receiver.recv_timeout(budget).ok().flatten()
 }
+/// Whether a save dialog's failure says this system has no save dialog (no
+/// desktop portal, as on bare X11 or WSL), rather than why one failed.
+pub(super) fn save_dialog_unsupported(error: &str) -> bool {
+    error
+        == bareline_platform::Unsupported {
+            capability: bareline_platform::Capability::SaveFile,
+        }
+        .to_string()
+}
+/// The user's Documents folder, else the home folder.
+fn documents_folder() -> Option<PathBuf> {
+    let home = PathBuf::from(crate::shell::native::user_home()?);
+    let documents = home.join("Documents");
+    Some(if documents.is_dir() { documents } else { home })
+}
 impl Shell {
+    /// The save dialog's answer or, where this system has no save dialog,
+    /// the answer of the shell's own destination prompt (LNX-EDIT-002), which
+    /// then feeds the same destination check and overwrite confirmation.
+    fn with_destination_fallback(
+        &self,
+        index: usize,
+        options: &SaveDialogOptions,
+        chosen: Result<Option<PathBuf>, String>,
+    ) -> Result<Option<PathBuf>, String> {
+        match chosen {
+            Err(error) if save_dialog_unsupported(&error) => Ok(crate::shell::native::save_destination_prompt(
+                self.platform.as_ref(),
+                &self.save_destination_default(index, options),
+            )),
+            other => other,
+        }
+    }
+    /// Where the destination prompt starts: a recovered copy's recorded
+    /// original file, else the dialog's folder and name, else the Documents
+    /// folder.
+    pub(super) fn save_destination_default(&self, index: usize, options: &SaveDialogOptions) -> PathBuf {
+        let workspace = self.workspace.as_ref();
+        if let Some(original) = workspace
+            .filter(|workspace| workspace.path(index).is_none())
+            .and_then(|workspace| workspace.editors.get(index))
+            .and_then(|editor| self.recovery.restored_original(editor.document_identity().0))
+        {
+            return original.to_path_buf();
+        }
+        options
+            .default_directory
+            .clone()
+            .or_else(documents_folder)
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(options.default_name.as_deref().unwrap_or("Untitled.txt"))
+    }
     fn choose_save_document(&self, options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
         #[cfg(test)]
         if let Some(picker) = &self.lifecycle.save_destination_picker {
@@ -447,7 +498,8 @@ impl Shell {
                 |extension| format!("{stem} - Copy.{extension}"),
             ));
         }
-        let path = match self.choose_save_document(&options) {
+        let chosen = self.choose_save_document(&options);
+        let path = match self.with_destination_fallback(index, &options, chosen) {
             Ok(Some(path)) => path,
             Ok(None) => return false,
             Err(error) => {
@@ -1160,7 +1212,9 @@ impl Shell {
                 SaveAllStep::Complete => break,
                 SaveAllStep::NeedsDestination { identity, index } => {
                     let options = self.save_dialog_options(index);
-                    let path = match self.platform.as_ref().map(|p| p.save_file_with(&options)) {
+                    let chosen = self.platform.as_ref().map(|p| p.save_file_with(&options));
+                    let chosen = chosen.map(|chosen| self.with_destination_fallback(index, &options, chosen));
+                    let path = match chosen {
                         Some(Ok(Some(path))) => path,
                         Some(Ok(None)) if crate::shell::native::interaction_waiting(self.platform.as_ref()) => {
                             // The dialog answers later (Linux): this document

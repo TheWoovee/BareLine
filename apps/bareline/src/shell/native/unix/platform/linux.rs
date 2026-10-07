@@ -265,7 +265,8 @@ impl Platform {
     /// The failure goes to the diagnostic output and, when no other question is
     /// open, into the shell's message prompt.
     pub fn operation_failed(&self, details: &str) {
-        eprintln!("event=operation_failed details={details}");
+        // The details name files and paths; the diagnostic keeps the kind only.
+        eprintln!("event=operation_failed");
         self.interactions.notice(InAppPrompt::operation_failed(details));
     }
     pub fn clipboard_max_bytes(&self) -> usize {
@@ -393,6 +394,24 @@ pub fn answer_prompt(platform: Option<&Platform>, id: i32) {
     if let Some(platform) = platform {
         platform.interactions.answer(id);
     }
+}
+/// The button pressed in a prompt with a text field, and what the field held.
+pub fn answer_prompt_text(platform: Option<&Platform>, id: i32, text: &str) {
+    if let Some(platform) = platform {
+        platform.interactions.answer_text(id, text);
+    }
+}
+/// Where to save when the save dialog is unsupported (no desktop portal, as on
+/// bare X11 or WSL): the shell's own prompt with a path field that starts at
+/// `default` (LNX-EDIT-002). Answers later, like every prompt here: `None`
+/// until then, and when the person cancels.
+pub fn save_destination_prompt(platform: Option<&Platform>, default: &Path) -> Option<PathBuf> {
+    platform?
+        .interactions
+        .ask(Question::Destination(default.to_path_buf()))
+        .and_then(Answer::paths)
+        .and_then(std::result::Result::ok)
+        .and_then(|paths| paths.into_iter().next())
 }
 
 #[cfg(test)]
