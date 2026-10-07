@@ -201,7 +201,11 @@ pub(super) struct RecoveryRow {
     original: Option<PathBuf>,
     status: bareline_file_io::recovery::RecoveryStatus,
     protected_unix_ms: u64,
+    /// The journal's baseline: the original file's size, or what an untitled
+    /// document started from.
     size: u64,
+    /// The recovered text's size once the preview has replayed the journal.
+    recovered_size: Option<u64>,
     count: usize,
     complete_baseline: bool,
     /// Inspection failed; the journal is kept and only deletion is offered.
@@ -237,9 +241,18 @@ impl RecoveryRow {
             status: bareline_file_io::recovery::RecoveryStatus::CorruptTail,
             protected_unix_ms: 0,
             size,
+            recovered_size: None,
             count: 1,
             complete_baseline: false,
             unreadable: true,
+        }
+    }
+    /// The recovered size once the preview knows it; until then the baseline,
+    /// labelled as the original size, never as what Restore brings back.
+    fn size_label(&self) -> String {
+        match self.recovered_size {
+            Some(size) => format_size(size),
+            None => format!("original {}", format_size(self.size)),
         }
     }
     fn state_label(&self) -> &'static str {
@@ -280,6 +293,7 @@ fn group_documents(entries: &[(PathBuf, bareline_file_io::recovery::RecoveryInsp
                 row.protected_unix_ms = ms;
                 row.status = inspection.status;
                 row.size = inspection.metadata.original_len;
+                row.recovered_size = None;
                 row.complete_baseline = inspection.complete_baseline;
                 row.original = inspection.metadata.original_path.clone();
                 row.name = name;
@@ -294,6 +308,7 @@ fn group_documents(entries: &[(PathBuf, bareline_file_io::recovery::RecoveryInsp
                 status: inspection.status,
                 protected_unix_ms: ms,
                 size: inspection.metadata.original_len,
+                recovered_size: None,
                 count: 1,
                 complete_baseline: inspection.complete_baseline,
                 unreadable: false,
@@ -340,7 +355,9 @@ fn format_size(bytes: u64) -> String {
         value /= 1024.0;
         unit += 1;
     }
-    if unit == 0 {
+    if bytes == 1 {
+        "1 byte".into()
+    } else if unit == 0 {
         format!("{bytes} bytes")
     } else {
         format!("{value:.1} {}", UNITS[unit])
@@ -377,7 +394,10 @@ pub(super) struct RecoveryRuntime {
     hits: Vec<(bareline_renderer::Rect, String)>,
     operation: Option<Receiver<Result<Vec<PathBuf>, String>>>,
     preview_path: Option<PathBuf>,
-    preview: Option<Receiver<Result<String, String>>>,
+    /// Where the last painted action row (and its message line) began.
+    actions_top: Option<f32>,
+    /// The preview's first text and the recovered text's size in bytes.
+    preview: Option<Receiver<Result<(String, u64), String>>>,
     preview_text: String,
     preview_cancellation: bareline_file_io::cancellation::Cancellation,
     allow_auto_open: bool,
@@ -494,6 +514,21 @@ impl RecoveryRuntime {
             let ms = inspection.last_durable.map_or(0, |receipt| receipt.protected_unix_ms);
             (ms != 0 && ms < cutoff).then(|| directory.clone())
         })
+    }
+    /// The top of the open center's action row and the line above it, where
+    /// notifications must not go.
+    pub(super) fn actions_top(&self) -> Option<f32> {
+        self.actions_top.filter(|_| self.open)
+    }
+    /// The previewed row's recovered size (`RecoveryRow::recovered_size`).
+    fn set_recovered_size(&mut self, size: u64) {
+        if let RecoveryContent::Ready(rows) = &mut self.content
+            && let Some(row) = rows
+                .iter_mut()
+                .find(|row| Some(&row.directory) == self.preview_path.as_ref())
+        {
+            row.recovered_size = Some(size);
+        }
     }
     fn rows(&self) -> &[RecoveryRow] {
         match &self.content {
@@ -1156,7 +1191,9 @@ impl Shell {
                                     bareline_document::Budget::new(0),
                                     &cancel,
                                 )?;
+                                let size = opened.transcoded.document.snapshot().len() as u64;
                                 bareline_file_io::paged_recovery::preview(&mut opened, &bytes, &cancel)
+                                    .map(|text| (text, size))
                             })();
                             let _ = tx.send(result);
                             notify();
@@ -1175,7 +1212,10 @@ impl Shell {
                     self.recovery.preview = None;
                     changed = true;
                     self.recovery.preview_text = match result {
-                        Ok(Ok(text)) => text,
+                        Ok(Ok((text, size))) => {
+                            self.recovery.set_recovered_size(size);
+                            text
+                        }
                         Ok(Err(error)) => format!("Preview unavailable: {error}"),
                         Err(_) => "Preview worker stopped.".into(),
                     };
@@ -1532,7 +1572,7 @@ impl RecoveryRuntime {
                 &format!(
                     "{original} · {} · {}{extra}",
                     relative_time(entry.protected_unix_ms),
-                    format_size(entry.size)
+                    entry.size_label()
                 ),
                 11.0,
                 theme.muted,
@@ -1660,6 +1700,21 @@ fn activates_recovery_command(key: &Key) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rows_show_the_recovered_size_once_previewed_and_a_singular_byte() {
+        assert_eq!(format_size(1), "1 byte");
+        assert_eq!(format_size(22), "22 bytes");
+        assert_eq!(format_size(2048), "2.0 KB");
+        // Before the preview replays the journal only the baseline is known,
+        // and it is labelled as the original size (an untitled baseline is 1 byte).
+        let row = RecoveryRow::unreadable(std::path::Path::new("checkpoint-untitled"), 1);
+        assert_eq!(row.size_label(), "original 1 byte");
+        let mut runtime = RecoveryRuntime::default();
+        runtime.content = RecoveryContent::Ready(vec![row]);
+        runtime.preview_path = Some(PathBuf::from("checkpoint-untitled"));
+        runtime.set_recovered_size(22);
+        assert_eq!(runtime.rows()[0].size_label(), "22 bytes");
+    }
     #[test]
     fn generated_discovery_excludes_live_adopted_checkpoint_and_keeps_other_data() {
         let root = std::env::temp_dir().join(format!(
@@ -2773,7 +2828,7 @@ impl RecoveryRuntime {
                             original,
                             entry.state_label(),
                             relative_time(entry.protected_unix_ms),
-                            format_size(entry.size)
+                            entry.size_label()
                         )
                     })
                     .unwrap_or_else(|| "Recovery checkpoint".into())
