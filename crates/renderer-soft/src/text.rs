@@ -8,8 +8,8 @@
 //! unchanged, as a DirectWrite layout does.
 use bareline_renderer::{Color, LayoutError, Point, Rect, TextHit, TextStyle};
 use cosmic_text::{
-    Align, Attrs, AttrsList, BufferLine, CacheKey, Ellipsize, Family, FontSystem, Hinting, LayoutGlyph, LineEnding,
-    Shaping, SwashCache, SwashImage, Wrap, fontdb,
+    Align, Attrs, AttrsList, AttrsOwned, BufferLine, CacheKey, Ellipsize, Family, FontSystem, Hinting, LayoutGlyph,
+    LineEnding, Shaping, SwashCache, SwashImage, Wrap, fontdb,
 };
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -47,8 +47,9 @@ const COLOR_EMOJI_FAMILIES: [&str; 6] = [
     "JoyPixels",
     "OpenMoji Color",
 ];
-/// LEFT-TO-RIGHT MARK, put before a paragraph's shaping copy so the paragraph's
-/// base direction is left-to-right whatever its first strong character is.
+/// LEFT-TO-RIGHT MARK, put at the start of each bidi paragraph of a shaping
+/// copy ([`ShapingCopy`]) so its base direction is left-to-right whatever its
+/// first strong character is.
 const LTR_MARK: &str = "\u{200E}";
 /// Resolved family names; the cache is flushed when it overflows.
 const MAX_RESOLVED_FAMILIES: usize = 64;
@@ -99,6 +100,9 @@ pub(crate) struct Fonts {
     /// Paragraphs shaped since creation; tests use it to prove caching.
     #[cfg(test)]
     pub(crate) shaped_paragraphs: usize,
+    /// Emoji parts shaped on their own since creation ([`shape_parts`]).
+    #[cfg(test)]
+    shaped_parts: usize,
 }
 
 impl Fonts {
@@ -129,6 +133,8 @@ impl Fonts {
             emoji,
             #[cfg(test)]
             shaped_paragraphs: 0,
+            #[cfg(test)]
+            shaped_parts: 0,
         }
     }
     /// The installed family that draws `requested`, or the default family for
@@ -300,6 +306,71 @@ fn paragraphs(text: &str) -> Vec<(Range<usize>, LineEnding)> {
     result
 }
 
+/// Bidi paragraph separators (class B). [`paragraphs`] splits at CR and LF;
+/// the bidi algorithm also starts a new paragraph after each of the others.
+fn is_paragraph_separator(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{1C}'..='\u{1E}' | '\u{85}' | '\u{2029}')
+}
+
+/// A paragraph's copy for cosmic-text, which takes each bidi paragraph's base
+/// direction from its first strong character, so a line starting in Arabic
+/// would read right to left (and asserts that all bidi paragraphs of a line
+/// share one direction). Editor lines read left to right with right-to-left
+/// runs inside, as DirectWrite's default reading direction lays them out: a
+/// LEFT-TO-RIGHT MARK starts the copy and follows every paragraph separator.
+/// ASCII has no right-to-left characters and is copied unmarked.
+struct ShapingCopy {
+    text: String,
+    /// Source offsets a mark was put before, ascending.
+    marks: Vec<usize>,
+    /// Copy offsets just past each mark, ascending.
+    ends: Vec<usize>,
+}
+
+impl ShapingCopy {
+    fn new(source: &str) -> Self {
+        let mut copy = Self {
+            text: String::with_capacity(source.len() + LTR_MARK.len()),
+            marks: Vec::new(),
+            ends: Vec::new(),
+        };
+        if source.is_ascii() {
+            copy.text.push_str(source);
+            return copy;
+        }
+        copy.mark(0);
+        for (index, c) in source.char_indices() {
+            copy.text.push(c);
+            if is_paragraph_separator(c) {
+                copy.mark(index + c.len_utf8());
+            }
+        }
+        copy
+    }
+    fn mark(&mut self, source: usize) {
+        self.text.push_str(LTR_MARK);
+        self.marks.push(source);
+        self.ends.push(self.text.len());
+    }
+    /// The copy offset of source offset `offset` (after any mark put there).
+    fn copy_offset(&self, offset: usize) -> usize {
+        offset + LTR_MARK.len() * self.marks.partition_point(|&mark| mark <= offset)
+    }
+    /// The source offset of copy offset `offset`; inside a mark, where the mark was put.
+    fn source_offset(&self, offset: usize) -> usize {
+        let before = self.ends.partition_point(|&end| end <= offset);
+        let source = offset - LTR_MARK.len() * before;
+        self.marks.get(before).map_or(source, |&mark| source.min(mark))
+    }
+    /// Whether the copy range `start..end` lies within one mark.
+    fn is_mark(&self, start: usize, end: usize) -> bool {
+        let index = self.ends.partition_point(|&mark_end| mark_end <= start);
+        self.ends
+            .get(index)
+            .is_some_and(|&mark_end| mark_end - LTR_MARK.len() <= start && end <= mark_end)
+    }
+}
+
 /// Shape `text` in `family` (an installed family name). Unwrapped text uses the
 /// face's natural line height; wrapped text breaks at words (or inside a word
 /// that does not fit) within `width` and uses uniform 1.2 em lines.
@@ -322,35 +393,27 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
         styles: Vec::new(),
     };
     let emoji = fonts.emoji.clone();
+    // Emoji parts shaped for this text, which repeats them often.
+    let mut parts = HashMap::new();
     let mut top = 0.0f32;
     for (range, ending) in paragraphs(text) {
         let paragraph = shaped.paragraphs.len();
         let source = &text[range.clone()];
-        // cosmic-text takes a paragraph's base direction from its first strong
-        // character, so a line starting in Arabic would read right to left.
-        // Editor lines read left to right with right-to-left runs inside, as
-        // DirectWrite's default reading direction lays them out: a leading
-        // LEFT-TO-RIGHT MARK fixes the base direction. ASCII has no
-        // right-to-left characters and needs none.
-        let prefix = if source.is_ascii() { 0 } else { LTR_MARK.len() };
+        let copy = ShapingCopy::new(source);
         let mut attrs_list = AttrsList::new(&attrs);
-        if prefix > 0
+        if !source.is_ascii()
             && let Some(emoji) = emoji.as_deref()
         {
             // Emoji sequences prefer the colour face, as DirectWrite's fallback does.
             let emoji_attrs = attrs.clone().family(Family::Name(emoji));
             for (index, cluster) in source.grapheme_indices(true) {
                 if is_emoji_sequence(cluster) {
-                    attrs_list.add_span(prefix + index..prefix + index + cluster.len(), &emoji_attrs);
+                    let start = copy.copy_offset(index);
+                    attrs_list.add_span(start..start + cluster.len(), &emoji_attrs);
                 }
             }
         }
-        let shaping = if prefix > 0 {
-            format!("{LTR_MARK}{source}")
-        } else {
-            source.to_owned()
-        };
-        let mut line = BufferLine::new(shaping, ending, attrs_list.clone(), Shaping::Advanced);
+        let mut line = BufferLine::new(copy.text.as_str(), ending, attrs_list.clone(), Shaping::Advanced);
         // Leading alignment, as DirectWrite's default reading direction does.
         line.set_align(Some(Align::Left));
         #[cfg(test)]
@@ -372,18 +435,18 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
             // Glyphs are centred in the line box, as cosmic-text's own runs are.
             let baseline = top + (height - (visual.max_ascent + visual.max_descent)) / 2.0 + visual.max_ascent;
             let first = shaped.clusters.len();
-            // The glyphs in `source` offsets, without the direction mark's.
+            // The glyphs in `source` offsets, without the direction marks'.
             let mut glyphs: Vec<LayoutGlyph> = visual
                 .glyphs
                 .iter()
-                .filter(|glyph| glyph.end > prefix)
+                .filter(|glyph| !copy.is_mark(glyph.start, glyph.end))
                 .map(|glyph| LayoutGlyph {
-                    start: glyph.start.saturating_sub(prefix),
-                    end: glyph.end - prefix,
+                    start: copy.source_offset(glyph.start),
+                    end: copy.source_offset(glyph.end),
                     ..glyph.clone()
                 })
                 .collect();
-            let growth = split_missing_clusters(fonts, &mut glyphs, source, size, &attrs_list, prefix)
+            let growth = split_missing_clusters(fonts, &mut glyphs, source, size, &attrs_list, &copy, &mut parts)
                 + overlay_unattached_marks(fonts, &mut glyphs, source);
             for glyph in glyphs {
                 let (start, end) = (range.start + glyph.start, range.start + glyph.end);
@@ -581,14 +644,16 @@ fn cluster_len(glyphs: &[LayoutGlyph]) -> usize {
 /// without a colour emoji face) kept a box per character even where a symbol
 /// face has its parts. Each part of such a sequence is shaped on its own with
 /// the whole fallback chain instead, and a cluster draws at most one
-/// missing-glyph box, as DirectWrite does. Returns the change in line width.
+/// missing-glyph box, as DirectWrite does. `attrs` is in `copy` offsets and
+/// `parts` keeps the parts shaped so far. Returns the change in line width.
 fn split_missing_clusters(
     fonts: &mut Fonts,
     glyphs: &mut Vec<LayoutGlyph>,
     text: &str,
     size: f32,
     attrs: &AttrsList,
-    prefix: usize,
+    copy: &ShapingCopy,
+    parts: &mut PartCache,
 ) -> f32 {
     if glyphs.iter().all(|glyph| glyph.glyph_id != 0) {
         return 0.0;
@@ -607,9 +672,10 @@ fn split_missing_clusters(
         } else if is_emoji_sequence(source) {
             Some(shape_parts(
                 fonts,
+                parts,
                 source,
                 size,
-                &attrs.get_span(prefix + first.start),
+                &attrs.get_span(copy.copy_offset(first.start)),
                 first.level.is_rtl(),
             ))
         } else if missing > 1 && cluster.iter().all(|glyph| glyph.glyph_id == 0 || glyph.w == 0.0) {
@@ -650,7 +716,15 @@ fn split_missing_clusters(
 /// `cluster`'s parts (a character with any generic marks after it; joiners
 /// and selectors dropped) shaped one by one with full fallback and laid out
 /// from x = 0 in visual order. Parts no face draws share one missing-glyph box.
-fn shape_parts(fonts: &mut Fonts, cluster: &str, size: f32, attrs: &Attrs, rtl: bool) -> Vec<LayoutGlyph> {
+/// A part shaped before (in `cache`) is not shaped again.
+fn shape_parts(
+    fonts: &mut Fonts,
+    cache: &mut PartCache,
+    cluster: &str,
+    size: f32,
+    attrs: &Attrs,
+    rtl: bool,
+) -> Vec<LayoutGlyph> {
     let mut parts: Vec<Range<usize>> = Vec::new();
     let mut open = false;
     for (index, c) in cluster.char_indices() {
@@ -670,42 +744,48 @@ fn shape_parts(fonts: &mut Fonts, cluster: &str, size: f32, attrs: &Attrs, rtl: 
     let mut glyphs = Vec::new();
     let (mut x, mut boxed) = (0.0f32, false);
     for part in parts {
-        let mut line = BufferLine::new(
-            &cluster[part],
-            LineEnding::None,
-            AttrsList::new(attrs),
-            Shaping::Advanced,
-        );
-        let layout = line.layout(
-            &mut fonts.system,
-            size,
-            None,
-            Wrap::None,
-            Ellipsize::None,
-            None,
-            TAB_WIDTH,
-            Hinting::Disabled,
-        );
-        let shaped: Vec<&LayoutGlyph> = layout.iter().flat_map(|visual| &visual.glyphs).collect();
+        let shaped = cache
+            .entry((cluster[part].to_owned(), AttrsOwned::new(attrs)))
+            .or_insert_with_key(|(part, _)| shape_part(fonts, part, size, attrs));
         if let Some(missing) = shaped.iter().find(|glyph| glyph.glyph_id == 0) {
             if !boxed {
                 boxed = true;
-                glyphs.push(LayoutGlyph {
-                    x,
-                    ..(*missing).clone()
-                });
+                glyphs.push(LayoutGlyph { x, ..missing.clone() });
                 x += missing.w;
             }
             continue;
         }
         let width = shaped.iter().map(|glyph| glyph.x + glyph.w).fold(0.0, f32::max);
-        glyphs.extend(shaped.into_iter().map(|glyph| LayoutGlyph {
+        glyphs.extend(shaped.iter().map(|glyph| LayoutGlyph {
             x: x + glyph.x,
             ..glyph.clone()
         }));
         x += width;
     }
     glyphs
+}
+
+/// Emoji parts already shaped in one [`shape`] call, by text and attributes.
+type PartCache = HashMap<(String, AttrsOwned), Vec<LayoutGlyph>>;
+
+/// `part` shaped on its own with full fallback, from x = 0.
+fn shape_part(fonts: &mut Fonts, part: &str, size: f32, attrs: &Attrs) -> Vec<LayoutGlyph> {
+    #[cfg(test)]
+    {
+        fonts.shaped_parts += 1;
+    }
+    let mut line = BufferLine::new(part, LineEnding::None, AttrsList::new(attrs), Shaping::Advanced);
+    let layout = line.layout(
+        &mut fonts.system,
+        size,
+        None,
+        Wrap::None,
+        Ellipsize::None,
+        None,
+        TAB_WIDTH,
+        Hinting::Disabled,
+    );
+    layout.iter().flat_map(|visual| visual.glyphs.iter().cloned()).collect()
 }
 
 /// Draw generic combining marks the face does not attach over their base, as
@@ -1237,5 +1317,103 @@ mod tests {
         // The rest of the line follows the repaired cluster.
         let right = thumb.iter().map(|glyph| glyph.x + glyph.w).fold(0.0, f32::max);
         assert!((shaped.caret("👍🏽".len()).unwrap().x - right).abs() < 0.01);
+    }
+
+    #[test]
+    fn repeated_emoji_parts_are_shaped_once_per_layout() {
+        // LNX-UI-017: a line full of sequences no face draws whole shapes each
+        // part with fallback once, not once per cluster.
+        let mut fonts = Fonts::new(FontSource::BundledOnly);
+        let unit = "👍🏽 ";
+        let text = unit.repeat(200);
+        let shaped = shape(&mut fonts, &text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        assert_eq!(fonts.shaped_parts, 2, "👍 and 🏽, once each");
+        let step = shaped.caret(unit.len()).unwrap().x;
+        let last = shaped.caret(199 * unit.len()).unwrap().x;
+        assert!(step > 0.0 && (last - 199.0 * step).abs() < 0.1, "{step} {last}");
+        for (start, glyphs) in clusters_of(&shaped) {
+            let boxes = glyphs.iter().filter(|glyph| glyph.glyph_id == 0).count();
+            assert!(boxes <= 1, "{boxes} boxes for the cluster at {start}");
+        }
+    }
+
+    #[test]
+    fn shaping_copies_mark_every_bidi_paragraph_and_map_offsets_back() {
+        let ascii = ShapingCopy::new("a\u{1C}b");
+        assert_eq!((ascii.text.as_str(), ascii.marks.len()), ("a\u{1C}b", 0));
+        // Copy: mark 0..3, ש 3..5, U+2029 5..8, mark 8..11, a 11..12.
+        let copy = ShapingCopy::new("ש\u{2029}a");
+        assert_eq!(copy.text, "\u{200E}ש\u{2029}\u{200E}a");
+        assert_eq!(
+            (copy.marks.as_slice(), copy.ends.as_slice()),
+            ([0, 5].as_slice(), [3, 11].as_slice())
+        );
+        for (source, shaping) in [(0, 3), (2, 5), (5, 11), (6, 12)] {
+            assert_eq!(copy.copy_offset(source), shaping);
+            assert_eq!(copy.source_offset(shaping), source);
+        }
+        for (inside, source) in [(0, 0), (1, 0), (8, 5), (9, 5)] {
+            assert_eq!(copy.source_offset(inside), source, "copy offset {inside}");
+        }
+        assert!(copy.is_mark(0, 3) && copy.is_mark(8, 11));
+        assert!(!copy.is_mark(3, 5) && !copy.is_mark(5, 8) && !copy.is_mark(11, 12));
+    }
+
+    #[test]
+    fn every_bidi_paragraph_of_a_line_reads_left_to_right() {
+        // LNX-UI-010: the bidi algorithm also starts a paragraph after U+001C-U+001E,
+        // U+0085 and U+2029. Each must keep the left-to-right base direction
+        // (cosmic-text asserts that a line's bidi paragraphs agree, so a
+        // right-to-left one after a left-to-right one panicked).
+        let mut fonts = Fonts::new(FontSource::BundledOnly);
+        let rtl_words = ["مرحبا", "שלום"];
+        for text in [
+            "مرحبا\u{2029}שלום",
+            "a\u{1C}مرحبا",
+            "مرحبا\u{85}abc",
+            "x\u{1D}שלום end",
+            "\u{2029}مرحبا\u{1E}",
+        ] {
+            let shaped = shape(&mut fonts, text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+            let caret = |offset: usize| shaped.caret(offset).unwrap().x;
+            for glyph in shaped.glyphs() {
+                let end = glyph.start + (glyph.layout.end - glyph.layout.start);
+                assert!(
+                    glyph.start < end && text.is_char_boundary(glyph.start) && text.is_char_boundary(end),
+                    "{text:?}: {:?} at {}",
+                    glyph.layout,
+                    glyph.start
+                );
+            }
+            let all = shaped.range_rects(0..text.len()).unwrap();
+            assert!(
+                all.iter().all(|rect| rect.x >= -0.01) && all.iter().any(|rect| rect.x.abs() < 0.01),
+                "{text:?} starts at the left: {all:?}"
+            );
+            // Text after a separator lies right of the text before it.
+            for (at, separator) in text.match_indices(is_paragraph_separator) {
+                let after = at + separator.len();
+                let before = shaped.range_rects(0..after).unwrap();
+                let right = before.iter().map(|rect| rect.x + rect.width).fold(0.0, f32::max);
+                if after < text.len() {
+                    let rest = shaped.range_rects(after..text.len()).unwrap();
+                    let left = rest.iter().map(|rect| rect.x).fold(f32::INFINITY, f32::min);
+                    assert!(right <= left + 0.01, "{text:?}: {before:?} then {rest:?}");
+                }
+            }
+            // Right-to-left words still read right to left.
+            for word in rtl_words {
+                if let Some(start) = text.find(word) {
+                    let last = start + word.char_indices().last().unwrap().0;
+                    assert!(caret(last) < caret(start), "{text:?}: {word}");
+                }
+            }
+        }
+        // A left-to-right base after the separator: "end" follows the Hebrew word.
+        let text = "x\u{1D}שלום end";
+        let shaped = shape(&mut fonts, text, 16.0, 1.0e6, BUNDLED_FONT_FAMILY, false);
+        let hebrew = text.find('ש').unwrap()..text.find(" end").unwrap();
+        let rects = shaped.range_rects(hebrew).unwrap();
+        assert!(rects.len() == 1 && shaped.caret(text.find("end").unwrap()).unwrap().x >= rects[0].x + rects[0].width);
     }
 }
