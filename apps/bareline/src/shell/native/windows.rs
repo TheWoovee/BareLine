@@ -148,6 +148,11 @@ pub struct InstalledFolders {
     /// Diagnostics live in the profile folder on Windows.
     pub logs: Option<PathBuf>,
 }
+/// [`installed_folders`] for the launch that will use them: Windows profile
+/// folders need no preparation (their ACL is inherited).
+pub fn prepare_installed_folders() -> InstalledFolders {
+    installed_folders()
+}
 /// The installed profile folders, from the environment.
 pub fn installed_folders() -> InstalledFolders {
     InstalledFolders {

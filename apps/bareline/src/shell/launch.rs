@@ -1563,7 +1563,7 @@ pub(super) fn prepare(
     // Settings, session, recovery journals and macros are machine-local data.
     // Installed locations are not even discovered for an isolated launch.
     let installed_folders = if mode == LaunchMode::Installed {
-        crate::shell::native::installed_folders()
+        crate::shell::native::prepare_installed_folders()
     } else {
         Default::default()
     };

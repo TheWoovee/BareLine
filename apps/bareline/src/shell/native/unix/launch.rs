@@ -38,13 +38,28 @@ pub struct InstalledFolders {
     pub logs: Option<PathBuf>,
 }
 
-/// The installed folders for this user. Without a usable home folder there is
-/// no profile: the shell then runs without settings, session or recovery, as
-/// it does on Windows without `%LOCALAPPDATA%`.
+/// The installed folders for this user, resolved only: a portable copy asks for
+/// them too (its recovery fallback) and must leave the installed profile as it
+/// is. Without a usable home folder there is no profile: the shell then runs
+/// without settings, session or recovery, as it does on Windows without
+/// `%LOCALAPPDATA%`.
 pub fn installed_folders() -> InstalledFolders {
-    match folders(&|name| std::env::var_os(name), Layout::native()) {
+    installed_from(&|name| std::env::var_os(name), Layout::native(), false)
+}
+
+/// [`installed_folders`] for the installed launch that will use them: the
+/// profile is made private and settings earlier builds kept in the data folder
+/// move to the configuration folder first.
+pub fn prepare_installed_folders() -> InstalledFolders {
+    installed_from(&|name| std::env::var_os(name), Layout::native(), true)
+}
+
+fn installed_from(var: &dyn Fn(&str) -> Option<OsString>, layout: Layout, prepare: bool) -> InstalledFolders {
+    match folders(var, layout) {
         Ok(folders) => {
-            prepare_profile(&folders);
+            if prepare {
+                prepare_profile(&folders);
+            }
             InstalledFolders {
                 roaming: None,
                 local: Some(folders.data),
@@ -86,6 +101,51 @@ fn prepare_profile(folders: &AppDirectories) {
             Err(error) => eprintln!("event=settings_migration_failed file={name} reason={error}"),
         }
     }
+    match migrate_locale_packs(&folders.data, &folders.config) {
+        Ok(true) => eprintln!("event=settings_migrated file=locales to={}", folders.config.display()),
+        Ok(false) => {}
+        Err(error) => eprintln!("event=settings_migration_failed file=locales reason={error}"),
+    }
+}
+
+/// Moves the user's locale packs (`locales`, read beside `settings.toml`) from
+/// the data folder to the configuration folder, only while the configuration
+/// folder has none. On another file system the packs are copied and the
+/// originals kept. Returns whether they moved.
+fn migrate_locale_packs(data: &Path, config: &Path) -> io::Result<bool> {
+    if data == config {
+        return Ok(false);
+    }
+    let (from, to) = (data.join("locales"), config.join("locales"));
+    match std::fs::symlink_metadata(&to) {
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    match std::fs::symlink_metadata(&from) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    std::fs::create_dir_all(config)?;
+    if std::fs::rename(&from, &to).is_ok() {
+        return Ok(true);
+    }
+    let staged = config.join(format!(".locales.migrating-{}", std::process::id()));
+    let copied = std::fs::create_dir(&staged).and_then(|()| {
+        for entry in std::fs::read_dir(&from)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                std::fs::copy(entry.path(), staged.join(entry.file_name()))?;
+            }
+        }
+        std::fs::rename(&staged, &to)
+    });
+    if copied.is_err() {
+        let _ = std::fs::remove_dir_all(&staged);
+    }
+    copied.map(|()| true)
 }
 
 /// Moves `name` from the data folder, where earlier builds kept it, to the
@@ -298,5 +358,66 @@ mod tests {
         );
         assert_eq!(macos.logs, Path::new("/home/ada/Library/Logs").join(APPLICATION));
         assert!(folders(&|_| None, Layout::Xdg).is_err());
+    }
+
+    /// Resolving the installed folders (a portable copy does, for its recovery
+    /// fallback) leaves the installed profile as it is; only the installed launch
+    /// prepares it.
+    #[test]
+    fn only_the_installed_launch_prepares_the_profile() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new("prepare");
+        let home = scratch.0.join("home");
+        let var = |name: &str| (name == "HOME").then(|| home.clone().into_os_string());
+        let data = home.join(".local/share").join(APPLICATION);
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(data.join("settings.toml"), "x = 1\n").unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let resolved = installed_from(&var, Layout::Xdg, false);
+        assert_eq!(resolved.local.as_deref(), Some(data.as_path()));
+        assert_eq!(mode(&data), 0o755);
+        assert!(data.join("settings.toml").is_file());
+        assert!(!home.join(".config").exists());
+
+        let prepared = installed_from(&var, Layout::Xdg, true);
+        assert_eq!(prepared, resolved);
+        assert_eq!(mode(&data), 0o700);
+        assert!(!data.join("settings.toml").exists());
+        assert!(home.join(".config").join(APPLICATION).join("settings.toml").is_file());
+    }
+
+    /// Locale packs are read beside `settings.toml`, so they move with it, once,
+    /// and never over packs already in the configuration folder.
+    #[test]
+    fn locale_packs_move_to_the_config_folder_with_the_settings() {
+        let scratch = Scratch::new("locales");
+        let (data, config) = (scratch.0.join("data/bareline"), scratch.0.join("config/bareline"));
+        std::fs::create_dir_all(data.join("locales")).unwrap();
+        std::fs::write(data.join("locales/de-DE.toml"), "locale = \"de-DE\"\n").unwrap();
+        assert!(migrate_locale_packs(&data, &config).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(config.join("locales/de-DE.toml")).unwrap(),
+            "locale = \"de-DE\"\n"
+        );
+        assert!(!data.join("locales").exists());
+        assert!(!migrate_locale_packs(&data, &config).unwrap());
+        // Packs already in the configuration folder are kept.
+        std::fs::create_dir_all(data.join("locales")).unwrap();
+        std::fs::write(data.join("locales/de-DE.toml"), "stale").unwrap();
+        assert!(!migrate_locale_packs(&data, &config).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(data.join("locales/de-DE.toml")).unwrap(),
+            "stale"
+        );
+        assert!(!migrate_locale_packs(&data, &data).unwrap());
+        // A link under the old name is not followed.
+        let other = scratch.0.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::os::unix::fs::symlink(data.join("locales"), other.join("locales")).unwrap();
+        let fresh = scratch.0.join("fresh");
+        assert!(!migrate_locale_packs(&other, &fresh).unwrap());
+        assert!(!fresh.join("locales").exists());
     }
 }
