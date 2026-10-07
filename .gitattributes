@@ -5,6 +5,9 @@ crates/distribution/tests/fixtures/authority/** -text
 packaging/windows/license-overrides/cranelift*/** -text
 packaging/windows/license-overrides/pulley*/** -text
 packaging/windows/license-overrides/wasmtime*/** -text
+packaging/windows/license-overrides/block2*/** -text
+packaging/windows/license-overrides/dispatch*/** -text
+packaging/windows/license-overrides/objc*/** -text
 # Fuzz seed corpora are raw bytes; line-ending conversion would change the inputs.
 fuzz/corpus/** -text
 packaging/windows/native-licenses/*/LICEN* -text

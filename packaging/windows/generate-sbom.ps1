@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: MPL-2.0
+# Merges the Cargo SBOMs of the two packaged roots (the editor, plus the update
+# helper on Windows or the extension host on Linux and macOS) with the native
+# components and the packaging sources of -Target into one normalized SBOM.
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$CargoSbom,[string]$HelperCargoSbom,[Parameter(Mandatory)][string]$OutputFile)
+param(
+    [Parameter(Mandatory)][string]$CargoSbom,[string]$HelperCargoSbom,[Parameter(Mandatory)][string]$OutputFile,
+    [ValidateSet('x86_64-pc-windows-msvc','x86_64-unknown-linux-gnu','aarch64-apple-darwin')][string]$Target='x86_64-pc-windows-msvc'
+)
 $ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $sbom=Get-Content -LiteralPath $CargoSbom -Raw | ConvertFrom-Json -AsHashtable
@@ -38,7 +44,12 @@ $native=@((Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'nati
     } })
     $_ + @{Files=$files}
 })
-$packaging=@(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+# The generators and license supplements here, plus the Linux or macOS packaging scripts.
+$packagingSources=@($PSScriptRoot)+@(switch($Target){
+    'x86_64-unknown-linux-gnu'{Join-Path $repo 'packaging/linux';Join-Path $repo 'packaging/preview-identity.sh'}
+    'aarch64-apple-darwin'{Join-Path $repo 'packaging/macos';Join-Path $repo 'packaging/preview-identity.sh'}
+})
+$packaging=@($packagingSources | ForEach-Object {Get-ChildItem -LiteralPath $_ -File -Recurse} | Sort-Object FullName | ForEach-Object {
     [ordered]@{path=[IO.Path]::GetRelativePath($repo,$_.FullName).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
 function Normalize($value) {
