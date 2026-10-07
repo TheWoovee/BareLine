@@ -16,6 +16,34 @@ pub struct StreamLexer {
     next: usize,
     line: usize,
     native: Option<bareline_lexilla_bridge::LexerSession>,
+    /// The pass asked for a primary (Lexilla) session, whose state is opaque.
+    primary: bool,
+}
+/// SRC-14 for a stream pass: the verified state a [`StreamLexer`] reached at a
+/// line start after a whole window. A pass resumed from it over the same
+/// leading bytes styles every later window as this pass does, so a later
+/// view deep in the text need not lex it from byte 0 again (ADR-17). Only
+/// [`StreamLexer::checkpoint`] makes one, where styling is the native
+/// grammar's alone.
+#[derive(Clone)]
+pub struct StreamCheckpoint {
+    language: Language,
+    definition: Option<Arc<crate::udl::Definition>>,
+    state: State,
+    previous_cr: bool,
+    next: usize,
+    line: usize,
+    primary: bool,
+}
+impl StreamCheckpoint {
+    /// The line start this state was reached at.
+    pub fn offset(&self) -> TextOffset {
+        TextOffset(self.next)
+    }
+    /// The zero-based line starting at [`Self::offset`].
+    pub fn line(&self) -> usize {
+        self.line
+    }
 }
 pub struct StreamResult {
     pub syntax: SyntaxResult,
@@ -29,17 +57,17 @@ impl StreamLexer {
         preference: LexerPreference,
         definition: Option<Arc<crate::udl::Definition>>,
     ) -> Self {
-        let native =
-            if preference == LexerPreference::Lexilla && definition.is_none() && language != Language::PlainText {
-                bareline_lexilla_bridge::LexerSession::new(
-                    language.metadata().lexilla,
-                    language.metadata().keywords,
-                    language.lexer_mode(),
-                )
-                .ok()
-            } else {
-                None
-            };
+        let primary = preference == LexerPreference::Lexilla && definition.is_none() && language != Language::PlainText;
+        let native = if primary {
+            bareline_lexilla_bridge::LexerSession::new(
+                language.metadata().lexilla,
+                language.metadata().keywords,
+                language.lexer_mode(),
+            )
+            .ok()
+        } else {
+            None
+        };
         Self {
             language,
             definition,
@@ -49,7 +77,43 @@ impl StreamLexer {
             next: 0,
             line: 0,
             native,
+            primary,
         }
+    }
+    /// Continue a pass from `checkpoint` instead of from byte 0. The caller
+    /// feeds it the same text after [`StreamCheckpoint::offset`] as the pass
+    /// that made it, which holds while every edit since starts after it.
+    pub fn resume(checkpoint: &StreamCheckpoint) -> Self {
+        Self {
+            language: checkpoint.language,
+            definition: checkpoint.definition.clone(),
+            state: checkpoint.state,
+            closed: false,
+            previous_cr: checkpoint.previous_cr,
+            next: checkpoint.next,
+            line: checkpoint.line,
+            native: None,
+            primary: checkpoint.primary,
+        }
+    }
+    /// This pass's state at [`Self::next`], when a pass resumed from it would
+    /// style what follows exactly as this one does: between windows, where the
+    /// native grammar alone styles the text, that is with no primary session or
+    /// past the primary lexer's bounded session, which every pass has retired
+    /// by then (SRC-14, as the resident worker resumes its native checkpoints).
+    pub fn checkpoint(&self) -> Option<StreamCheckpoint> {
+        (!self.closed
+            && self.native.is_none()
+            && (!self.primary || self.next >= bareline_lexilla_bridge::SESSION_BYTES))
+            .then(|| StreamCheckpoint {
+                language: self.language,
+                definition: self.definition.clone(),
+                state: self.state,
+                previous_cr: self.previous_cr,
+                next: self.next,
+                line: self.line,
+                primary: self.primary,
+            })
     }
     pub fn next(&self) -> TextOffset {
         TextOffset(self.next)

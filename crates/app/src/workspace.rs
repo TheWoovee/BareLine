@@ -5420,6 +5420,199 @@ mod tests {
         drop(workspace);
         remove_test_directory(root);
     }
+    /// LNX-PERF-001: a paged view's styling pass styles the view and gathers
+    /// folds a bounded margin (2 MiB) past it, then ends; it no longer lexes to
+    /// the end of the file. Plain text is not lexed at all.
+    #[test]
+    fn paged_styling_pass_ends_a_bounded_margin_past_the_view() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-styling-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.py");
+        // About 3.5 MB of 1 KB functions: fewer folds than one pass keeps.
+        let function = format!("def f():\n{}", "    x = 1\n".repeat(100));
+        std::fs::write(&path, function.repeat(3_500)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            workspace.pump();
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let WorkspaceEditor::Paged(paged) = &workspace.editors[0] else {
+            panic!("the file opens paged")
+        };
+        let view_end = paged.viewport_start().0 + paged.viewport().snapshot().len();
+        let configuration = || crate::language::LanguageConfiguration {
+            policy: Default::default(),
+            definition: None,
+        };
+        let mut styling = crate::styling::Styling::default();
+        styling.refresh_paged(
+            paged.read_handle(),
+            paged.viewport().snapshot(),
+            paged.viewport_start(),
+            bareline_syntax::Language::Python,
+            configuration(),
+            Arc::new(|| {}),
+        );
+        let started = std::time::Instant::now();
+        while !styling.paged_pass_ended() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(120),
+                "the styling pass did not end"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(styling.receipt().unwrap().ready);
+        let (folds, _, partial) = styling.paged_folds.clone().expect("folds near the view");
+        assert!(partial, "folds past the margin are left for a later view");
+        assert!(!folds.is_empty());
+        // The pass ends within one lexer window (256 KiB) past the margin.
+        let reach = view_end + (2 << 20) + bareline_syntax::MAX_REQUEST_BYTES;
+        assert!(folds.iter().all(|fold| fold.body.end.0 <= reach));
+        styling.refresh_paged(
+            paged.read_handle(),
+            paged.viewport().snapshot(),
+            paged.viewport_start(),
+            bareline_syntax::Language::PlainText,
+            configuration(),
+            Arc::new(|| {}),
+        );
+        assert_eq!(styling.receipt(), None);
+        drop(workspace);
+        remove_test_directory(directory);
+    }
+    /// LNX-PERF-001 (ADR-17): a paged view deep in a file is styled. After an
+    /// edit there, its next pass continues from the last verified resume point
+    /// before the view instead of lexing the whole text again, with the colours
+    /// of a pass from byte 0. An edit before the points drops them.
+    #[test]
+    fn paged_styling_resumes_a_deep_view_after_an_edit() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-resume-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.rs");
+        // About 2.6 MB: block comments long enough that many resume points
+        // fall inside one, so the carried lexer state matters.
+        let function = format!(
+            "fn f() {{\n    /* note\n{}    */\n    1\n}}\n",
+            "     * x = 1;\n".repeat(60)
+        );
+        std::fs::write(&path, function.repeat(3_000)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        fn settle(workspace: &mut Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                workspace.pump();
+                if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        settle(&mut workspace);
+        assert!(workspace.editors[0].paged());
+        workspace.editors[0].enqueue(Input::DocumentEnd(false));
+        settle(&mut workspace);
+        // The native grammar styles from byte 0, so its passes leave resume
+        // points from the first window on.
+        let configuration = || crate::language::LanguageConfiguration {
+            policy: bareline_settings::LanguagePolicy {
+                lexer: bareline_settings::LexerPreference::Native,
+                ..Default::default()
+            },
+            definition: None,
+        };
+        let style = |workspace: &Workspace, styling: &mut crate::styling::Styling| {
+            let WorkspaceEditor::Paged(paged) = &workspace.editors[0] else {
+                panic!("the file opens paged")
+            };
+            styling.refresh_paged(
+                paged.read_handle(),
+                paged.viewport().snapshot(),
+                paged.viewport_start(),
+                bareline_syntax::Language::Rust,
+                configuration(),
+                Arc::new(|| {}),
+            );
+            let start = styling.paged_pass_start().expect("a styling pass");
+            let started = std::time::Instant::now();
+            while !styling.paged_pass_ended() {
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(120),
+                    "the styling pass did not end"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let receipt = styling.receipt().unwrap();
+            assert!(receipt.ready && !receipt.unavailable, "the deep view is styled");
+            let spans = styling.result.as_ref().unwrap().spans.clone();
+            assert!(
+                spans
+                    .iter()
+                    .any(|span| span.kind == bareline_syntax::StyleKind::Comment)
+            );
+            (start, paged.viewport_start(), spans)
+        };
+        let document = workspace.editors[0].document_identity().0;
+        let (start, view, _) = style(&workspace, &mut crate::styling::Styling::default());
+        assert_eq!(start, bareline_document::TextOffset(0));
+        assert!(view.0 > 2 << 20, "the view is deep in the file");
+        // Typing at the end keeps every resume point before the view.
+        workspace.editors[0].enqueue(Input::Insert("x".into()));
+        settle(&mut workspace);
+        let (start, view, resumed) = style(&workspace, &mut crate::styling::Styling::default());
+        assert!(start.0 > 0 && start <= view, "{start:?} {view:?}");
+        assert!(
+            view.0 - start.0 <= 2 * bareline_syntax::MAX_REQUEST_BYTES,
+            "{start:?} {view:?}"
+        );
+        crate::styling::Styling::forget_paged_resume_points(document);
+        let (start, _, from_zero) = style(&workspace, &mut crate::styling::Styling::default());
+        assert_eq!(start, bareline_document::TextOffset(0));
+        assert_eq!(resumed, from_zero);
+        // An edit near the start leaves no point before the view.
+        let WorkspaceEditor::Paged(paged) = &mut workspace.editors[0] else {
+            panic!("the file opens paged")
+        };
+        paged
+            .restore_global_selection(
+                bareline_document::TextOffset(3),
+                bareline_document::TextOffset(3),
+                false,
+            )
+            .unwrap();
+        settle(&mut workspace);
+        workspace.editors[0].enqueue(Input::Insert("g".into()));
+        settle(&mut workspace);
+        workspace.editors[0].enqueue(Input::DocumentEnd(false));
+        settle(&mut workspace);
+        let (start, _, _) = style(&workspace, &mut crate::styling::Styling::default());
+        assert_eq!(start, bareline_document::TextOffset(0));
+        drop(workspace);
+        remove_test_directory(directory);
+    }
     #[test]
     fn paged_workspace_edits_undoes_navigates_and_saves() {
         let directory = std::env::temp_dir().join(format!(

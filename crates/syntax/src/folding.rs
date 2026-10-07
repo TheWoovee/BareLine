@@ -32,6 +32,16 @@ pub struct FoldAccumulator {
     lost_headers: bool,
 }
 impl FoldAccumulator {
+    /// A pass that starts at `offset`, a line start, instead of byte 0 (a stream
+    /// pass resumed from a checkpoint, ADR-17). Headers opened before it are
+    /// unknown, so its context is never complete and its folds are partial.
+    pub fn resuming_at(offset: TextOffset) -> Self {
+        Self {
+            next: offset.0,
+            lost_headers: true,
+            ..Self::default()
+        }
+    }
     pub fn context_complete(&self) -> bool {
         !self.lost_headers
     }

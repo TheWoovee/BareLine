@@ -816,7 +816,7 @@ impl Shell {
                 let mut retry_failure = None;
                 if let Some(workspace) = &mut self.workspace {
                     retry_failure = workspace.editors.get_mut(self.app.active).and_then(|editor| {
-                        let document = editor.snapshot().identity_token();
+                        let document = editor.document_identity();
                         editor.retry_recovery().err().map(|error| (document, error))
                     });
                     workspace.message = if retry_failure.is_none() {
@@ -1343,6 +1343,14 @@ impl Shell {
                 }
             }
         }
+        changed |= self.sync_recovery_notice();
+        if changed && let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+    /// Follows the active document's recovery state into its notice. True when
+    /// a notice changed, which asks for a frame; an unchanged state does not.
+    fn sync_recovery_notice(&mut self) -> bool {
         let open_documents: std::collections::BTreeSet<_> = self
             .workspace
             .as_ref()
@@ -1360,7 +1368,12 @@ impl Shell {
         if let Some(workspace) = &self.workspace
             && let Some(editor) = self.views.active_workspace_editor(workspace, self.app.active)
         {
-            let document = editor.snapshot().identity_token();
+            // The document's own identity, which `open_documents` above keeps
+            // states for. A paged editor's snapshot() is its viewport window,
+            // whose identity differs: keyed by it, the state was dropped and
+            // published again on every frame, each asking for the next frame,
+            // so a paged document never let the window idle (LNX-PERF-001).
+            let document = editor.document_identity();
             let status = editor.recovery_status();
             let state = if let Some(error) = status.error {
                 RecoveryNoticeState::Failed {
@@ -1379,11 +1392,9 @@ impl Shell {
         }
         if let Some((document, state)) = recovery_notice {
             self.publish_recovery_notice(document, state);
-            changed = true;
+            return true;
         }
-        if changed && let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        false
     }
     pub(super) fn recovery_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if !self.recovery.open || !center_consumes_event(event) {
@@ -2467,6 +2478,48 @@ mod tests {
         assert!(!should_auto_open(1, runtime.allow_auto_open, runtime.open, false));
         assert!(!should_auto_open(1, true, false, true));
         assert!(should_auto_open(1, true, false, false));
+    }
+
+    /// LNX-PERF-001: a paged document whose recovery state does not change
+    /// publishes its notice once. Later passes, which run on every frame, find
+    /// nothing changed and ask for no further frame, so the window can idle.
+    #[test]
+    fn an_unchanged_paged_recovery_state_asks_for_no_further_frames() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-notice-{}-{}",
+            std::process::id(),
+            toast::next_revision()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("big.txt");
+        std::fs::write(&path, "abc\n".repeat(40_000)).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(crate::shell::native::FileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            workspace.pump();
+            if !workspace.io_busy() && !workspace.editors.iter().any(|editor| editor.busy()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let editor = &workspace.editors[0];
+        assert!(editor.paged());
+        // The viewport window is not the document: keyed by it, the state was lost.
+        assert_ne!(editor.snapshot().identity_token(), editor.document_identity());
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell.sync_recovery_notice();
+        assert!(!shell.sync_recovery_notice());
+        assert!(!shell.sync_recovery_notice());
+        shell.workspace = None;
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
