@@ -72,8 +72,8 @@ pub use self::{
 #[cfg(test)]
 pub use session::{SessionEndHost, SessionEndMessage, session_end_monitor_for_tests};
 pub use system::{
-    KNOWN_GAP_NOTICES, appearance_activated, appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory,
-    system_code_page, system_ui_language, window_theme,
+    KNOWN_GAP_NOTICES, appearance_activated, appearance_changed, high_contrast_enabled, high_contrast_highlight,
+    spell_checker_factory, system_code_page, system_ui_language, window_theme,
 };
 pub use watch::WatchService;
 pub use window::{
