@@ -97,8 +97,13 @@ pub fn system_code_page() -> u32 {
 pub use bareline_platform_linux::spell_checker_factory;
 #[cfg(target_os = "macos")]
 pub fn spell_checker_factory() -> bareline_platform::spelling::SpellCheckerFactory {
-    std::sync::Arc::new(|| Err("This system does not support spell checking yet".to_owned()))
+    std::sync::Arc::new(|| Err(SPELLING_UNSUPPORTED.to_owned()))
 }
+/// The spelling service's answer here: there is none yet.
+const SPELLING_UNSUPPORTED: &str = "This system does not support spell checking yet";
+/// Notices about a service this system lacks, which do not change from one
+/// launch to the next: the shell shows each once per profile (LNX-EDIT-011).
+pub const KNOWN_GAP_NOTICES: &[&str] = &[SPELLING_UNSUPPORTED];
 
 #[cfg(test)]
 mod tests {
@@ -111,6 +116,7 @@ mod tests {
         assert!(high_contrast_highlight().is_none());
         assert_eq!(system_code_page(), 65001);
         assert!(system_ui_language().is_none_or(|language| !language.is_empty()));
-        assert!(spell_checker_factory()().is_err());
+        let unsupported = spell_checker_factory()().err().unwrap();
+        assert!(KNOWN_GAP_NOTICES.contains(&unsupported.as_str()), "{unsupported}");
     }
 }

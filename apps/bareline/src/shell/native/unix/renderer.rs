@@ -175,6 +175,13 @@ impl TextBackend for Renderer {
     }
 }
 
+/// The editor font a profile uses until the user picks one: the monospace
+/// face the renderer resolved from the installed fonts (Cascadia Mono when it
+/// is installed, Menlo or SF Mono on macOS, else the bundled DejaVu Sans
+/// Mono), so a fresh profile never names a face that is not there (LNX-UI-003).
+pub fn default_font_family(renderer: &Renderer) -> Option<String> {
+    Some(renderer.backend.monospace_family().to_owned())
+}
 /// An installed font family for the font picker.
 pub struct InstalledFontFamily {
     pub name: String,

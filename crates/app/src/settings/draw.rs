@@ -412,7 +412,7 @@ impl SettingsController {
                     ops,
                     x + 10.0,
                     y + 44.0,
-                    format!("\u{26a0} \u{201c}{missing}\u{201d} is not installed on this PC."),
+                    format!("\u{26a0} \u{201c}{missing}\u{201d} is not installed on this computer."),
                     11.0,
                     color("danger"),
                 );

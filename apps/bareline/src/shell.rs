@@ -1162,7 +1162,9 @@ impl ApplicationHandler<Wake> for Handler {
         self.shell.resumed(el);
     }
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let event = native::translate_event(event);
+        let Some(event) = native::translate_event(el, event) else {
+            return;
+        };
         // A tab switch, open or close by key or click is the user's choice of tab.
         let input = matches!(
             event,
@@ -1196,6 +1198,7 @@ impl ApplicationHandler<Wake> for Handler {
         }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        native::end_event_batch();
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
         // A prompt or dialog that answers later (Linux) runs its asker again.
@@ -3401,7 +3404,7 @@ impl ApplicationHandler for Shell {
         self.ledger.record(StartupAction::CreateWindow);
         let window = {
             let _window_phase = bareline_diagnostics::startup_span(StartupAction::CreateWindow);
-            match el.create_window(
+            match el.create_window(native::identify_window(
                 Window::default_attributes()
                     .with_title("Bareline")
                     .with_inner_size(LogicalSize::new(1200.0, 760.0))
@@ -3411,7 +3414,7 @@ impl ApplicationHandler for Shell {
                     // window is shown). We reveal it below, after accessibility and
                     // the renderer are ready.
                     .with_visible(false),
-            ) {
+            )) {
                 Ok(window) => window,
                 Err(e) => {
                     self.fail(el, e);
@@ -4516,6 +4519,12 @@ impl Shell {
                     } else {
                         bareline_diagnostics::RendererState::Hardware
                     });
+                    // A fresh profile's editor font is one this system draws
+                    // (LNX-UI-003); settings resolved before now resolve again.
+                    if bareline_settings::set_default_font_family(native::default_font_family(&r)) {
+                        self.settings.invalidate_cache();
+                        self.applied_settings = None;
+                    }
                     self.renderer = Some(r);
                 }
                 Err(e) => {

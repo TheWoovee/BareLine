@@ -55,7 +55,7 @@ pub use platform::{
     interaction_replay, interaction_scope, interaction_settle, interaction_waiting, save_destination_settled,
 };
 pub use process::{ProcessLauncher, alive, handle_counters, monotonic_ns, private_bytes, resolve_program};
-pub use renderer::{Renderer, create_renderer, installed_font_families};
+pub use renderer::{Renderer, create_renderer, default_font_family, installed_font_families};
 pub use session::{SessionEndMonitor, SessionEndSignal, register_application_restart};
 // Types the shell reaches only through values and methods (as on Windows), or
 // only in its tests.
@@ -71,8 +71,10 @@ pub use self::{
 #[cfg(test)]
 pub use session::{SessionEndHost, SessionEndMessage};
 pub use system::{
-    appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory, system_code_page,
-    system_ui_language, window_theme,
+    KNOWN_GAP_NOTICES, appearance_changed, high_contrast_enabled, high_contrast_highlight, spell_checker_factory,
+    system_code_page, system_ui_language, window_theme,
 };
 pub use watch::WatchService;
-pub use window::{RawWindow, install_message_hook, raw_window, set_event_notify, translate_event};
+pub use window::{
+    RawWindow, end_event_batch, identify_window, install_message_hook, raw_window, set_event_notify, translate_event,
+};
