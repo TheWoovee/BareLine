@@ -5420,6 +5420,80 @@ mod tests {
         drop(workspace);
         remove_test_directory(root);
     }
+    /// LNX-PERF-001: a paged view's styling pass styles the view and gathers
+    /// folds a bounded margin (2 MiB) past it, then ends; it no longer lexes to
+    /// the end of the file. Plain text is not lexed at all.
+    #[test]
+    fn paged_styling_pass_ends_a_bounded_margin_past_the_view() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-styling-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.py");
+        // About 3.5 MB of 1 KB functions: fewer folds than one pass keeps.
+        let function = format!("def f():\n{}", "    x = 1\n".repeat(100));
+        std::fs::write(&path, function.repeat(3_500)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            workspace.pump();
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let WorkspaceEditor::Paged(paged) = &workspace.editors[0] else {
+            panic!("the file opens paged")
+        };
+        let view_end = paged.viewport_start().0 + paged.viewport().snapshot().len();
+        let configuration = || crate::language::LanguageConfiguration {
+            policy: Default::default(),
+            definition: None,
+        };
+        let mut styling = crate::styling::Styling::default();
+        styling.refresh_paged(
+            paged.read_handle(),
+            paged.viewport().snapshot(),
+            paged.viewport_start(),
+            bareline_syntax::Language::Python,
+            configuration(),
+            Arc::new(|| {}),
+        );
+        let started = std::time::Instant::now();
+        while !styling.paged_pass_ended() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(120),
+                "the styling pass did not end"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(styling.receipt().unwrap().ready);
+        let (folds, _, partial) = styling.paged_folds.clone().expect("folds near the view");
+        assert!(partial, "folds past the margin are left for a later view");
+        assert!(!folds.is_empty());
+        // The pass ends within one lexer window (256 KiB) past the margin.
+        let reach = view_end + (2 << 20) + bareline_syntax::MAX_REQUEST_BYTES;
+        assert!(folds.iter().all(|fold| fold.body.end.0 <= reach));
+        styling.refresh_paged(
+            paged.read_handle(),
+            paged.viewport().snapshot(),
+            paged.viewport_start(),
+            bareline_syntax::Language::PlainText,
+            configuration(),
+            Arc::new(|| {}),
+        );
+        assert_eq!(styling.receipt(), None);
+        drop(workspace);
+        remove_test_directory(directory);
+    }
     #[test]
     fn paged_workspace_edits_undoes_navigates_and_saves() {
         let directory = std::env::temp_dir().join(format!(

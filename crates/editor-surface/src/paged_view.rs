@@ -1677,6 +1677,14 @@ impl PagedEditorSurface {
     pub fn index_fraction(&self) -> Option<f32> {
         self.navigation.index_progress(&self.snapshot)
     }
+    /// Whether the whole-document line count is still being established, which
+    /// is what "loading" means for a paged view: its snapshot is never complete
+    /// (ADR-01). A count that stopped is not pending (LNX-PERF-001).
+    pub fn line_count_pending(&self) -> bool {
+        matches!(self.snapshot.line_count(), bareline_document::paged::LineCount::Unknown)
+            && self.navigation.indexed_line_count(&self.snapshot).is_none()
+            && !self.navigation.line_count_stopped(&self.snapshot)
+    }
     fn refresh_gutter_accuracy(&mut self) -> bool {
         let indexed = self.navigation.indexed_line_count(&self.snapshot);
         let estimated = indexed.is_none();
@@ -7723,6 +7731,17 @@ mod peer_tests {
         drain(&mut view);
         assert_eq!(document_text(&view, &budget), "abtext\n");
         assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        drop(view);
+        remove_fixture_root(&root);
+    }
+    /// LNX-PERF-001: a paged view is loading only until its line count is
+    /// known; its snapshot never reports complete (ADR-01), so that cannot be
+    /// what the status strip's indexing track follows.
+    #[test]
+    fn a_paged_view_stops_loading_once_its_line_count_is_known() {
+        let (root, mut view, _budget) = paged_fixture("count-pending", &"abc\n".repeat(40_000));
+        wait_for_line_count(&mut view, 40_001);
+        assert!(!view.line_count_pending());
         drop(view);
         remove_fixture_root(&root);
     }

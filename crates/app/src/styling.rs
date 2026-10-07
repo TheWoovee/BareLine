@@ -235,6 +235,11 @@ impl Styling {
         self.result = None;
         self.paged_folds = None;
         self.unavailable = false;
+        // Plain text has nothing to style or fold, so it is not lexed, as on a
+        // resident document (LNX-PERF-001).
+        if language == Language::PlainText && config.definition.is_none() {
+            return;
+        }
         match paged::spawn(
             handle,
             local.clone(),
@@ -249,18 +254,37 @@ impl Styling {
             Err(_) => self.unavailable = true,
         }
     }
+    fn accept_paged(&mut self, received: Result<paged::ResultWindow, String>) {
+        match received {
+            Ok(value) => {
+                if let Some(syntax) = value.syntax {
+                    self.result = Some(syntax);
+                }
+                self.paged_folds = Some((value.folds, value.first_line, value.partial));
+            }
+            Err(_) => self.unavailable = true,
+        }
+    }
+    /// Takes every result the paged pass has sent and reports whether the pass
+    /// has ended (its worker is gone).
+    #[cfg(test)]
+    pub(crate) fn paged_pass_ended(&mut self) -> bool {
+        loop {
+            let Some(job) = &self.paged else {
+                return true;
+            };
+            match job.receiver.try_recv() {
+                Ok(received) => self.accept_paged(received),
+                Err(TryRecvError::Empty) => return false,
+                Err(TryRecvError::Disconnected) => return true,
+            }
+        }
+    }
     pub fn pump(&mut self) -> bool {
         if let Some(job) = &self.paged {
             return match job.receiver.try_recv() {
-                Ok(Ok(value)) => {
-                    if let Some(syntax) = value.syntax {
-                        self.result = Some(syntax);
-                    }
-                    self.paged_folds = Some((value.folds, value.first_line, value.partial));
-                    true
-                }
-                Ok(Err(_)) => {
-                    self.unavailable = true;
+                Ok(received) => {
+                    self.accept_paged(received);
                     true
                 }
                 Err(_) => false,

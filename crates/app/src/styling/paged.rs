@@ -11,6 +11,10 @@ use std::sync::{
     Arc,
     mpsc::{self, Receiver},
 };
+/// Source bytes before a view that its styling pass may lex (LNX-PERF-001).
+pub(super) const MAX_PREFIX_BYTES: usize = 32 << 20;
+/// Source bytes past a view whose folds one styling pass gathers (LNX-PERF-001).
+pub(super) const FOLD_MARGIN_BYTES: usize = 2 << 20;
 pub(super) struct ResultWindow {
     pub syntax: Option<SyntaxResult>,
     pub folds: Vec<AnchoredFold>,
@@ -67,6 +71,17 @@ pub(super) fn spawn(
             return Err("Incomplete syntax projection map".into());
         }
     }
+    // Verified styling is lexed from the start of the text, so a view deep into
+    // a large file would cost a full pass per edit: past the budget it is left
+    // plain, as Notepad++ leaves large files (LNX-PERF-001).
+    let view_start = segments.first().map_or(origin, |segment| segment.source.start);
+    if view_start.0 > MAX_PREFIX_BYTES {
+        return Err("Styling budget exceeded".into());
+    }
+    let view_end = segments
+        .last()
+        .map_or(origin.0 + local.len(), |segment| segment.source.end.0);
+    let fold_limit = view_end.saturating_add(FOLD_MARGIN_BYTES);
     let (tx, receiver) = mpsc::sync_channel(1);
     let cancel = Cancellation::default();
     let job = Job {
@@ -93,6 +108,20 @@ pub(super) fn spawn(
                 loop {
                     if cancel.is_cancelled() {
                         return Err("Syntax cancelled".into());
+                    }
+                    // Folds are gathered for the view and a bounded margin past it;
+                    // the rest wait for a view that reaches them (LNX-PERF-001).
+                    if projection.is_none() && lexer.next().0 >= fold_limit {
+                        let last = ResultWindow {
+                            syntax: None,
+                            folds: folds.anchored().to_vec(),
+                            first_line,
+                            partial: true,
+                        };
+                        if tx.send(Ok(last)).is_ok() {
+                            notify();
+                        }
+                        return Ok(());
                     }
                     let start = lexer.next();
                     let mut text = read(&handle, start, MAX_REQUEST_BYTES, &cancel)?;

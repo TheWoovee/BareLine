@@ -4922,12 +4922,13 @@ impl Shell {
                 .as_ref()
                 .filter(|workspace| workspace.failed_open(self.app.active).is_none())
                 .and_then(|workspace| workspace.editors.get(self.app.active))
-                .map(|editor| {
-                    let fraction = match editor {
-                        bareline_app::workspace::WorkspaceEditor::Paged(paged) => paged.index_fraction(),
-                        _ => None,
-                    };
-                    (!editor.snapshot().is_complete(), fraction)
+                .map(|editor| match editor {
+                    // A paged snapshot is never complete (ADR-01); it is loading
+                    // only until its line count is known (LNX-PERF-001).
+                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                        (paged.line_count_pending(), paged.index_fraction())
+                    }
+                    _ => (!editor.snapshot().is_complete(), None),
                 })
                 .unwrap_or((false, None));
             if indexing {
