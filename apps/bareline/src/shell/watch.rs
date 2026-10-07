@@ -296,6 +296,7 @@ impl Shell {
     /// Rename) and recheck the open files, so the move itself never reads as an
     /// external deletion.
     pub(super) fn watch_forget(&mut self, path: &std::path::Path) {
+        self.watch.deleted.remove(path);
         if self.watch.conflicts.remove(path) {
             self.toasts.resolve(&conflict_notification_id(path));
         }
@@ -640,6 +641,9 @@ impl Shell {
                 self.watch.conflicts.insert(path.clone());
                 self.watch.deleted.insert(path);
             }
+            // A deleted file's banner lasts only as long as its conflict.
+            let conflicts = &self.watch.conflicts;
+            self.watch.deleted.retain(|path| conflicts.contains(path));
             // Leftovers of a save a crash interrupted were removed when the
             // folder's document opened; say what went (LNX-FILE-007).
             let reclaimed = w.take_reclaimed_leftovers();
@@ -1775,6 +1779,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept alpha\n");
         assert!(!workspace.editors[0].dirty());
         assert!(workspace.take_deleted_destinations().is_empty());
+        // File > Rename forgets the old path's banner, Recreate included.
+        shell.watch.conflicts.insert(canonical.clone());
+        shell.watch.deleted.insert(canonical.clone());
+        shell.watch_forget(&canonical);
+        assert!(!shell.watch.conflicts.contains(&canonical) && !shell.watch.deleted.contains(&canonical));
         let _ = std::fs::remove_dir_all(&root);
     }
     /// LNX-FILE-007: opening a document removes the stage a killed save left

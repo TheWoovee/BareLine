@@ -1773,7 +1773,6 @@ impl Workspace {
     pub fn take_deleted_destinations(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.deleted_destinations)
     }
-    /// Keep the path of a save that found its file deleted outside Bareline.
     /// Leftover stages and transactions of interrupted saves removed since the
     /// last call, for the shell to report (LNX-FILE-007).
     pub fn take_reclaimed_leftovers(&mut self) -> Vec<PathBuf> {
@@ -1785,8 +1784,13 @@ impl Workspace {
             self.reclaimed_leftovers.push(removed);
         }
     }
-    fn record_deleted_destination(deleted: &mut Vec<PathBuf>, error: &FileError) {
+    /// Keep the path of a save that found its file deleted outside Bareline,
+    /// when it is the document's own path (`own`): a Save As destination that
+    /// vanished is reported by its message only, so no other path gets a
+    /// Recreate banner.
+    fn record_deleted_destination(deleted: &mut Vec<PathBuf>, error: &FileError, own: Option<&std::path::Path>) {
         if let FileError::DeletedOutside { target } = error
+            && own == Some(target.as_path())
             && !deleted.contains(target)
         {
             deleted.push(target.clone());
@@ -4280,6 +4284,28 @@ mod tests {
         assert_eq!(workspace.selected_save_conflict(0).unwrap().transaction, transaction);
         drop(workspace);
         remove_test_directory(parent);
+    }
+
+    /// LNX-FILE-003: only a Save of the document's own path that found the file
+    /// deleted offers Recreate; a Save As destination that vanished does not.
+    #[test]
+    fn deleted_destination_is_kept_only_for_the_documents_own_path() {
+        let own = std::path::Path::new("/docs/note.txt");
+        let elsewhere = std::path::PathBuf::from("/other/copy.txt");
+        let mut deleted = Vec::new();
+        let save_as = FileError::DeletedOutside {
+            target: elsewhere.clone(),
+        };
+        super::Workspace::record_deleted_destination(&mut deleted, &save_as, Some(own));
+        super::Workspace::record_deleted_destination(&mut deleted, &save_as, None);
+        assert!(deleted.is_empty());
+        let save = FileError::DeletedOutside {
+            target: own.to_path_buf(),
+        };
+        super::Workspace::record_deleted_destination(&mut deleted, &save, Some(own));
+        super::Workspace::record_deleted_destination(&mut deleted, &save, Some(own));
+        super::Workspace::record_deleted_destination(&mut deleted, &FileError::Cancelled, Some(own));
+        assert_eq!(deleted, vec![own.to_path_buf()]);
     }
 
     #[test]
