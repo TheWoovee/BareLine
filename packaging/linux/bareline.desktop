@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Bareline
+GenericName=Text Editor
+Comment=Edit text and code files
+Exec=bareline %F
+Icon=bareline
+Terminal=false
+Categories=Development;TextEditor;
+MimeType=text/plain;
+Keywords=text;editor;code;

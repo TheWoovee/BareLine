@@ -18,3 +18,8 @@ crates/renderer-soft/fonts/*.ttf -text
 crates/renderer-soft/tests/golden/** -text
 # Shell scripts run on macOS and Linux, also from a Windows checkout.
 packaging/macos/*.sh text eol=lf
+packaging/linux/*.sh text eol=lf
+packaging/preview-identity.sh text eol=lf
+# The desktop entry and icon ship in the Linux tarball unchanged.
+packaging/linux/*.desktop text eol=lf
+packaging/linux/*.png binary
