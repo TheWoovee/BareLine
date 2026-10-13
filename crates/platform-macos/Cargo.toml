@@ -50,8 +50,8 @@ objc2-app-kit = { version = "=0.2.2", features = [
     "NSWindow",
     "NSWorkspace",
 ] }
-libc = "=0.2.189"
-rustix = { version = "=1.1.4", features = ["event", "fs", "process"] }
+libc = "=0.2.190"
+rustix = { version = "=1.1.5", features = ["event", "fs", "process"] }
 
 [dev-dependencies]
 winit.workspace = true
