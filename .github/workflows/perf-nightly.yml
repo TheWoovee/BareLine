@@ -17,10 +17,10 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # pinned upstream revision
         with:
           toolchain: '1.98.1'
       - name: Run informational 1 GiB JSON and 5 GiB synthetic Hex qualification
@@ -28,7 +28,7 @@ jobs:
         run: ./scripts/test-first-party.ps1 -Suite Large
       - name: Preserve hashes, phase timings, byte counts, deadlines, and semantic result
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: first-party-large-${{ github.sha }}-${{ github.run_id }}
           path: target/first-party/
@@ -44,10 +44,10 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # pinned upstream revision
         with:
           toolchain: '1.98.1'
       - name: Record source identity before the build
@@ -66,7 +66,7 @@ jobs:
         run: python tests/perf/compare_report.py summary tests/perf/results/hosted-report.json --title 'Hosted Windows series' --append "$env:GITHUB_STEP_SUMMARY"
       - name: Preserve raw run history
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hosted-windows-perf-${{ github.sha }}-${{ github.run_id }}
           path: tests/perf/results/
@@ -88,10 +88,10 @@ jobs:
       group: bareline-dedicated-native-performance
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # pinned upstream revision
         with:
           toolchain: '1.98.1'
       - name: Build the pinned native workload source
@@ -114,7 +114,7 @@ jobs:
           python tests/perf/compare_report.py summary $report.FullName --title 'Dedicated native series' --append "$env:GITHUB_STEP_SUMMARY"
       - name: Preserve native coverage, raw trials and aggregates
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-windows-perf-${{ github.sha }}-${{ github.run_id }}
           path: tests/perf/native-nightly/
@@ -143,10 +143,10 @@ jobs:
     env:
       COMPARE_OUT: tests/perf/results/compare-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # pinned upstream revision
         with:
           toolchain: '1.98.1'
       - name: Build the release binary
@@ -175,7 +175,7 @@ jobs:
         run: Get-Content -LiteralPath "$env:COMPARE_OUT/results.md" -Raw | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
       - name: Preserve raw comparison trials and the table
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notepadpp-comparison-${{ github.sha }}-${{ github.run_id }}
           path: ${{ env.COMPARE_OUT }}/
@@ -218,7 +218,7 @@ jobs:
       PERF_REPORT: ${{ matrix.report }}
       STALE_TITLE: Stale ${{ matrix.series }} performance baseline
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: matrix.enabled == 'true'
         with:
           persist-credentials: false
@@ -257,7 +257,7 @@ jobs:
           python tests/perf/compare_report.py regressions regressions.json --series $env:PERF_SERIES --append "$env:GITHUB_STEP_SUMMARY"
       - name: Open or update the regression tracking issue
         if: matrix.enabled == 'true' && steps.history.outputs.ready == 'true' && vars.BARELINE_PERF_ISSUES_ENABLED != 'false'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const fs = require('fs');
