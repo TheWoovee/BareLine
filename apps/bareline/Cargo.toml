@@ -71,7 +71,7 @@ bareline-platform-windows = { path = "../../crates/platform-windows", features =
 [dev-dependencies]
 serde_json = "1"
 bareline-renderer-recording = { path = "../../crates/renderer-recording" }
-ed25519-dalek = "=2.2.0"
+ed25519-dalek = "=3.0.0"
 base64 = "=0.22.1"
 blake2 = "=0.10.6"
 sha2 = "=0.10.9"
